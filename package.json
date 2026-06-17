@@ -1,0 +1,23 @@
+{
+  "name": "thien-dao-bot",
+  "version": "1.0.0",
+  "description": "Bot Discord Thiên Đạo chủ đề tông môn tu tiên.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "deploy:commands": "node deploy-commands.js",
+    "create:roles": "node create-roles.js"
+  },
+  "keywords": [
+    "discord",
+    "discord.js",
+    "bot",
+    "linh-can"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.7"
+  }
+}
