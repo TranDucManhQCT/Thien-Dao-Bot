@@ -138,7 +138,7 @@
 const MESSAGE_CONG_HIEN_BLOCKED_CHANNEL_PARTS = ['meme', 'trà-đàm', 'du-hí', 'ẩn-danh', 'góp-ý'];
 const GITHUB_VERIFY_CODE_PREFIX = 'THIENDAO';
 const GITHUB_DAILY_EXP_CAP = 120;
-const GITHUB_DAILY_REWARD_LIMIT = 18;
+const GITHUB_DAILY_TUVI_CAP = 1500;
 const LEGACY_USER_FIELDS = ['lastCultivateAt', 'lastBreakthroughAt', 'lastMessageExpAt', 'dailyMessageExp'];
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const CO_DUYEN_COOLDOWN_MS = ONE_DAY_MS;
@@ -745,8 +745,8 @@ const AUTO_DISCIPLE_THRESHOLDS = [
         { name: 'GitHub', value: userData.githubUsername ?? 'Chưa liên kết', inline: true },
         { name: 'Xác minh', value: userData.githubVerified ? 'Đã xác minh' : 'Chưa xác minh', inline: true },
         { name: 'Ngày luyện commit gần nhất', value: userData.lastGithubRewardDate ?? 'Chưa có', inline: false },
-        { name: 'Lượt hóa đạo hôm nay', value: `${userData.githubDailyRewardCount ?? 0}/${GITHUB_DAILY_REWARD_LIMIT}`, inline: true },
-        { name: 'Điểm GitHub hôm nay', value: `${userData.githubDailyExp ?? 0}/${GITHUB_DAILY_EXP_CAP * GITHUB_DAILY_REWARD_LIMIT}`, inline: true },
+        { name: 'Số lần hóa đạo hôm nay', value: `${userData.githubDailyRewardCount ?? 0}`, inline: true },
+        { name: 'Điểm GitHub hôm nay', value: `${userData.githubDailyExp ?? 0}/${GITHUB_DAILY_TUVI_CAP}`, inline: true },
       )
       .setFooter({ text: 'Dùng /linkgithub username rồi /verifygithub để mở đạo lộ commit.' });
 
@@ -788,14 +788,15 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     userData.githubDailyRewardCount = 0;
   }
 
-  if (userData.githubDailyRewardCount >= GITHUB_DAILY_REWARD_LIMIT) {
-    await interaction.editReply(`Hôm nay đạo hữu đã luyện đủ **${GITHUB_DAILY_REWARD_LIMIT}/${GITHUB_DAILY_REWARD_LIMIT}** vòng Commit Hóa Đạo. Hãy để đạo cơ lắng lại, mai tiếp tục hấp thu công đức GitHub.`);
+  if (userData.githubDailyExp >= GITHUB_DAILY_TUVI_CAP) {
+    await interaction.editReply(`Đạo cơ hôm nay đã hấp thu đến cực hạn: **${userData.githubDailyExp}/${GITHUB_DAILY_TUVI_CAP} tu vi**. Ngươi vẫn có thể xem GitHub, nhưng tu vi hôm nay không tăng thêm.`);
     return;
   }
 
   try {
     const events = await fetchGithubEvents(userData.githubUsername);
-    const commitCount = checkGithubCommitsToday(events);
+    const githubActivity = getGithubActivityToday(events);
+    const commitCount = githubActivity.commitCount;
 
     console.log('===== CHECK COMMIT DEBUG =====');
     console.log('Discord user:', interaction.user.id);
@@ -821,15 +822,25 @@ const AUTO_DISCIPLE_THRESHOLDS = [
 
     const base = 40;
     const commitBonus = Math.min(commitCount * 10, 60);
-    const rawGain = Math.min(base + commitBonus, GITHUB_DAILY_EXP_CAP);
-    const gain = applyTuViMultiplier(userData, rawGain);
+    const nextStreak = getNextGithubStreak(userData, today);
+    const streakBonus = Math.min(nextStreak * 5, 50);
+    const repoBonus = Math.min(Math.max(0, githubActivity.repoCount - 1) * 8, 32);
+    const rawBeforeCap = base + commitBonus + streakBonus + repoBonus;
+    const rawGain = Math.min(rawBeforeCap, GITHUB_DAILY_EXP_CAP);
+    const multiplier = getTuViRewardMultiplier(userData, member);
+    const calculatedGain = Math.floor(rawGain * multiplier.value);
+    const remainingDailyGain = Math.max(0, GITHUB_DAILY_TUVI_CAP - userData.githubDailyExp);
+    const gain = Math.min(calculatedGain, remainingDailyGain);
+    const cappedText = gain < calculatedGain
+      ? `\nĐã chạm giới hạn ngày, chỉ nhận phần còn lại: ${gain}/${calculatedGain}.`
+      : '';
 
     userData.tuViExp += gain;
     userData.lastGithubRewardDate = today;
     userData.githubDailyExp += gain;
     userData.githubDailyRewardCount += 1;
     userData.githubTotalExp += gain;
-    userData.githubStreak += isFirstGithubRewardToday ? 1 : 0;
+    userData.githubStreak = isFirstGithubRewardToday ? nextStreak : userData.githubStreak;
 
     const syncResult = await syncTuViRoles(interaction.guild, member, userData.tuViExp);
 
@@ -843,15 +854,12 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     const embed = new EmbedBuilder()
       .setColor(GOLD)
       .setTitle('Commit Hóa Đạo')
-      .setDescription(`${member} luyện hóa đạo tích GitHub, công đức commit quy tụ thành tu vi.`)
+      .setDescription(`${member} nhận **+${gain} tu vi exp** từ commit GitHub.${cappedText}`)
       .addFields(
-        { name: 'GitHub username', value: userData.githubUsername, inline: true },
-        { name: 'Commit hôm nay', value: `${commitCount}`, inline: true },
-        { name: 'Lượt hôm nay', value: `${userData.githubDailyRewardCount}/${GITHUB_DAILY_REWARD_LIMIT}`, inline: true },
-        { name: 'Điểm tu luyện nhận được', value: `+${gain}${gain !== rawGain ? ` (gốc ${rawGain})` : ''}`, inline: true },
-        { name: 'Tổng tu vi exp', value: `${userData.tuViExp}`, inline: true },
-        { name: 'Tu vi hiện tại', value: `${syncResult.tuVi.realm} ${syncResult.tuVi.minor}`, inline: true },
-        { name: 'Đạo cơ dự trữ', value: 'Điểm đã nhập kho. Cảnh giới chỉ đổi khi đạo hữu chủ động dùng `/dotpha`.', inline: false },
+        { name: 'Kết quả', value: `Hôm nay: ${userData.githubDailyExp}/${GITHUB_DAILY_TUVI_CAP} tu vi\nTổng dự trữ: ${userData.tuViExp} tu vi\nTu vi hiện tại: ${syncResult.tuVi.realm} ${syncResult.tuVi.minor}`, inline: false },
+        { name: 'Nguồn điểm', value: `Commit hôm nay: ${commitCount} (+${commitBonus})\nRepo hôm nay: ${githubActivity.repoCount} (+${repoBonus})\nStreak: ${userData.githubStreak} ngày (+${streakBonus})`, inline: false },
+        { name: 'Bonus đang áp dụng', value: `${multiplier.summary}\nTổng hệ số: x${multiplier.value.toFixed(2)}`, inline: false },
+        { name: 'Ghi chú', value: 'Điểm được nhập kho đạo cơ. Cảnh giới chỉ đổi khi đạo hữu chủ động dùng `/dotpha`.', inline: false },
       );
 
     await interaction.editReply({ embeds: [embed] });
@@ -2446,6 +2454,68 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     return roleName ? bonusMap[roleName] : 0;
   }
 
+  function getLinhCanClassificationMultiplier(member) {
+    const multiplierMap = {
+      'Tạp Linh Căn': 1,
+      'Tứ Linh Căn': 1.02,
+      'Tam Linh Căn': 1.04,
+      'Nhị Linh Căn': 1.06,
+      'Nhất Linh Căn': 1.08,
+    };
+    const roleName = CLASSIFICATION_ROLES.find((name) => member.roles.cache.some((role) => role.name === name));
+
+    return {
+      value: roleName ? multiplierMap[roleName] : 1,
+      text: roleName ?? 'Chưa khai mở linh căn',
+    };
+  }
+
+  function getLinhCanQualityMultiplier(member) {
+    const multiplierMap = {
+      'Hạ Phẩm Linh Căn': 1,
+      'Trung Phẩm Linh Căn': 1.03,
+      'Thượng Phẩm Linh Căn': 1.06,
+      'Cực Phẩm Linh Căn': 1.1,
+      'Thiên Phẩm Linh Căn': 1.15,
+    };
+    const roleName = QUALITY_ROLES.find((name) => member.roles.cache.some((role) => role.name === name));
+
+    return {
+      value: roleName ? multiplierMap[roleName] : 1,
+      text: roleName ?? 'Chưa xác định phẩm chất',
+    };
+  }
+
+  function getCongPhapMultiplier(member) {
+    const roleName = CONG_PHAP_ROLE_NAMES.find((name) => member.roles.cache.some((role) => role.name === name));
+
+    return {
+      value: roleName ? 1.05 : 1,
+      text: roleName ?? 'Chưa chọn công pháp',
+    };
+  }
+
+  function getTuViRewardMultiplier(userData, member) {
+    const statusMultiplier = Date.now() < (userData?.tuViMultiplierUntil ?? 0)
+      ? Math.max(1, userData.tuViMultiplierValue ?? 1)
+      : 1;
+    const congPhap = getCongPhapMultiplier(member);
+    const classification = getLinhCanClassificationMultiplier(member);
+    const quality = getLinhCanQualityMultiplier(member);
+    const value = statusMultiplier * congPhap.value * classification.value * quality.value;
+    const parts = [
+      `Cơ duyên/trạng thái x${statusMultiplier.toFixed(2)}`,
+      `${congPhap.text} x${congPhap.value.toFixed(2)}`,
+      `${classification.text} x${classification.value.toFixed(2)}`,
+      `${quality.text} x${quality.value.toFixed(2)}`,
+    ];
+
+    return {
+      value,
+      text: parts.join('\n'),
+    };
+  }
+
   function getTribulationBaseChance(realmIndex) {
     const chances = [90, 82, 75, 68, 60, 52, 45, 38, 32, 25, 20];
 
@@ -3318,14 +3388,19 @@ const AUTO_DISCIPLE_THRESHOLDS = [
   }
 
   function checkGithubCommitsToday(events) {
-  const today = getTodayString();
+    return getGithubActivityToday(events).commitCount;
+  }
 
-  return events
-    .filter((event) => {
-      return event.type === 'PushEvent'
-        && getTodayString(new Date(event.created_at)) === today;
-    })
+  function getGithubActivityToday(events) {
+  const today = getTodayString();
+  const repos = new Set();
+  const commitCount = events
+    .filter((event) => event.type === 'PushEvent' && getTodayString(new Date(event.created_at)) === today)
     .reduce((total, event) => {
+      if (event.repo?.name) {
+        repos.add(event.repo.name);
+      }
+
       // Ưu tiên payload.size vì GitHub PushEvent thường có size = số commit trong push
       if (typeof event.payload?.size === 'number') {
         return total + Math.max(event.payload.size, 1);
@@ -3339,6 +3414,26 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       // Nếu chỉ thấy PushEvent nhưng không có size/commits thì vẫn tính 1 lần push
       return total + 1;
     }, 0);
+
+    return {
+      commitCount,
+      repoCount: repos.size,
+      repos: [...repos],
+    };
+  }
+
+  function getNextGithubStreak(userData, today) {
+    if (userData.lastGithubRewardDate === today) {
+      return userData.githubStreak || 1;
+    }
+
+    const yesterday = getTodayString(new Date(Date.now() - ONE_DAY_MS));
+
+    if (userData.lastGithubRewardDate === yesterday) {
+      return (userData.githubStreak || 0) + 1;
+    }
+
+    return 1;
   }
 
   async function getTuViRoleManageBlocker(guild, roles) {

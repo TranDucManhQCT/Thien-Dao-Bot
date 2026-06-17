@@ -326,7 +326,7 @@ Chỉ dùng khi GitHub đã xác minh. Bot kiểm tra public GitHub events:
 https://api.github.com/users/<username>/events/public
 ```
 
-Bot chỉ tính `PushEvent` trong ngày hiện tại. Mỗi người có thể dùng tối đa `18` lượt Commit Hóa Đạo mỗi ngày.
+Bot chỉ tính `PushEvent` trong ngày hiện tại. `/checkcommit` không giới hạn số lần dùng trong ngày, nhưng tổng tu vi GitHub nhận được trong ngày bị giới hạn ở `1500`.
 
 Công thức điểm tu vi:
 
@@ -334,11 +334,11 @@ Công thức điểm tu vi:
 base = 40;
 commitBonus = Math.min(commitCount * 10, 60);
 gain = base + commitBonus;
-dailyCap = 120;
-dailyRewardLimit = 18;
+perCheckCap = 120;
+dailyTuViCap = 1500;
 ```
 
-Nếu hôm nay có commit công khai và chưa quá 18 lượt, bot cộng điểm vào `tuViExp` dự trữ và trả embed gồm GitHub username, số commit hôm nay, lượt hôm nay, điểm nhận được, tổng tu vi exp và tu vi hiện tại. Cộng `tuViExp` không tự đột phá cảnh giới.
+Nếu hôm nay có commit công khai, bot cộng điểm vào `tuViExp` dự trữ và trả embed gồm GitHub username, số commit hôm nay, số repo hôm nay, streak, hệ số, điểm nhận được, giới hạn ngày, tổng tu vi exp và tu vi hiện tại. Khi đạt `1500/1500`, bot vẫn phản hồi nhưng không cộng thêm tu vi. Cộng `tuViExp` không tự đột phá cảnh giới.
 
 Nếu chưa có commit công khai hôm nay, bot báo chưa tìm thấy commit.
 
