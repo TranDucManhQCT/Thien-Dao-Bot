@@ -16,11 +16,6 @@ const commands = [
     .setDMPermission(false)
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
   new SlashCommandBuilder()
-    .setName('setup-congphap')
-    .setDescription('Dựng bia chọn Công Pháp Tu Luyện cho tông môn.')
-    .setDMPermission(false)
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-  new SlashCommandBuilder()
     .setName('linhcan')
     .setDescription('Kiểm tra linh căn trong ticket riêng.')
     .setDMPermission(false)

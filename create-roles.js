@@ -88,14 +88,43 @@ const MEMBER_PERMISSIONS = [
 ];
 
 const CONG_PHAP_ROLES = [
-  { name: '⚛️ React Huyễn Diện Công', color: 0x61dafb },
-  { name: '🟦 TypeScript Chân Kinh', color: 0x3178c6 },
-  { name: '🟨 JavaScript Tâm Pháp', color: 0xf7df1e },
-  { name: '🟩 Node Hậu Đạo Quyết', color: 0x3c873a },
-  { name: '🗄️ SQL Địa Mạch Kinh', color: 0x64748b },
-  { name: '🐘 PostgreSQL Địa Mạch Kinh', color: 0x336791 },
-  { name: '🎨 Figma Huyễn Hình Thuật', color: 0xf24e1e },
-  { name: '☁️ Docker Vân Hạ Pháp', color: 0x2496ed },
+  { name: '💻 frontend-huyễn-diện', color: 0x38bdf8 },
+  { name: '⚙️ backend-hậu-đạo', color: 0x94a3b8 },
+  { name: '🌐 fullstack-vạn-pháp', color: 0x22c55e },
+  { name: '📱 mobile-linh-khí', color: 0x60a5fa },
+  { name: '🗄️ database-địa-mạch', color: 0x64748b },
+  { name: '🧠 ai-cơ-trí', color: 0xa855f7 },
+  { name: '☁️ devops-vân-hạ', color: 0x2496ed },
+  { name: '🛡️ security-hộ-pháp', color: 0x0f766e },
+  { name: '🎮 game-mộng-cảnh', color: 0xf97316 },
+  { name: '🎨 uiux-huyễn-hình', color: 0xec4899 },
+  { name: '🏗️ system-kiến-trúc-pháp', color: 0xf59e0b },
+].map((role) => ({
+  ...role,
+  permissions: [],
+}));
+
+const DISCIPLE_ROLES = [
+  { name: 'Tán Tu', color: 0x78716c },
+  { name: 'Ký Danh Đệ Tử', color: 0xa8a29e },
+  { name: 'Tạp Dịch Đệ Tử', color: 0x6b7280 },
+  { name: 'Ngoại Môn Đệ Tử', color: 0x22c55e },
+  { name: 'Nội Môn Đệ Tử', color: 0x3b82f6 },
+  { name: 'Chân Truyền Đệ Tử', color: 0xa855f7 },
+  { name: 'Thân Truyền Đệ Tử', color: 0xf59e0b },
+  { name: 'Thánh Tử', color: 0xfacc15 },
+  { name: 'Thánh Nữ', color: 0xec4899 },
+].map((role) => ({
+  ...role,
+  permissions: [],
+}));
+
+const QUALITY_ROLES = [
+  { name: 'Hạ Phẩm Linh Căn', color: 0x8d99ae },
+  { name: 'Trung Phẩm Linh Căn', color: 0x52b788 },
+  { name: 'Thượng Phẩm Linh Căn', color: 0xffd166 },
+  { name: 'Cực Phẩm Linh Căn', color: 0xf77f00 },
+  { name: 'Thiên Phẩm Linh Căn', color: 0xc77dff },
 ].map((role) => ({
   ...role,
   permissions: [],
@@ -114,16 +143,18 @@ const roleConfigs = [
   { name: 'Dẫn Đạo Sư', color: 0x38bdf8, permissions: GUIDE_PERMISSIONS },
   { name: 'Đường Chủ', color: 0x818cf8, permissions: OFFICER_PERMISSIONS },
   { name: 'Đại Đạo Tông', color: 0x94a3b8, permissions: MEMBER_PERMISSIONS },
-  { name: 'Tạp Linh Căn', color: 0x9ca3af },
-  { name: 'Tứ Linh Căn', color: 0x60a5fa },
-  { name: 'Tam Linh Căn', color: 0x34d399 },
-  { name: 'Nhị Linh Căn', color: 0xfbbf24 },
-  { name: 'Nhất Linh Căn', color: 0xf59e0b },
-  { name: 'Kim Linh Căn', color: 0xfacc15 },
-  { name: 'Mộc Linh Căn', color: 0x22c55e },
-  { name: 'Thủy Linh Căn', color: 0x38bdf8 },
-  { name: 'Hỏa Linh Căn', color: 0xef4444 },
-  { name: 'Thổ Linh Căn', color: 0xa16207 },
+  ...DISCIPLE_ROLES,
+  { name: 'Tạp Linh Căn', color: 0x9ca3af, permissions: [] },
+  { name: 'Tứ Linh Căn', color: 0x60a5fa, permissions: [] },
+  { name: 'Tam Linh Căn', color: 0x34d399, permissions: [] },
+  { name: 'Nhị Linh Căn', color: 0xfbbf24, permissions: [] },
+  { name: 'Nhất Linh Căn', color: 0xf59e0b, permissions: [] },
+  { name: 'Kim Linh Căn', color: 0xfacc15, permissions: [] },
+  { name: 'Mộc Linh Căn', color: 0x22c55e, permissions: [] },
+  { name: 'Thủy Linh Căn', color: 0x38bdf8, permissions: [] },
+  { name: 'Hỏa Linh Căn', color: 0xef4444, permissions: [] },
+  { name: 'Thổ Linh Căn', color: 0xa16207, permissions: [] },
+  ...QUALITY_ROLES,
   ...CONG_PHAP_ROLES,
 ];
 
