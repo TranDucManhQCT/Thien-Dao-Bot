@@ -138,6 +138,7 @@
 const MESSAGE_CONG_HIEN_BLOCKED_CHANNEL_PARTS = ['meme', 'trà-đàm', 'du-hí', 'ẩn-danh', 'góp-ý'];
 const GITHUB_VERIFY_CODE_PREFIX = 'THIENDAO';
 const GITHUB_DAILY_EXP_CAP = 120;
+const GITHUB_DAILY_REWARD_LIMIT = 18;
 const LEGACY_USER_FIELDS = ['lastCultivateAt', 'lastBreakthroughAt', 'lastMessageExpAt', 'dailyMessageExp'];
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const CO_DUYEN_COOLDOWN_MS = ONE_DAY_MS;
@@ -743,8 +744,9 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       .addFields(
         { name: 'GitHub', value: userData.githubUsername ?? 'Chưa liên kết', inline: true },
         { name: 'Xác minh', value: userData.githubVerified ? 'Đã xác minh' : 'Chưa xác minh', inline: true },
-        { name: 'Lần nhận thưởng commit gần nhất', value: userData.lastGithubRewardDate ?? 'Chưa có', inline: false },
-        { name: 'Điểm GitHub hôm nay', value: `${userData.githubDailyExp ?? 0}/${GITHUB_DAILY_EXP_CAP}`, inline: true },
+        { name: 'Ngày luyện commit gần nhất', value: userData.lastGithubRewardDate ?? 'Chưa có', inline: false },
+        { name: 'Lượt hóa đạo hôm nay', value: `${userData.githubDailyRewardCount ?? 0}/${GITHUB_DAILY_REWARD_LIMIT}`, inline: true },
+        { name: 'Điểm GitHub hôm nay', value: `${userData.githubDailyExp ?? 0}/${GITHUB_DAILY_EXP_CAP * GITHUB_DAILY_REWARD_LIMIT}`, inline: true },
       )
       .setFooter({ text: 'Dùng /linkgithub username rồi /verifygithub để mở đạo lộ commit.' });
 
@@ -779,9 +781,15 @@ const AUTO_DISCIPLE_THRESHOLDS = [
   }
 
   const today = getTodayString();
+  const isFirstGithubRewardToday = userData.lastGithubRewardDate !== today;
 
-  if (userData.lastGithubRewardDate === today) {
-    await interaction.editReply('Hôm nay ngươi đã nhận thưởng tu vi từ commit rồi.');
+  if (isFirstGithubRewardToday) {
+    userData.githubDailyExp = 0;
+    userData.githubDailyRewardCount = 0;
+  }
+
+  if (userData.githubDailyRewardCount >= GITHUB_DAILY_REWARD_LIMIT) {
+    await interaction.editReply(`Hôm nay đạo hữu đã luyện đủ **${GITHUB_DAILY_REWARD_LIMIT}/${GITHUB_DAILY_REWARD_LIMIT}** vòng Commit Hóa Đạo. Hãy để đạo cơ lắng lại, mai tiếp tục hấp thu công đức GitHub.`);
     return;
   }
 
@@ -818,9 +826,10 @@ const AUTO_DISCIPLE_THRESHOLDS = [
 
     userData.tuViExp += gain;
     userData.lastGithubRewardDate = today;
-    userData.githubDailyExp = gain;
+    userData.githubDailyExp += gain;
+    userData.githubDailyRewardCount += 1;
     userData.githubTotalExp += gain;
-    userData.githubStreak += 1;
+    userData.githubStreak += isFirstGithubRewardToday ? 1 : 0;
 
     const syncResult = await syncTuViRoles(interaction.guild, member, userData.tuViExp);
 
@@ -833,14 +842,16 @@ const AUTO_DISCIPLE_THRESHOLDS = [
 
     const embed = new EmbedBuilder()
       .setColor(GOLD)
-      .setTitle('GitHub Công Đức Quy Tụ')
-      .setDescription(`${member} đã dùng commit hôm nay để bồi đắp đạo hạnh.`)
+      .setTitle('Commit Hóa Đạo')
+      .setDescription(`${member} luyện hóa đạo tích GitHub, công đức commit quy tụ thành tu vi.`)
       .addFields(
         { name: 'GitHub username', value: userData.githubUsername, inline: true },
         { name: 'Commit hôm nay', value: `${commitCount}`, inline: true },
+        { name: 'Lượt hôm nay', value: `${userData.githubDailyRewardCount}/${GITHUB_DAILY_REWARD_LIMIT}`, inline: true },
         { name: 'Điểm tu luyện nhận được', value: `+${gain}${gain !== rawGain ? ` (gốc ${rawGain})` : ''}`, inline: true },
         { name: 'Tổng tu vi exp', value: `${userData.tuViExp}`, inline: true },
         { name: 'Tu vi hiện tại', value: `${syncResult.tuVi.realm} ${syncResult.tuVi.minor}`, inline: true },
+        { name: 'Đạo cơ dự trữ', value: 'Điểm đã nhập kho. Cảnh giới chỉ đổi khi đạo hữu chủ động dùng `/dotpha`.', inline: false },
       );
 
     await interaction.editReply({ embeds: [embed] });
@@ -873,7 +884,7 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     const breakthroughText = nextTuVi
       ? needed > 0
         ? `Còn thiếu ${needed} tu vi exp để đột phá lên ${nextTuVi.realm} ${nextTuVi.minor}.`
-        : `Đã đủ tu vi để dùng /dotpha lên ${nextTuVi.realm} ${nextTuVi.minor}.`
+        : `Đã đủ tu vi để dùng /dotpha lên ${nextTuVi.realm} ${nextTuVi.minor}. Có thể giữ điểm lại để luyện căn, dưỡng linh mạch hoặc xử lý trạng thái xấu.`
       : 'Đã chạm đỉnh cảnh giới hiện tại của Thiên Đạo.';
 
     const embed = new EmbedBuilder()
@@ -937,7 +948,7 @@ const AUTO_DISCIPLE_THRESHOLDS = [
 
     if (currentTuVi.minor !== 'Đỉnh Phong') {
       userData.tuViExp = Math.max(userData.tuViExp, expRequiredForLevel(level));
-      const syncResult = await syncTuViRoles(interaction.guild, member, userData.tuViExp);
+      const syncResult = await syncTuViRoles(interaction.guild, member, userData.tuViExp, { targetLevel: level + 1 });
 
       if (!syncResult.ok) {
         await interaction.reply({ content: syncResult.message, flags: MessageFlags.Ephemeral });
@@ -1073,49 +1084,88 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       return;
     }
 
-    const event = pickCoDuyenEvent();
+    const event = pickCoDuyenEvent(userData);
     userData.lastCoDuyenAt = now;
 
     let detail = '';
+    let effect = '';
     let syncTuVi = false;
     let syncDisciple = false;
+    const previousLuckBonus = userData.coDuyenLuckBonus ?? 0;
+
+    if (previousLuckBonus > 0 && event.key !== 'thien_co') {
+      userData.coDuyenLuckBonus = 0;
+    }
 
     if (event.key === 'tang_kinh') {
       const gain = applyTuViMultiplier(userData, 80);
+      const foundFragment = Math.random() < 0.35;
+
       userData.tuViExp += gain;
-      detail = `Đạo hữu lĩnh ngộ cổ thư, nhận **+${gain} tu vi exp**.`;
+      detail = 'Ngươi vô tình nghe được tiếng chuông cổ vọng ra từ Tàng Kinh Các. Một quyển tàn kinh tự bay đến trước mặt.';
+      effect = `+${gain} tu vi exp.`;
+
+      if (foundFragment) {
+        userData.tanQuyenCount += 1;
+        setTemporaryStatus(userData, 'Cơ Duyên Gia Thân', ONE_DAY_MS, { tuViMultiplierValue: 1.15 });
+        effect += ' Lại nhận thêm một mảnh Tàn Quyển, tu vi nhận được trong ngày tăng x1.15.';
+      }
+
       syncTuVi = true;
     }
 
     if (event.key === 'cao_nhan') {
       userData.congHienExp += 30;
-      detail = 'Đạo hữu được cao nhân chỉ điểm, nhận **+30 cống hiến**.';
+      detail = 'Một vị lão giả không rõ lai lịch chỉ nhìn qua đạo tâm của ngươi rồi cười nhạt: “Sai ở chỗ tâm chưa tĩnh.”';
+      effect = '+30 cống hiến.';
+
+      if (isTemporaryStatusActive(userData, 'Tâm Ma Quấn Thân')) {
+        userData.temporaryStatus = null;
+        userData.temporaryStatusExpireAt = 0;
+        userData.dotPhaPenaltyUntil = 0;
+        effect += ' Tâm Ma Quấn Thân được hóa giải.';
+      } else if (Date.now() < (userData.dotPhaPenaltyUntil ?? 0)) {
+        userData.dotPhaPenaltyUntil = 0;
+        effect += ' Tâm ma trong đạo tâm được giảm bớt.';
+      }
+
       syncDisciple = true;
     }
 
     if (event.key === 'tam_ma') {
       setTemporaryStatus(userData, 'Tâm Ma Quấn Thân', ONE_DAY_MS, { dotPhaPenalty: true });
-      detail = 'Tâm ma quấn thân, tỉ lệ đột phá sau này sẽ bị giảm khi hệ thống đột phá mở ra.';
+      detail = 'Trong lúc nhập định, ngươi thấy chính mình ở một tương lai thất bại, đạo tâm dao động.';
+      effect = 'Tâm Ma Quấn Thân trong 24 giờ, giảm tỉ lệ đột phá.';
     }
 
-    if (event.key === 'be_quan') {
-      setTemporaryStatus(userData, 'Bế Quan', 8 * 60 * 60 * 1000, { beQuanRewardExp: 120 });
-      detail = 'Đạo hữu nhập Bế Quan 8 giờ. Trong lúc bế quan không nhận cống hiến chat, hết hạn nhận **+120 tu vi exp**.';
-    }
-
-    if (event.key === 'co_duyen') {
-      setTemporaryStatus(userData, 'Cơ Duyên Gia Thân', ONE_DAY_MS, { tuViMultiplierValue: 1.25 });
-      detail = 'Cơ duyên gia thân, tu vi nhận được trong ngày tăng **x1.25**.';
+    if (event.key === 'tan_quyen') {
+      userData.tanQuyenCount += 1;
+      setTemporaryStatus(userData, 'Cơ Duyên Gia Thân', ONE_DAY_MS, { tuViMultiplierValue: 1.15 });
+      detail = 'Trong đống cổ thư mục nát, ngươi tìm được một mảnh công pháp thất truyền.';
+      effect = 'Nhận Tàn Quyển, công pháp đang tu được cộng hưởng nhẹ. Tu vi nhận được trong ngày tăng x1.15.';
     }
 
     if (event.key === 'linh_khi') {
       setTemporaryStatus(userData, 'Linh Khí Bạo Phát', ONE_DAY_MS, { tuViMultiplierValue: 2 });
-      detail = 'Linh khí bạo phát quanh đạo thân, tu vi nhận được trong ngày tăng **x2**.';
+      detail = 'Linh khí trong động phủ đột nhiên cuộn trào, kinh mạch mở rộng, đạo cơ rung chuyển.';
+      effect = 'Tu vi nhận được trong hôm nay tăng x2.';
     }
 
     if (event.key === 'dao_tam') {
       setTemporaryStatus(userData, 'Đạo Tâm Kiên Định', ONE_DAY_MS, { dotPhaBonus: true });
-      detail = 'Đạo tâm kiên định, tỉ lệ đột phá sau này sẽ được tăng khi hệ thống đột phá mở ra.';
+      detail = 'Sau một đêm tĩnh tọa, ngươi không còn bị tạp niệm quấy nhiễu.';
+      effect = 'Tăng tỉ lệ đột phá lần sau.';
+    }
+
+    if (event.key === 'nghich_luu') {
+      detail = 'Linh khí hấp thu quá nhanh khiến kinh mạch rối loạn.';
+      effect = 'Không nhận thưởng, nhưng cooldown /coduyen vẫn được tính.';
+    }
+
+    if (event.key === 'thien_co') {
+      userData.coDuyenLuckBonus = Math.min(30, (userData.coDuyenLuckBonus ?? 0) + 10);
+      detail = 'Thiên đạo hôm nay không đáp lại lời cầu duyên của ngươi.';
+      effect = `Không nhận thưởng. May mắn lần cầu duyên sau tăng nhẹ (+${userData.coDuyenLuckBonus}% cát duyên).`;
     }
 
     if (syncTuVi) {
@@ -1150,7 +1200,9 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       .setTitle(`Cơ Duyên - ${event.name}`)
       .setDescription(detail)
       .addFields(
+        { name: 'Nhóm', value: event.group, inline: true },
         { name: 'Đạo hữu', value: `${member}`, inline: true },
+        { name: 'Hiệu ứng', value: effect || 'Không có.', inline: false },
         { name: 'Trạng thái', value: formatTemporaryStatus(userData), inline: true },
       );
 
@@ -2524,7 +2576,7 @@ const AUTO_DISCIPLE_THRESHOLDS = [
         finalText = `<@${event.ownerId}> vượt qua thiên lôi, bước vào **${event.toRealm} Sơ Kỳ**.`;
       }
 
-      await syncTuViRoles(guild, member, userData.tuViExp);
+      await syncTuViRoles(guild, member, userData.tuViExp, { targetLevel: event.targetLevel });
       await syncTemporaryStatusRole(guild, member, userData);
 
       for (const sneakerId of Object.keys(event.sneakers ?? {})) {
@@ -2757,18 +2809,23 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     return syncTemporaryStatusRole(guild, member, userData);
   }
 
-  function pickCoDuyenEvent() {
-    const events = [
-      { key: 'tang_kinh', name: 'Tàng Kinh Các Khai Mở' },
-      { key: 'cao_nhan', name: 'Cao Nhân Chỉ Điểm' },
-      { key: 'tam_ma', name: 'Tâm Ma Quấn Thân' },
-      { key: 'be_quan', name: 'Bế Quan' },
-      { key: 'co_duyen', name: 'Cơ Duyên Gia Thân' },
-      { key: 'linh_khi', name: 'Linh Khí Bạo Phát' },
-      { key: 'dao_tam', name: 'Đạo Tâm Kiên Định' },
+  function pickCoDuyenEvent(userData) {
+    const catDuyenEvents = [
+      { key: 'tang_kinh', name: 'Tàng Kinh Các Khai Mở', group: 'Cát duyên' },
+      { key: 'cao_nhan', name: 'Cao Nhân Chỉ Điểm', group: 'Cát duyên' },
+      { key: 'linh_khi', name: 'Linh Khí Bạo Phát', group: 'Cát duyên' },
+      { key: 'dao_tam', name: 'Đạo Tâm Kiên Định', group: 'Cát duyên' },
+      { key: 'tan_quyen', name: 'Nhặt Được Tàn Quyển', group: 'Cát duyên' },
     ];
+    const hungDuyenEvents = [
+      { key: 'tam_ma', name: 'Tâm Ma Quấy Nhiễu', group: 'Hung duyên' },
+      { key: 'nghich_luu', name: 'Linh Khí Nghịch Lưu', group: 'Hung duyên' },
+      { key: 'thien_co', name: 'Thiên Cơ Che Mờ', group: 'Hung duyên' },
+    ];
+    const catDuyenChance = Math.min(85, 60 + (userData.coDuyenLuckBonus ?? 0));
+    const pool = Math.random() * 100 < catDuyenChance ? catDuyenEvents : hungDuyenEvents;
 
-    return events[Math.floor(Math.random() * events.length)];
+    return pool[Math.floor(Math.random() * pool.length)];
   }
 
   function isTicketWithPrefix(channel, topicPrefix) {
@@ -2942,6 +2999,9 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       normalized.githubTotalExp = normalized.githubDailyExp;
     }
 
+    normalized.githubDailyExp = Number(normalized.githubDailyExp) || 0;
+    normalized.githubDailyRewardCount = Number(normalized.githubDailyRewardCount) || 0;
+
     if (!normalized.tuViMultiplierValue || normalized.tuViMultiplierValue < 1) {
       normalized.tuViMultiplierValue = 1;
     }
@@ -2963,6 +3023,7 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       lastGithubCheckAt: 0,
       lastGithubRewardDate: null,
       githubDailyExp: 0,
+      githubDailyRewardCount: 0,
       githubTotalExp: 0,
       githubStreak: 0,
       tuViExp: 0,
@@ -2971,6 +3032,8 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       dailyMessageCongHien: 0,
       dailyMessageDate: getTodayString(),
       lastCoDuyenAt: 0,
+      coDuyenLuckBonus: 0,
+      tanQuyenCount: 0,
       temporaryStatus: null,
       temporaryStatusExpireAt: 0,
       tuViMultiplierUntil: 0,
@@ -3084,6 +3147,16 @@ const AUTO_DISCIPLE_THRESHOLDS = [
   }
 
   function getCurrentTuViLevel(member, fallbackExp = 0) {
+    const assignedLevel = getAssignedTuViLevel(member);
+
+    if (assignedLevel !== null) {
+      return assignedLevel;
+    }
+
+    return getLevelFromExp(fallbackExp);
+  }
+
+  function getAssignedTuViLevel(member) {
     const realmIndex = TU_VI_REALMS.findIndex((roleName) =>
       member.roles.cache.some((role) => role.name === roleName),
     );
@@ -3095,13 +3168,18 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       return realmIndex * MINOR_REALMS.length + minorIndex;
     }
 
-    return getLevelFromExp(fallbackExp);
+    return null;
   }
 
-  async function syncTuViRoles(guild, member, tuViExp) {
+  async function syncTuViRoles(guild, member, tuViExp, options = {}) {
     await guild.roles.fetch();
 
-    const tuVi = getTuViFromExp(tuViExp);
+    const targetLevel = Number.isInteger(options.targetLevel)
+      ? options.targetLevel
+      : options.fromExp
+        ? getLevelFromExp(tuViExp)
+        : getAssignedTuViLevel(member) ?? 0;
+    const tuVi = getTuViByLevel(targetLevel);
     const realmRole = findRoleByName(guild, tuVi.realm);
     const minorRole = findRoleByName(guild, tuVi.minor);
     const missing = [

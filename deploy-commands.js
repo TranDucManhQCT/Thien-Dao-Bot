@@ -78,7 +78,7 @@ const commands = [
     .setDMPermission(false),
   new SlashCommandBuilder()
     .setName('checkcommit')
-    .setDescription('Nhận tu vi từ public commit GitHub hôm nay.')
+    .setDescription('Commit Hóa Đạo: luyện hóa public commit GitHub thành tu vi.')
     .setDMPermission(false),
   new SlashCommandBuilder()
     .setName('conghien')

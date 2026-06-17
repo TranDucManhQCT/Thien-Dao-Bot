@@ -155,6 +155,9 @@ Dữ liệu mỗi thành viên có dạng:
     "lastGithubCheckAt": 0,
     "lastGithubRewardDate": null,
     "githubDailyExp": 0,
+    "githubDailyRewardCount": 0,
+    "githubTotalExp": 0,
+    "githubStreak": 0,
     "tuViExp": 0,
     "congHienExp": 0,
     "lastMessageCongHienAt": 0,
@@ -313,9 +316,9 @@ Thiên Đạo chưa thể quan sát GitHub lúc này, hãy thử lại sau.
 
 ### `/github`
 
-Hiển thị GitHub đã liên kết, trạng thái xác minh, lần nhận thưởng commit gần nhất và điểm GitHub hôm nay.
+Hiển thị GitHub đã liên kết, trạng thái xác minh, ngày luyện commit gần nhất, lượt hóa đạo hôm nay và điểm GitHub hôm nay.
 
-### `/checkcommit`
+### `/checkcommit` - Commit Hóa Đạo
 
 Chỉ dùng khi GitHub đã xác minh. Bot kiểm tra public GitHub events:
 
@@ -323,7 +326,7 @@ Chỉ dùng khi GitHub đã xác minh. Bot kiểm tra public GitHub events:
 https://api.github.com/users/<username>/events/public
 ```
 
-Bot chỉ tính `PushEvent` trong ngày hiện tại và chỉ cho nhận thưởng một lần mỗi ngày.
+Bot chỉ tính `PushEvent` trong ngày hiện tại. Mỗi người có thể dùng tối đa `18` lượt Commit Hóa Đạo mỗi ngày.
 
 Công thức điểm tu vi:
 
@@ -332,19 +335,20 @@ base = 40;
 commitBonus = Math.min(commitCount * 10, 60);
 gain = base + commitBonus;
 dailyCap = 120;
+dailyRewardLimit = 18;
 ```
 
-Nếu hôm nay có commit công khai, bot cộng điểm vào `tuViExp`, đồng bộ role tu vi bằng `syncTuViRoles(member)` và trả embed gồm GitHub username, số commit hôm nay, điểm nhận được, tổng tu vi exp và tu vi hiện tại.
+Nếu hôm nay có commit công khai và chưa quá 18 lượt, bot cộng điểm vào `tuViExp` dự trữ và trả embed gồm GitHub username, số commit hôm nay, lượt hôm nay, điểm nhận được, tổng tu vi exp và tu vi hiện tại. Cộng `tuViExp` không tự đột phá cảnh giới.
 
 Nếu chưa có commit công khai hôm nay, bot báo chưa tìm thấy commit.
 
 ### `/tuvi`
 
-Hiển thị tu vi hiện tại, tiểu cảnh, tổng `tuViExp`, mốc đột phá kế tiếp, GitHub đã liên kết, trạng thái xác minh và lần nhận thưởng commit gần nhất. Nếu chưa đủ đột phá, bot báo còn thiếu bao nhiêu `tuViExp`; nếu đã đủ, bot nhắc dùng `/dotpha`.
+Hiển thị tu vi hiện tại, tiểu cảnh, tổng `tuViExp`, mốc đột phá kế tiếp, GitHub đã liên kết, trạng thái xác minh và lần nhận thưởng commit gần nhất. Nếu chưa đủ đột phá, bot báo còn thiếu bao nhiêu `tuViExp`; nếu đã đủ, bot nhắc dùng `/dotpha`. Người dùng có thể không đột phá để giữ điểm dự trữ cho hệ thống luyện căn, dưỡng linh mạch hoặc xử lý trạng thái xấu sau này.
 
 ### `/dotpha`
 
-Dùng cho mọi tiểu cảnh. `Sơ Kỳ -> Trung Kỳ`, `Trung Kỳ -> Hậu Kỳ`, `Hậu Kỳ -> Đỉnh Phong` được xử lý nhanh khi đủ `tuViExp`.
+Dùng cho mọi tiểu cảnh và là cách duy nhất để chủ động đổi cảnh giới bằng điểm tu vi. `Sơ Kỳ -> Trung Kỳ`, `Trung Kỳ -> Hậu Kỳ`, `Hậu Kỳ -> Đỉnh Phong` được xử lý nhanh khi đủ `tuViExp`.
 
 Khi đang ở `Đỉnh Phong` và đủ `tuViExp`, bot mở event công khai `Thiên Lôi Độ Kiếp` để vượt đại cảnh giới. Event có nút `Hộ Kiếp` và `Đánh Lén`, mỗi lần bấm tiêu `50 tuViExp`.
 
@@ -415,7 +419,21 @@ Hiển thị đạo hồ của thành viên:
 
 ### `/coduyen`
 
-Mỗi người dùng được cầu cơ duyên 24 giờ một lần. Cơ duyên có thể cộng tu vi, cộng cống hiến, mở trạng thái `Tâm Ma Quấn Thân`, `Bế Quan`, `Cơ Duyên Gia Thân`, `Linh Khí Bạo Phát` hoặc `Đạo Tâm Kiên Định`.
+Mỗi người dùng được cầu cơ duyên 24 giờ một lần. Cơ duyên chia thành `Cát duyên` và `Hung duyên`; nếu gặp `Thiên Cơ Che Mờ`, lần cầu duyên sau được tăng nhẹ may mắn gặp cát duyên.
+
+Nhóm cát duyên:
+
+- `Tàng Kinh Các Khai Mở`: +tu vi, có tỉ lệ nhận thêm Tàn Quyển.
+- `Cao Nhân Chỉ Điểm`: +cống hiến, có thể hóa giải hoặc giảm Tâm Ma.
+- `Linh Khí Bạo Phát`: x2 tu vi nhận được trong hôm nay.
+- `Đạo Tâm Kiên Định`: tăng tỉ lệ đột phá lần sau.
+- `Nhặt Được Tàn Quyển`: bonus nhẹ cho công pháp đang tu, tăng tu vi nhận trong ngày.
+
+Nhóm hung duyên:
+
+- `Tâm Ma Quấy Nhiễu`: giảm tỉ lệ đột phá trong 24 giờ.
+- `Linh Khí Nghịch Lưu`: không thưởng, cooldown `/coduyen` vẫn tính.
+- `Thiên Cơ Che Mờ`: không thưởng, tăng nhẹ may mắn lần sau.
 
 Các trạng thái đặc biệt có role tạm thời:
 
