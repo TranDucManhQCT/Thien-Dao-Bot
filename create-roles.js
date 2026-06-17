@@ -74,6 +74,19 @@ const GUIDE_PERMISSIONS = [
   PermissionFlagsBits.UseApplicationCommands,
 ];
 
+const MEMBER_PERMISSIONS = [
+  PermissionFlagsBits.ViewChannel,
+  PermissionFlagsBits.SendMessages,
+  PermissionFlagsBits.EmbedLinks,
+  PermissionFlagsBits.AttachFiles,
+  PermissionFlagsBits.AddReactions,
+  PermissionFlagsBits.ReadMessageHistory,
+  PermissionFlagsBits.UseApplicationCommands,
+  PermissionFlagsBits.Connect,
+  PermissionFlagsBits.Speak,
+  PermissionFlagsBits.UseVAD,
+];
+
 const roleConfigs = [
   { name: 'Đạo Tổ', color: 0xf8fafc, permissions: OWNER_PERMISSIONS },
   { name: 'Thái Thượng Trưởng Lão', color: 0xfef3c7, permissions: SECT_MASTER_PERMISSIONS },
@@ -86,6 +99,7 @@ const roleConfigs = [
   { name: 'Chấp Sự', color: 0x64748b, permissions: OFFICER_PERMISSIONS },
   { name: 'Dẫn Đạo Sư', color: 0x38bdf8, permissions: GUIDE_PERMISSIONS },
   { name: 'Đường Chủ', color: 0x818cf8, permissions: OFFICER_PERMISSIONS },
+  { name: 'Đại Đạo Tông', color: 0x94a3b8, permissions: MEMBER_PERMISSIONS },
   { name: 'Tạp Linh Căn', color: 0x9ca3af },
   { name: 'Tứ Linh Căn', color: 0x60a5fa },
   { name: 'Tam Linh Căn', color: 0x34d399 },
@@ -102,7 +116,7 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds],
 });
 
-client.once('ready', async () => {
+client.once('clientReady', async () => {
   try {
     const guild = await client.guilds.fetch(GUILD_ID);
     const roles = await guild.roles.fetch();
@@ -113,7 +127,7 @@ client.once('ready', async () => {
       if (existed) {
         if (config.permissions) {
           await existed.edit({
-            color: config.color,
+            colors: { primaryColor: config.color },
             permissions: config.permissions,
             reason: 'Thien Dao Bot cap nhat quyen role tong mon.',
           });
@@ -128,7 +142,7 @@ client.once('ready', async () => {
 
       await guild.roles.create({
         name: config.name,
-        color: config.color,
+        colors: { primaryColor: config.color },
         permissions: config.permissions ?? [],
         mentionable: false,
         reason: 'Thien Dao Bot tao role tong mon va linh can.',

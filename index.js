@@ -39,7 +39,7 @@ const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
 });
 
-client.once('ready', () => {
+client.once('clientReady', () => {
   console.log(`Thien Dao da nhap the: ${client.user.tag}`);
 });
 
