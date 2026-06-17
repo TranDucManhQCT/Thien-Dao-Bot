@@ -1,4 +1,16 @@
 {
-  "nextId": 1,
-  "questions": {}
+  "nextId": 2,
+  "questions": {
+    "1": {
+      "id": "1",
+      "channelId": "1516840778914070538",
+      "threadId": "1516844248337748119",
+      "messageId": "1516844248337748119",
+      "questionerId": "662859145921298435",
+      "question": "Tao đẹp trai k",
+      "status": "Đang luận đạo",
+      "answers": {},
+      "createdAt": 1781714237812
+    }
+  }
 }
