@@ -88,6 +88,88 @@ const commands = [
     .setName('tuvi')
     .setDescription('Xem cảnh giới và tu vi exp từ GitHub.')
     .setDMPermission(false),
+  new SlashCommandBuilder()
+    .setName('coduyen')
+    .setDescription('Cầu một lần cơ duyên trong ngày.')
+    .setDMPermission(false),
+  new SlashCommandBuilder()
+    .setName('luandao')
+    .setDescription('Mở một đàn luận đạo code.')
+    .setDMPermission(false)
+    .addStringOption((option) =>
+      option
+        .setName('cauhoi')
+        .setDescription('Câu hỏi luận đạo code.')
+        .setRequired(true),
+    ),
+  new SlashCommandBuilder()
+    .setName('giaidap')
+    .setDescription('Gửi lời giải đáp cho một đàn luận đạo.')
+    .setDMPermission(false)
+    .addStringOption((option) =>
+      option
+        .setName('id')
+        .setDescription('ID luận đạo.')
+        .setRequired(true),
+    )
+    .addStringOption((option) =>
+      option
+        .setName('noidung')
+        .setDescription('Nội dung giải đáp.')
+        .setRequired(true),
+    ),
+  new SlashCommandBuilder()
+    .setName('chamdiem')
+    .setDescription('Chấm điểm câu trả lời luận đạo.')
+    .setDMPermission(false)
+    .addStringOption((option) =>
+      option
+        .setName('id')
+        .setDescription('ID luận đạo.')
+        .setRequired(true),
+    )
+    .addUserOption((option) =>
+      option
+        .setName('thanhvien')
+        .setDescription('Người trả lời được chấm.')
+        .setRequired(true),
+    )
+    .addStringOption((option) =>
+      option
+        .setName('ketqua')
+        .setDescription('Kết quả chấm.')
+        .setRequired(true)
+        .addChoices(
+          { name: 'Hữu ích', value: 'huu_ich' },
+          { name: 'Code tốt', value: 'code_tot' },
+        ),
+    ),
+  new SlashCommandBuilder()
+    .setName('truyenthua')
+    .setDescription('Nhận một đệ tử vào truyền thừa.')
+    .setDMPermission(false)
+    .addUserOption((option) =>
+      option
+        .setName('de_tu')
+        .setDescription('Đệ tử được nhận truyền thừa.')
+        .setRequired(true),
+    ),
+  new SlashCommandBuilder()
+    .setName('bangxephang')
+    .setDescription('Xem bảng xếp hạng tông môn.')
+    .setDMPermission(false)
+    .addStringOption((option) =>
+      option
+        .setName('loai')
+        .setDescription('Loại bảng xếp hạng.')
+        .setRequired(true)
+        .addChoices(
+          { name: 'Tu vi', value: 'tuvi' },
+          { name: 'Cống hiến', value: 'conghien' },
+          { name: 'GitHub', value: 'github' },
+          { name: 'Streak', value: 'streak' },
+        ),
+    ),
 ].map((command) => command.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
