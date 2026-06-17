@@ -16,6 +16,11 @@ const commands = [
     .setDMPermission(false)
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
   new SlashCommandBuilder()
+    .setName('setup-congphap')
+    .setDescription('Dựng bia chọn Công Pháp Tu Luyện cho tông môn.')
+    .setDMPermission(false)
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+  new SlashCommandBuilder()
     .setName('linhcan')
     .setDescription('Kiểm tra linh căn trong ticket riêng.')
     .setDMPermission(false)
@@ -42,6 +47,16 @@ const commands = [
         .setRequired(true)
         .setMinValue(1)
         .setMaxValue(9999),
+    ),
+  new SlashCommandBuilder()
+    .setName('profile')
+    .setDescription('Xem đạo hồ của bản thân hoặc một đạo hữu.')
+    .setDMPermission(false)
+    .addUserOption((option) =>
+      option
+        .setName('thanhvien')
+        .setDescription('Đạo hữu muốn xem hồ sơ.')
+        .setRequired(false),
     ),
 ].map((command) => command.toJSON());
 

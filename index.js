@@ -22,6 +22,7 @@ const GOLD = 0xffd700;
 const OPEN_TICKET_BUTTON = 'thien_dao_open_linh_can_ticket';
 const CLOSE_TICKET_BUTTON = 'thien_dao_close_linh_can_ticket';
 const TICKET_TOPIC_PREFIX = 'linhcan-owner:';
+const CONG_PHAP_BUTTON_PREFIX = 'thien_dao_cong_phap:';
 
 const ELEMENTS = ['Kim', 'Mộc', 'Thủy', 'Hỏa', 'Thổ'];
 const CLASSIFICATION_ROLES = [
@@ -34,6 +35,17 @@ const CLASSIFICATION_ROLES = [
 const ELEMENT_ROLE_NAMES = ELEMENTS.map((element) => `${element} Linh Căn`);
 const STAFF_ROLE_NAMES = ['Trưởng Lão', 'Chấp Pháp Sứ'];
 const ALL_LINH_CAN_ROLE_NAMES = [...CLASSIFICATION_ROLES, ...ELEMENT_ROLE_NAMES];
+const CONG_PHAP_OPTIONS = [
+  { key: 'react', emoji: '⚛️', name: 'React Huyễn Diện Công', roleName: '⚛️ React Huyễn Diện Công' },
+  { key: 'typescript', emoji: '🟦', name: 'TypeScript Chân Kinh', roleName: '🟦 TypeScript Chân Kinh' },
+  { key: 'javascript', emoji: '🟨', name: 'JavaScript Tâm Pháp', roleName: '🟨 JavaScript Tâm Pháp' },
+  { key: 'node', emoji: '🟩', name: 'Node Hậu Đạo Quyết', roleName: '🟩 Node Hậu Đạo Quyết' },
+  { key: 'sql', emoji: '🗄️', name: 'SQL Địa Mạch Kinh', roleName: '🗄️ SQL Địa Mạch Kinh' },
+  { key: 'postgresql', emoji: '🐘', name: 'PostgreSQL Địa Mạch Kinh', roleName: '🐘 PostgreSQL Địa Mạch Kinh' },
+  { key: 'figma', emoji: '🎨', name: 'Figma Huyễn Hình Thuật', roleName: '🎨 Figma Huyễn Hình Thuật' },
+  { key: 'docker', emoji: '☁️', name: 'Docker Vân Hạ Pháp', roleName: '☁️ Docker Vân Hạ Pháp' },
+];
+const CONG_PHAP_ROLE_NAMES = CONG_PHAP_OPTIONS.map((option) => option.roleName);
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
@@ -55,6 +67,16 @@ client.on('interactionCreate', async (interaction) => {
         await handleLinhCan(interaction);
         return;
       }
+
+      if (interaction.commandName === 'setup-congphap') {
+        await handleSetupCongPhap(interaction);
+        return;
+      }
+
+      if (interaction.commandName === 'profile') {
+        await handleProfile(interaction);
+        return;
+      }
     }
 
     if (interaction.isButton()) {
@@ -65,6 +87,11 @@ client.on('interactionCreate', async (interaction) => {
 
       if (interaction.customId === CLOSE_TICKET_BUTTON) {
         await handleCloseTicket(interaction);
+        return;
+      }
+
+      if (interaction.customId.startsWith(CONG_PHAP_BUTTON_PREFIX)) {
+        await handleSelectCongPhap(interaction);
       }
     }
   } catch (error) {
@@ -110,6 +137,132 @@ async function handleSetupLinhCan(interaction) {
 
   await interaction.channel.send({ embeds: [embed], components: [row] });
   await interaction.reply({ content: 'Đã dựng Linh Căn Đài.', ephemeral: true });
+}
+
+async function handleSetupCongPhap(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: 'Lệnh này chỉ dùng trong tông môn.', ephemeral: true });
+    return;
+  }
+
+  if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+    await interaction.reply({ content: 'Chỉ chưởng quản tông môn mới được dựng bia Công Pháp.', ephemeral: true });
+    return;
+  }
+
+  const embed = new EmbedBuilder()
+    .setColor(GOLD)
+    .setTitle('Công Pháp Tu Luyện')
+    .setDescription(
+      [
+        'Đạo hữu hãy chọn một môn công pháp làm đạo pháp chính.',
+        'Mỗi người chỉ được giữ một công pháp chủ tu; pháp môn cũ sẽ được thu hồi trước khi truyền thụ pháp môn mới.',
+      ].join('\n'),
+    )
+    .setFooter({ text: 'Thiên Đạo Tông Môn - Chọn kỹ đạo tâm, tu cho vững căn cơ.' });
+
+  await interaction.channel.send({ embeds: [embed], components: buildCongPhapRows() });
+  await interaction.reply({ content: 'Đã dựng bia Công Pháp Tu Luyện.', ephemeral: true });
+}
+
+async function handleSelectCongPhap(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: 'Công pháp chỉ có thể chọn trong tông môn.', ephemeral: true });
+    return;
+  }
+
+  const selectedKey = interaction.customId.slice(CONG_PHAP_BUTTON_PREFIX.length);
+  const selected = CONG_PHAP_OPTIONS.find((option) => option.key === selectedKey);
+
+  if (!selected) {
+    await interaction.reply({ content: 'Công pháp này không còn trong pháp các.', ephemeral: true });
+    return;
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+  await interaction.guild.roles.fetch();
+
+  const member = await interaction.guild.members.fetch(interaction.user.id);
+  const targetRole = interaction.guild.roles.cache.find((role) => role.name === selected.roleName);
+
+  if (!targetRole) {
+    await interaction.editReply(`Thiếu role công pháp **${selected.roleName}**. Hãy chạy \`npm run create:roles\` rồi thử lại.`);
+    return;
+  }
+
+  const oldRoles = member.roles.cache.filter(
+    (role) => CONG_PHAP_ROLE_NAMES.includes(role.name) && role.id !== targetRole.id,
+  );
+  const blocker = await getRoleManageBlocker(interaction.guild, [targetRole, ...oldRoles.values()]);
+
+  if (blocker) {
+    await interaction.editReply(blocker);
+    return;
+  }
+
+  try {
+    if (oldRoles.size > 0) {
+      await member.roles.remove(oldRoles, 'Thu hoi cong phap cu truoc khi truyen cong phap moi.');
+    }
+
+    if (!member.roles.cache.has(targetRole.id)) {
+      await member.roles.add(targetRole, 'Truyen cong phap chinh cho dao huu.');
+    }
+  } catch (error) {
+    if (error.code === 50013) {
+      await interaction.editReply(
+        'Bot thiếu quyền Manage Roles hoặc role bot đang nằm dưới role công pháp. Hãy kéo role bot lên cao hơn các role công pháp rồi thử lại.',
+      );
+      return;
+    }
+
+    throw error;
+  }
+
+  const embed = new EmbedBuilder()
+    .setColor(GOLD)
+    .setTitle('Pháp Môn Đã Định')
+    .setDescription(`${member} đã chọn **${selected.roleName}** làm công pháp chủ tu.`)
+    .addFields(
+      {
+        name: 'Công pháp tu luyện',
+        value: selected.roleName,
+        inline: false,
+      },
+      {
+        name: 'Lời truyền pháp',
+        value: oldRoles.size > 0 ? 'Công pháp cũ đã được thu hồi, đạo tâm quy về một mối.' : 'Đạo tâm sơ lập, từ nay chuyên chú một pháp môn.',
+        inline: false,
+      },
+    )
+    .setFooter({ text: 'Dùng /profile để xem công pháp đang tu luyện.' });
+
+  await interaction.editReply({ embeds: [embed] });
+}
+
+async function handleProfile(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: 'Hồ sơ đạo hữu chỉ xem được trong tông môn.', ephemeral: true });
+    return;
+  }
+
+  const targetUser = interaction.options.getUser('thanhvien') ?? interaction.user;
+  const member = await interaction.guild.members.fetch(targetUser.id);
+  const linhCanText = getMemberLinhCanText(member);
+  const congPhapText = getMemberCongPhapText(member);
+
+  const embed = new EmbedBuilder()
+    .setColor(GOLD)
+    .setTitle(`Đạo Hồ - ${member.displayName}`)
+    .setThumbnail(targetUser.displayAvatarURL({ size: 256 }))
+    .addFields(
+      { name: 'Đạo danh', value: `${member}`, inline: true },
+      { name: 'Linh căn', value: linhCanText, inline: false },
+      { name: 'Công pháp tu luyện', value: congPhapText, inline: false },
+    )
+    .setFooter({ text: 'Thiên Đạo ghi nhận đạo tâm và căn cơ của môn nhân.' });
+
+  await interaction.reply({ embeds: [embed] });
 }
 
 async function handleOpenTicket(interaction) {
@@ -281,6 +434,81 @@ async function handleCloseTicket(interaction) {
       .delete('Dong ticket Linh Can Dai.')
       .catch((error) => console.error('Khong the xoa ticket:', error));
   }, 5000);
+}
+
+function buildCongPhapRows() {
+  const rows = [];
+
+  for (let index = 0; index < CONG_PHAP_OPTIONS.length; index += 4) {
+    const row = new ActionRowBuilder().addComponents(
+      ...CONG_PHAP_OPTIONS.slice(index, index + 4).map((option) =>
+        new ButtonBuilder()
+          .setCustomId(`${CONG_PHAP_BUTTON_PREFIX}${option.key}`)
+          .setEmoji(option.emoji)
+          .setLabel(option.name)
+          .setStyle(ButtonStyle.Secondary),
+      ),
+    );
+
+    rows.push(row);
+  }
+
+  return rows;
+}
+
+function getMemberLinhCanText(member) {
+  const classification = CLASSIFICATION_ROLES.find((roleName) =>
+    member.roles.cache.some((role) => role.name === roleName),
+  );
+  const elements = ELEMENT_ROLE_NAMES.filter((roleName) =>
+    member.roles.cache.some((role) => role.name === roleName),
+  ).map((roleName) => roleName.replace(' Linh Căn', ''));
+
+  if (!classification && elements.length === 0) {
+    return 'Chưa khai mở linh căn.';
+  }
+
+  if (!classification) {
+    return `${elements.join(' - ')} Linh Căn`;
+  }
+
+  if (elements.length === 0) {
+    return classification;
+  }
+
+  return `${classification}: ${elements.join(' - ')} Linh Căn`;
+}
+
+function getMemberCongPhapText(member) {
+  const selected = CONG_PHAP_OPTIONS.filter((option) =>
+    member.roles.cache.some((role) => role.name === option.roleName),
+  );
+
+  if (selected.length === 0) {
+    return 'Chưa chọn công pháp chủ tu.';
+  }
+
+  if (selected.length === 1) {
+    return selected[0].roleName;
+  }
+
+  return `${selected[0].roleName}\nCòn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nhất đạo tâm.`;
+}
+
+async function getRoleManageBlocker(guild, roles) {
+  const botMember = await guild.members.fetchMe();
+
+  if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
+    return 'Bot thiếu quyền Manage Roles nên chưa thể truyền thụ công pháp. Hãy cấp quyền Manage Roles rồi thử lại.';
+  }
+
+  const blockedRole = roles.find((role) => role?.managed || role?.position >= botMember.roles.highest.position);
+
+  if (blockedRole) {
+    return `Role **${blockedRole.name}** đang nằm ngang hoặc cao hơn role của bot. Hãy kéo role bot lên cao hơn các role công pháp rồi thử lại.`;
+  }
+
+  return null;
 }
 
 function calculateLinhCan(ngay, thang, nam) {

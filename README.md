@@ -1,6 +1,7 @@
 # Thiên Đạo Bot
 
 Bot Discord tiếng Việt dùng `discord.js` v14 cho tông môn tu tiên, hỗ trợ mở ticket riêng để kiểm tra linh căn và gán role tự động.
+Bot cũng có hệ thống chọn công pháp tu luyện bằng nút và hiển thị trong `/profile`.
 
 ## Cài đặt
 
@@ -58,6 +59,17 @@ Và các role linh căn:
 - Hỏa Linh Căn
 - Thổ Linh Căn
 
+Và các role công pháp không có quyền nguy hiểm, `mentionable: false`:
+
+- ⚛️ React Huyễn Diện Công
+- 🟦 TypeScript Chân Kinh
+- 🟨 JavaScript Tâm Pháp
+- 🟩 Node Hậu Đạo Quyết
+- 🗄️ SQL Địa Mạch Kinh
+- 🐘 PostgreSQL Địa Mạch Kinh
+- 🎨 Figma Huyễn Hình Thuật
+- ☁️ Docker Vân Hạ Pháp
+
 ## Đăng ký slash command
 
 ```bash
@@ -107,6 +119,27 @@ Phân loại:
 ```
 
 Bot xóa linh căn cũ, gán role phân loại mới, gán role hệ mới, trả embed màu vàng kim và hiện nút **Đóng Linh Căn Đài**. Bấm nút đóng sẽ xóa ticket sau 5 giây.
+
+### `/setup-congphap`
+
+Chỉ admin dùng. Bot gửi embed **Công Pháp Tu Luyện** kèm các nút chọn công pháp:
+
+- ⚛️ React Huyễn Diện Công
+- 🟦 TypeScript Chân Kinh
+- 🟨 JavaScript Tâm Pháp
+- 🟩 Node Hậu Đạo Quyết
+- 🗄️ SQL Địa Mạch Kinh
+- 🐘 PostgreSQL Địa Mạch Kinh
+- 🎨 Figma Huyễn Hình Thuật
+- ☁️ Docker Vân Hạ Pháp
+
+Khi người dùng bấm nút, bot xóa công pháp cũ rồi gán công pháp mới. Mỗi người chỉ giữ một công pháp chính.
+
+Nếu bot thiếu `Manage Roles` hoặc role bot nằm dưới role công pháp, bot sẽ báo lỗi để trưởng lão kéo role bot lên cao hơn.
+
+### `/profile`
+
+Hiển thị đạo hồ của thành viên, gồm linh căn và mục **Công pháp tu luyện**.
 
 ## Discloud
 

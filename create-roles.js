@@ -87,6 +87,20 @@ const MEMBER_PERMISSIONS = [
   PermissionFlagsBits.UseVAD,
 ];
 
+const CONG_PHAP_ROLES = [
+  { name: '⚛️ React Huyễn Diện Công', color: 0x61dafb },
+  { name: '🟦 TypeScript Chân Kinh', color: 0x3178c6 },
+  { name: '🟨 JavaScript Tâm Pháp', color: 0xf7df1e },
+  { name: '🟩 Node Hậu Đạo Quyết', color: 0x3c873a },
+  { name: '🗄️ SQL Địa Mạch Kinh', color: 0x64748b },
+  { name: '🐘 PostgreSQL Địa Mạch Kinh', color: 0x336791 },
+  { name: '🎨 Figma Huyễn Hình Thuật', color: 0xf24e1e },
+  { name: '☁️ Docker Vân Hạ Pháp', color: 0x2496ed },
+].map((role) => ({
+  ...role,
+  permissions: [],
+}));
+
 const roleConfigs = [
   { name: 'Đạo Tổ', color: 0xf8fafc, permissions: OWNER_PERMISSIONS },
   { name: 'Thái Thượng Trưởng Lão', color: 0xfef3c7, permissions: SECT_MASTER_PERMISSIONS },
@@ -110,6 +124,7 @@ const roleConfigs = [
   { name: 'Thủy Linh Căn', color: 0x38bdf8 },
   { name: 'Hỏa Linh Căn', color: 0xef4444 },
   { name: 'Thổ Linh Căn', color: 0xa16207 },
+  ...CONG_PHAP_ROLES,
 ];
 
 const client = new Client({
@@ -125,10 +140,11 @@ client.once('clientReady', async () => {
       const existed = roles.find((role) => role.name === config.name);
 
       if (existed) {
-        if (config.permissions) {
+        if (config.permissions !== undefined) {
           await existed.edit({
             colors: { primaryColor: config.color },
             permissions: config.permissions,
+            mentionable: false,
             reason: 'Thien Dao Bot cap nhat quyen role tong mon.',
           });
 
