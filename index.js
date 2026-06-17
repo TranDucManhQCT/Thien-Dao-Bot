@@ -26,6 +26,7 @@
   const DATA_DIR = path.join(__dirname, 'data');
   const USERS_FILE = path.join(DATA_DIR, 'users.json');
   const LUANDAO_FILE = path.join(DATA_DIR, 'luandao.json');
+  const TRIBULATIONS_FILE = path.join(DATA_DIR, 'tribulations.json');
   const OPEN_TICKET_BUTTON = 'thien_dao_open_linh_can_ticket';
   const CLOSE_TICKET_BUTTON = 'thien_dao_close_linh_can_ticket';
   const TICKET_TOPIC_PREFIX = 'linhcan-owner:';
@@ -39,6 +40,8 @@
   const REJECT_MASTER_BUTTON = 'thien_dao_reject_master';
   const CLOSE_REQUEST_TICKET_BUTTON = 'thien_dao_close_request_ticket';
   const CONG_PHAP_BUTTON_PREFIX = 'thien_dao_cong_phap:';
+  const TRIBULATION_SUPPORT_BUTTON_PREFIX = 'thien_dao_tribulation_support:';
+  const TRIBULATION_SNEAK_BUTTON_PREFIX = 'thien_dao_tribulation_sneak:';
 
   const ELEMENTS = ['Kim', 'Mộc', 'Thủy', 'Hỏa', 'Thổ'];
   const CAN_NAMES = ['Giáp', 'Ất', 'Bính', 'Đinh', 'Mậu', 'Kỷ', 'Canh', 'Tân', 'Nhâm', 'Quý'];
@@ -99,6 +102,9 @@
     'Linh Khí Bạo Phát',
     'Cơ Duyên Gia Thân',
     'Đạo Tâm Kiên Định',
+    'Đạo Cơ Rạn Nứt',
+    'Thiên Lôi Tôi Thể',
+    'Nghiệp Lực',
   ];
   const DISCIPLE_RANK_ROLES = [
     'Tán Tu',
@@ -135,6 +141,8 @@ const GITHUB_DAILY_EXP_CAP = 120;
 const LEGACY_USER_FIELDS = ['lastCultivateAt', 'lastBreakthroughAt', 'lastMessageExpAt', 'dailyMessageExp'];
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const CO_DUYEN_COOLDOWN_MS = ONE_DAY_MS;
+const DOT_PHA_FAIL_COOLDOWN_MS = 12 * 60 * 60 * 1000;
+const TRIBULATION_ACTION_COST = 50;
 const LUAN_DAO_STAFF_ROLE_NAMES = [
     'Đạo Tổ',
     'Tông Chủ',
@@ -191,6 +199,8 @@ const AUTO_DISCIPLE_THRESHOLDS = [
   client.once('clientReady', () => {
     ensureUsersFile();
     ensureLuanDaoFile();
+    ensureTribulationsFile();
+    scheduleActiveTribulations();
     console.log(`Thien Dao da nhap the: ${client.user.tag}`);
   });
 
@@ -244,6 +254,16 @@ const AUTO_DISCIPLE_THRESHOLDS = [
 
         if (interaction.commandName === 'tuvi') {
           await handleTuVi(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'dotpha') {
+          await handleDotPha(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'thienkiep') {
+          await handleThienKiep(interaction);
           return;
         }
 
@@ -326,6 +346,16 @@ const AUTO_DISCIPLE_THRESHOLDS = [
 
         if (interaction.customId.startsWith(CONG_PHAP_BUTTON_PREFIX)) {
           await handleSelectCongPhap(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(TRIBULATION_SUPPORT_BUTTON_PREFIX)) {
+          await handleTribulationAction(interaction, 'support');
+          return;
+        }
+
+        if (interaction.customId.startsWith(TRIBULATION_SNEAK_BUTTON_PREFIX)) {
+          await handleTribulationAction(interaction, 'sneak');
         }
       }
     } catch (error) {
@@ -838,6 +868,13 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     const member = await interaction.guild.members.fetch(interaction.user.id);
     const level = getCurrentTuViLevel(member, userData.tuViExp);
     const tuVi = getTuViByLevel(level);
+    const needed = getExpNeededForBreakthrough(userData.tuViExp, level);
+    const nextTuVi = level >= MAX_TU_VI_LEVEL ? null : getTuViByLevel(level + 1);
+    const breakthroughText = nextTuVi
+      ? needed > 0
+        ? `Còn thiếu ${needed} tu vi exp để đột phá lên ${nextTuVi.realm} ${nextTuVi.minor}.`
+        : `Đã đủ tu vi để dùng /dotpha lên ${nextTuVi.realm} ${nextTuVi.minor}.`
+      : 'Đã chạm đỉnh cảnh giới hiện tại của Thiên Đạo.';
 
     const embed = new EmbedBuilder()
       .setColor(GOLD)
@@ -846,6 +883,7 @@ const AUTO_DISCIPLE_THRESHOLDS = [
         { name: 'Tu vi hiện tại', value: tuVi.realm, inline: true },
         { name: 'Tiểu cảnh', value: tuVi.minor, inline: true },
         { name: 'Tu vi exp', value: `${userData.tuViExp}`, inline: true },
+        { name: 'Mốc đột phá', value: breakthroughText, inline: false },
         { name: 'GitHub', value: userData.githubUsername ?? 'Chưa liên kết', inline: true },
         { name: 'Xác minh GitHub', value: userData.githubVerified ? 'Đã xác minh' : 'Chưa xác minh', inline: true },
         { name: 'Thưởng commit gần nhất', value: userData.lastGithubRewardDate ?? 'Chưa có', inline: true },
@@ -853,6 +891,117 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       .setFooter({ text: 'Tu vi tăng qua hoạt động GitHub public commit.' });
 
     await interaction.reply({ embeds: [embed] });
+  }
+
+  async function handleDotPha(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Đột phá chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    const member = await interaction.guild.members.fetch(interaction.user.id);
+    const statusResult = await resolveTemporaryStatusEffects(interaction.guild, member, userData);
+
+    if (!statusResult.ok) {
+      await interaction.reply({ content: statusResult.message, flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (Date.now() < userData.dotPhaCooldownUntil) {
+      await interaction.reply({
+        content: `Đạo cơ còn rung chuyển, hãy chờ đến ${formatTimestamp(userData.dotPhaCooldownUntil)} rồi thử lại.`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const level = getCurrentTuViLevel(member, userData.tuViExp);
+    const currentTuVi = getTuViByLevel(level);
+    const nextTuVi = level >= MAX_TU_VI_LEVEL ? null : getTuViByLevel(level + 1);
+    const needed = getExpNeededForBreakthrough(userData.tuViExp, level);
+
+    if (!nextTuVi) {
+      await interaction.reply({ content: 'Ngươi đã chạm đỉnh cảnh giới hiện tại của Thiên Đạo.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (needed > 0) {
+      await interaction.reply({
+        content: `Còn thiếu ${needed} tu vi exp để đột phá lên ${nextTuVi.realm} ${nextTuVi.minor}.`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (currentTuVi.minor !== 'Đỉnh Phong') {
+      userData.tuViExp = Math.max(userData.tuViExp, expRequiredForLevel(level));
+      const syncResult = await syncTuViRoles(interaction.guild, member, userData.tuViExp);
+
+      if (!syncResult.ok) {
+        await interaction.reply({ content: syncResult.message, flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      saveUsers(users);
+
+      const embed = new EmbedBuilder()
+        .setColor(GOLD)
+        .setTitle('Đột Phá Tiểu Cảnh')
+        .setDescription(`${member} vận chuyển chu thiên, đạo cơ thông suốt.`)
+        .addFields(
+          { name: 'Trước', value: `${currentTuVi.realm} ${currentTuVi.minor}`, inline: true },
+          { name: 'Sau', value: `${nextTuVi.realm} ${nextTuVi.minor}`, inline: true },
+          { name: 'Tu vi exp', value: `${userData.tuViExp}`, inline: true },
+        );
+
+      await interaction.reply({ embeds: [embed] });
+      return;
+    }
+
+    await startTribulation(interaction, users, userData, member, currentTuVi, nextTuVi, level);
+  }
+
+  async function handleThienKiep(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Thiên kiếp chỉ xem được trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const tribulations = loadTribulations();
+    const now = Date.now();
+    const activeEvents = Object.values(tribulations.events)
+      .filter((event) => event.guildId === interaction.guild.id && event.status === 'active')
+      .sort((left, right) => left.endsAt - right.endsAt);
+
+    for (const event of activeEvents.filter((event) => now >= event.endsAt)) {
+      await finalizeTribulationEvent(interaction.client, event.id);
+    }
+
+    const refreshed = loadTribulations();
+    const stillActive = Object.values(refreshed.events)
+      .filter((event) => event.guildId === interaction.guild.id && event.status === 'active')
+      .sort((left, right) => left.endsAt - right.endsAt)
+      .slice(0, 10);
+
+    const lines = stillActive.length > 0
+      ? stillActive.map((event) =>
+        `#${event.id} - <@${event.ownerId}>: ${event.fromRealm} Đỉnh Phong -> ${event.toRealm} Sơ Kỳ, còn ${formatDuration(event.endsAt - Date.now())}`,
+      )
+      : ['Hiện chưa có đạo hữu nào đang độ kiếp.'];
+
+    const embed = new EmbedBuilder()
+      .setColor(GOLD)
+      .setTitle('Thiên Lôi Độ Kiếp')
+      .setDescription(lines.join('\n'));
+
+    if (stillActive.length > 0) {
+      await interaction.reply({ embeds: [embed] });
+      return;
+    }
+
+    await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
   }
 
   async function handleCongHien(interaction) {
@@ -1304,6 +1453,123 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       .setDescription(lines.join('\n'));
 
     await interaction.reply({ embeds: [embed] });
+  }
+
+  async function startTribulation(interaction, users, userData, member, currentTuVi, nextTuVi, level) {
+    const tribulations = loadTribulations();
+    const existing = Object.values(tribulations.events).find(
+      (event) => event.ownerId === interaction.user.id && event.status === 'active',
+    );
+
+    if (existing) {
+      await interaction.reply({
+        content: `Ngươi đang có thiên kiếp chưa xong: #${existing.id}. Dùng /thienkiep để xem.`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const id = createTribulationId(interaction.user.id);
+    const now = Date.now();
+    const durationMs = getTribulationDurationMs(currentTuVi.realmIndex);
+    const event = {
+      id,
+      guildId: interaction.guild.id,
+      channelId: interaction.channelId,
+      messageId: null,
+      ownerId: interaction.user.id,
+      status: 'active',
+      currentLevel: level,
+      targetLevel: level + 1,
+      fromRealm: currentTuVi.realm,
+      toRealm: nextTuVi.realm,
+      createdAt: now,
+      endsAt: now + durationMs,
+      strikeCount: getTribulationStrikeCount(currentTuVi.realmIndex),
+      supportPower: 0,
+      sneakPower: 0,
+      supporters: {},
+      sneakers: {},
+      chance: null,
+      roll: null,
+      result: null,
+    };
+
+    tribulations.events[id] = event;
+    saveTribulations(tribulations);
+
+    const embed = buildTribulationEmbed(event, member, userData);
+    const message = await interaction.reply({
+      embeds: [embed],
+      components: buildTribulationRows(event.id),
+      fetchReply: true,
+    });
+
+    event.messageId = message.id;
+    saveTribulations(tribulations);
+    scheduleTribulationFinalizer(event);
+  }
+
+  async function handleTribulationAction(interaction, actionType) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Thiên kiếp chỉ diễn ra trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const prefix = actionType === 'support'
+      ? TRIBULATION_SUPPORT_BUTTON_PREFIX
+      : TRIBULATION_SNEAK_BUTTON_PREFIX;
+    const eventId = interaction.customId.slice(prefix.length);
+    const tribulations = loadTribulations();
+    const event = tribulations.events[eventId];
+
+    if (!event || event.status !== 'active') {
+      await interaction.reply({ content: 'Thiên kiếp này đã tản hoặc không còn tồn tại.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (Date.now() >= event.endsAt) {
+      await finalizeTribulationEvent(interaction.client, event.id);
+      await interaction.reply({ content: 'Thiên kiếp vừa kết thúc, kết quả đã được Thiên Đạo phán định.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (actionType === 'sneak' && interaction.user.id === event.ownerId) {
+      await interaction.reply({ content: 'Không thể tự đánh lén chính mình.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const users = loadUsers();
+    const actorData = getOrCreateUser(users, interaction.user.id);
+
+    if (actorData.tuViExp < TRIBULATION_ACTION_COST) {
+      await interaction.reply({
+        content: `Cần ${TRIBULATION_ACTION_COST} tu vi exp để ${actionType === 'support' ? 'hộ kiếp' : 'đánh lén'}.`,
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    actorData.tuViExp -= TRIBULATION_ACTION_COST;
+
+    if (actionType === 'support') {
+      event.supportPower += TRIBULATION_ACTION_COST;
+      event.supporters[interaction.user.id] = (event.supporters[interaction.user.id] ?? 0) + TRIBULATION_ACTION_COST;
+    } else {
+      event.sneakPower += TRIBULATION_ACTION_COST;
+      event.sneakers[interaction.user.id] = (event.sneakers[interaction.user.id] ?? 0) + TRIBULATION_ACTION_COST;
+    }
+
+    saveUsers(users);
+    saveTribulations(tribulations);
+
+    await refreshTribulationMessage(interaction.client, event);
+    await interaction.reply({
+      content: actionType === 'support'
+        ? `Đã tiêu ${TRIBULATION_ACTION_COST} tu vi exp để hộ kiếp.`
+        : `Đã tiêu ${TRIBULATION_ACTION_COST} tu vi exp để đánh lén.`,
+      flags: MessageFlags.Ephemeral,
+    });
   }
 
   async function handleOpenTicket(interaction) {
@@ -2115,6 +2381,199 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     return `${selected[0].roleName}\nCòn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nhất đạo tâm.`;
   }
 
+  function getLinhCanQualityBonus(member) {
+    const bonusMap = {
+      'Hạ Phẩm Linh Căn': 0,
+      'Trung Phẩm Linh Căn': 5,
+      'Thượng Phẩm Linh Căn': 10,
+      'Cực Phẩm Linh Căn': 15,
+      'Thiên Phẩm Linh Căn': 20,
+    };
+    const roleName = QUALITY_ROLES.find((name) => member.roles.cache.some((role) => role.name === name));
+
+    return roleName ? bonusMap[roleName] : 0;
+  }
+
+  function getTribulationBaseChance(realmIndex) {
+    const chances = [90, 82, 75, 68, 60, 52, 45, 38, 32, 25, 20];
+
+    return chances[Math.max(0, Math.min(chances.length - 1, realmIndex))];
+  }
+
+  function getTribulationChance(event, member, userData) {
+    const tuVi = getTuViByLevel(event.currentLevel);
+    const hasCongPhap = CONG_PHAP_ROLE_NAMES.some((roleName) =>
+      member.roles.cache.some((role) => role.name === roleName),
+    );
+    let chance = getTribulationBaseChance(tuVi.realmIndex);
+
+    chance += getLinhCanQualityBonus(member);
+    chance += hasCongPhap ? 5 : 0;
+    chance += Math.floor((event.supportPower ?? 0) / 50);
+    chance -= Math.floor((event.sneakPower ?? 0) / 50);
+
+    if (isTemporaryStatusActive(userData, 'Tâm Ma Quấn Thân') || Date.now() < (userData.dotPhaPenaltyUntil ?? 0)) {
+      chance -= 10;
+    }
+
+    if (isTemporaryStatusActive(userData, 'Nghiệp Lực')) {
+      chance -= 15;
+    }
+
+    if (isTemporaryStatusActive(userData, 'Đạo Tâm Kiên Định') || Date.now() < (userData.dotPhaBonusUntil ?? 0)) {
+      chance += 10;
+    }
+
+    return Math.max(10, Math.min(90, chance));
+  }
+
+  function buildTribulationRows(eventId) {
+    return [
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`${TRIBULATION_SUPPORT_BUTTON_PREFIX}${eventId}`)
+          .setLabel('Hộ Kiếp')
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId(`${TRIBULATION_SNEAK_BUTTON_PREFIX}${eventId}`)
+          .setLabel('Đánh Lén')
+          .setStyle(ButtonStyle.Danger),
+      ),
+    ];
+  }
+
+  function buildTribulationEmbed(event, member, userData, finalText = null) {
+    const chance = member && userData ? getTribulationChance(event, member, userData) : event.chance;
+
+    return new EmbedBuilder()
+      .setColor(GOLD)
+      .setTitle(finalText ? 'Thiên Lôi Đã Dứt' : 'Thiên Lôi Độ Kiếp')
+      .setDescription(finalText ?? `${member} đang từ **${event.fromRealm} Đỉnh Phong** vượt lên **${event.toRealm} Sơ Kỳ**.`)
+      .addFields(
+        { name: 'Đợt thiên lôi', value: `${event.strikeCount}`, inline: true },
+        { name: 'Hộ kiếp', value: `${event.supportPower ?? 0}`, inline: true },
+        { name: 'Đánh lén', value: `${event.sneakPower ?? 0}`, inline: true },
+        { name: 'Tỉ lệ hiện tại', value: `${chance ?? '?'}%`, inline: true },
+        { name: 'Kết thúc', value: formatTimestamp(event.endsAt), inline: true },
+      )
+      .setFooter({ text: `Mỗi lần Hộ Kiếp/Đánh Lén tiêu ${TRIBULATION_ACTION_COST} tu vi exp.` });
+  }
+
+  async function refreshTribulationMessage(clientInstance, event) {
+    const channel = await clientInstance.channels.fetch(event.channelId).catch(() => null);
+
+    if (!channel?.isTextBased()) {
+      return;
+    }
+
+    const message = await channel.messages.fetch(event.messageId).catch(() => null);
+
+    if (!message) {
+      return;
+    }
+
+    const guild = await clientInstance.guilds.fetch(event.guildId).catch(() => null);
+    const member = guild ? await guild.members.fetch(event.ownerId).catch(() => null) : null;
+    const users = loadUsers();
+    const userData = users[event.ownerId] ? getOrCreateUser(users, event.ownerId) : null;
+
+    await message.edit({
+      embeds: [buildTribulationEmbed(event, member, userData)],
+      components: buildTribulationRows(event.id),
+    });
+  }
+
+  async function finalizeTribulationEvent(clientInstance, eventId) {
+    const tribulations = loadTribulations();
+    const event = tribulations.events[eventId];
+
+    if (!event || event.status !== 'active' || Date.now() < event.endsAt) {
+      return;
+    }
+
+    const guild = await clientInstance.guilds.fetch(event.guildId).catch(() => null);
+    const member = guild ? await guild.members.fetch(event.ownerId).catch(() => null) : null;
+
+    if (!guild || !member) {
+      event.status = 'expired';
+      event.result = 'Không tìm thấy người độ kiếp.';
+      saveTribulations(tribulations);
+      return;
+    }
+
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, event.ownerId);
+    const chance = getTribulationChance(event, member, userData);
+    const roll = Math.floor(Math.random() * 100) + 1;
+    const success = roll <= chance;
+    let finalText;
+
+    event.chance = chance;
+    event.roll = roll;
+    event.completedAt = Date.now();
+
+    if (success) {
+      userData.tuViExp = Math.max(userData.tuViExp, expRequiredForLevel(event.currentLevel));
+      const greatSuccess = roll <= Math.max(3, Math.floor(chance * 0.08));
+
+      if (greatSuccess) {
+        userData.tuViExp += 120;
+        setTemporaryStatus(userData, 'Thiên Lôi Tôi Thể', ONE_DAY_MS);
+        finalText = `<@${event.ownerId}> độ kiếp đại thành công, thiên lôi tôi thể, bước vào **${event.toRealm} Sơ Kỳ**.`;
+      } else {
+        finalText = `<@${event.ownerId}> vượt qua thiên lôi, bước vào **${event.toRealm} Sơ Kỳ**.`;
+      }
+
+      await syncTuViRoles(guild, member, userData.tuViExp);
+      await syncTemporaryStatusRole(guild, member, userData);
+
+      for (const sneakerId of Object.keys(event.sneakers ?? {})) {
+        const sneakerData = getOrCreateUser(users, sneakerId);
+        const sneakerMember = await guild.members.fetch(sneakerId).catch(() => null);
+
+        sneakerData.tuViExp = Math.max(0, sneakerData.tuViExp - 25);
+        setTemporaryStatus(sneakerData, 'Nghiệp Lực', ONE_DAY_MS);
+
+        if (sneakerMember) {
+          await syncTemporaryStatusRole(guild, sneakerMember, sneakerData);
+        }
+      }
+
+      event.status = greatSuccess ? 'great_success' : 'success';
+    } else {
+      const loss = Math.max(50, Math.floor(userData.tuViExp * 0.15));
+      const minimumExp = expMinimumForLevel(event.currentLevel);
+
+      userData.tuViExp = Math.max(minimumExp, userData.tuViExp - loss);
+      userData.dotPhaCooldownUntil = Date.now() + DOT_PHA_FAIL_COOLDOWN_MS;
+      setTemporaryStatus(
+        userData,
+        Math.random() < 0.5 ? 'Đạo Cơ Rạn Nứt' : 'Tâm Ma Quấn Thân',
+        DOT_PHA_FAIL_COOLDOWN_MS,
+        { dotPhaPenalty: true },
+      );
+      await syncTemporaryStatusRole(guild, member, userData);
+      event.status = 'failed';
+      finalText = `<@${event.ownerId}> độ kiếp thất bại, đạo cơ tổn thương nhưng cảnh giới không tụt.`;
+    }
+
+    event.result = finalText;
+    saveUsers(users);
+    saveTribulations(tribulations);
+
+    const channel = await clientInstance.channels.fetch(event.channelId).catch(() => null);
+    const message = channel?.isTextBased()
+      ? await channel.messages.fetch(event.messageId).catch(() => null)
+      : null;
+
+    if (message) {
+      await message.edit({
+        embeds: [buildTribulationEmbed(event, member, userData, `${finalText}\n\nTỉ lệ: **${chance}%** | Thiên số: **${roll}/100**`)],
+        components: [],
+      });
+    }
+  }
+
   async function getRoleManageBlocker(guild, roles) {
     const botMember = await guild.members.fetchMe();
 
@@ -2422,6 +2881,42 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     fs.writeFileSync(LUANDAO_FILE, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
   }
 
+  function ensureTribulationsFile() {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+
+    if (!fs.existsSync(TRIBULATIONS_FILE)) {
+      fs.writeFileSync(TRIBULATIONS_FILE, JSON.stringify({ events: {} }, null, 2) + '\n', 'utf8');
+    }
+  }
+
+  function loadTribulations() {
+    ensureTribulationsFile();
+
+    try {
+      const raw = fs.readFileSync(TRIBULATIONS_FILE, 'utf8');
+      const data = raw.trim() ? JSON.parse(raw) : {};
+
+      return {
+        events: data.events && typeof data.events === 'object' ? data.events : {},
+      };
+    } catch (error) {
+      console.error('Khong the doc data/tribulations.json:', error);
+      return { events: {} };
+    }
+  }
+
+  function saveTribulations(data) {
+    ensureTribulationsFile();
+
+    fs.writeFileSync(
+      TRIBULATIONS_FILE,
+      `${JSON.stringify({ events: data.events && typeof data.events === 'object' ? data.events : {} }, null, 2)}\n`,
+      'utf8',
+    );
+  }
+
   function getOrCreateUser(users, userId) {
     if (!users[userId]) {
       users[userId] = createDefaultUserData();
@@ -2482,6 +2977,7 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       tuViMultiplierValue: 1,
       dotPhaPenaltyUntil: 0,
       dotPhaBonusUntil: 0,
+      dotPhaCooldownUntil: 0,
       beQuanStartedAt: 0,
       beQuanRewardExp: 0,
       beQuanRewardClaimed: true,
@@ -2514,6 +3010,77 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       realm: TU_VI_REALMS[realmIndex],
       minor: MINOR_REALMS[minorIndex],
     };
+  }
+
+  function expMinimumForLevel(level) {
+    return level <= 0 ? 0 : expRequiredForLevel(level - 1);
+  }
+
+  function getExpNeededForBreakthrough(tuViExp, level) {
+    if (level >= MAX_TU_VI_LEVEL) {
+      return 0;
+    }
+
+    return Math.max(0, expRequiredForLevel(level) - tuViExp);
+  }
+
+  function formatTimestamp(timestamp) {
+    return new Date(timestamp).toLocaleString('vi-VN', {
+      timeZone: 'Asia/Ho_Chi_Minh',
+      hour: '2-digit',
+      minute: '2-digit',
+      day: '2-digit',
+      month: '2-digit',
+    });
+  }
+
+  function formatDuration(ms) {
+    const safeMs = Math.max(0, ms);
+    const minutes = Math.floor(safeMs / 60000);
+    const seconds = Math.floor((safeMs % 60000) / 1000);
+
+    return `${minutes} phút ${seconds} giây`;
+  }
+
+  function createTribulationId(userId) {
+    return `${Date.now().toString(36)}-${userId.slice(-4)}`;
+  }
+
+  function getTribulationDurationMs(realmIndex) {
+    return (10 + Math.max(0, realmIndex) * 2) * 60 * 1000;
+  }
+
+  function getTribulationStrikeCount(realmIndex) {
+    return 5 + Math.floor(Math.max(0, realmIndex) / 2);
+  }
+
+  function scheduleTribulationFinalizer(event) {
+    const delay = Math.max(1000, event.endsAt - Date.now());
+
+    setTimeout(() => {
+      finalizeTribulationEvent(client, event.id).catch((error) => {
+        console.error('Loi phan dinh thien kiep:', error);
+      });
+    }, delay);
+  }
+
+  function scheduleActiveTribulations() {
+    const tribulations = loadTribulations();
+
+    for (const event of Object.values(tribulations.events)) {
+      if (event.status !== 'active') {
+        continue;
+      }
+
+      if (Date.now() >= event.endsAt) {
+        finalizeTribulationEvent(client, event.id).catch((error) => {
+          console.error('Loi phan dinh thien kiep khi khoi dong:', error);
+        });
+        continue;
+      }
+
+      scheduleTribulationFinalizer(event);
+    }
   }
 
   function getCurrentTuViLevel(member, fallbackExp = 0) {

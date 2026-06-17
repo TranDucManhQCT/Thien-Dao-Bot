@@ -163,6 +163,9 @@ const TEMPORARY_STATUS_ROLES = [
   { name: 'Linh Khí Bạo Phát', color: 0x38bdf8 },
   { name: 'Cơ Duyên Gia Thân', color: 0xfacc15 },
   { name: 'Đạo Tâm Kiên Định', color: 0x22c55e },
+  { name: 'Đạo Cơ Rạn Nứt', color: 0x991b1b },
+  { name: 'Thiên Lôi Tôi Thể', color: 0xa78bfa },
+  { name: 'Nghiệp Lực', color: 0x111827 },
 ].map((role) => ({
   ...role,
   permissions: [],

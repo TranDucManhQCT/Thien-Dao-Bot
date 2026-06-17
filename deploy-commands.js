@@ -89,6 +89,14 @@ const commands = [
     .setDescription('Xem cảnh giới và tu vi exp từ GitHub.')
     .setDMPermission(false),
   new SlashCommandBuilder()
+    .setName('dotpha')
+    .setDescription('Đột phá tiểu cảnh hoặc mở Thiên Lôi Độ Kiếp khi vượt đại cảnh.')
+    .setDMPermission(false),
+  new SlashCommandBuilder()
+    .setName('thienkiep')
+    .setDescription('Xem các đạo hữu đang Thiên Lôi Độ Kiếp.')
+    .setDMPermission(false),
+  new SlashCommandBuilder()
     .setName('coduyen')
     .setDescription('Cầu một lần cơ duyên trong ngày.')
     .setDMPermission(false),

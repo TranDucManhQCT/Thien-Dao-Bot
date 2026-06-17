@@ -108,6 +108,9 @@ Và các role trạng thái tạm thời không có quyền nguy hiểm, `mentio
 - Linh Khí Bạo Phát
 - Cơ Duyên Gia Thân
 - Đạo Tâm Kiên Định
+- Đạo Cơ Rạn Nứt
+- Thiên Lôi Tôi Thể
+- Nghiệp Lực
 
 Và các role công pháp không có quyền nguy hiểm, `mentionable: false`:
 
@@ -337,7 +340,19 @@ Nếu chưa có commit công khai hôm nay, bot báo chưa tìm thấy commit.
 
 ### `/tuvi`
 
-Hiển thị tu vi hiện tại, tiểu cảnh, tổng `tuViExp`, GitHub đã liên kết, trạng thái xác minh và lần nhận thưởng commit gần nhất.
+Hiển thị tu vi hiện tại, tiểu cảnh, tổng `tuViExp`, mốc đột phá kế tiếp, GitHub đã liên kết, trạng thái xác minh và lần nhận thưởng commit gần nhất. Nếu chưa đủ đột phá, bot báo còn thiếu bao nhiêu `tuViExp`; nếu đã đủ, bot nhắc dùng `/dotpha`.
+
+### `/dotpha`
+
+Dùng cho mọi tiểu cảnh. `Sơ Kỳ -> Trung Kỳ`, `Trung Kỳ -> Hậu Kỳ`, `Hậu Kỳ -> Đỉnh Phong` được xử lý nhanh khi đủ `tuViExp`.
+
+Khi đang ở `Đỉnh Phong` và đủ `tuViExp`, bot mở event công khai `Thiên Lôi Độ Kiếp` để vượt đại cảnh giới. Event có nút `Hộ Kiếp` và `Đánh Lén`, mỗi lần bấm tiêu `50 tuViExp`.
+
+Tỉ lệ độ kiếp tính theo cảnh giới, phẩm chất linh căn, công pháp, hộ kiếp, đánh lén và trạng thái đặc biệt. Thành công tăng lên đại cảnh kế tiếp ở `Sơ Kỳ`; thất bại mất một phần tu vi nhưng không tụt cảnh giới, nhận trạng thái bất lợi và cooldown 12 giờ.
+
+### `/thienkiep`
+
+Hiển thị các event `Thiên Lôi Độ Kiếp` đang diễn ra trong tông môn.
 
 ### Chat server và điểm cống hiến
 
@@ -409,6 +424,9 @@ Các trạng thái đặc biệt có role tạm thời:
 - `Linh Khí Bạo Phát`: x2 tu vi nhận được trong ngày.
 - `Cơ Duyên Gia Thân`: tăng tu vi nhận được trong ngày.
 - `Đạo Tâm Kiên Định`: tăng tỉ lệ đột phá khi hệ thống đột phá được mở.
+- `Đạo Cơ Rạn Nứt`: trạng thái bất lợi sau khi độ kiếp thất bại.
+- `Thiên Lôi Tôi Thể`: trạng thái tốt khi độ kiếp đại thành công.
+- `Nghiệp Lực`: phản phệ cho người đánh lén khi người độ kiếp thành công.
 
 `/profile` hiển thị trạng thái còn hạn và bot tự gỡ role trạng thái khi hết hạn.
 
