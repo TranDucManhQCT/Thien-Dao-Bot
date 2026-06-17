@@ -1,10 +1,19 @@
 {
   "662859145921298435": {
+    "githubUsername": "TranDucManhQCT",
+    "githubVerifyCode": "THIENDAO-662859145921298435",
+    "githubVerified": true,
+    "lastGithubCheckAt": 0,
+    "lastGithubRewardDate": null,
+    "githubDailyExp": 0,
     "tuViExp": 0,
+    "congHienExp": 0,
+    "lastMessageCongHienAt": 0,
+    "dailyMessageCongHien": 0,
+    "dailyMessageDate": "2026-06-17",
     "lastCultivateAt": 0,
     "lastBreakthroughAt": 0,
     "lastMessageExpAt": 0,
-    "dailyMessageExp": 0,
-    "dailyMessageDate": "2026-06-17"
+    "dailyMessageExp": 0
   }
 }
