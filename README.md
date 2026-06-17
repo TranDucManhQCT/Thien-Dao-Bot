@@ -29,6 +29,7 @@ Không hardcode token vào source code.
 - Use Slash Commands
 
 Bot phải có role cao hơn các role bot cần tạo, cập nhật, gán hoặc xóa.
+Để tính cống hiến từ chat, hãy bật **Message Content Intent** trong Discord Developer Portal cho bot.
 
 ## Tạo role
 
@@ -66,6 +67,27 @@ Và các role phẩm chất linh căn không có quyền nguy hiểm, `mentionab
 - Thượng Phẩm Linh Căn `#FFD166`
 - Cực Phẩm Linh Căn `#F77F00`
 - Thiên Phẩm Linh Căn `#C77DFF`
+
+Và các role tu vi không có quyền nguy hiểm, `mentionable: false`:
+
+- Phàm Nhân `#808080`
+- Luyện Khí `#8ECAE6`
+- Trúc Cơ `#52B788`
+- Kim Đan `#FFD166`
+- Nguyên Anh `#F4A261`
+- Hóa Thần `#9D4EDD`
+- Luyện Hư `#4361EE`
+- Hợp Thể `#C77DFF`
+- Đại Thừa `#E76F51`
+- Độ Kiếp `#CAF0F8`
+- Phi Thăng `#FFF8DC`
+
+Và các role tiểu cảnh không có quyền nguy hiểm, `mentionable: false`:
+
+- Sơ Kỳ `#ADB5BD`
+- Trung Kỳ `#74C69D`
+- Hậu Kỳ `#E9C46A`
+- Đỉnh Phong `#F3722C`
 
 Và các role cấp đệ tử không có quyền nguy hiểm, `mentionable: false`:
 
@@ -107,6 +129,30 @@ Nếu có `GUILD_ID`, command được đăng ký trực tiếp vào server đó
 npm start
 ```
 
+## Dữ liệu người dùng
+
+Bot lưu dữ liệu bằng file `data/users.json`. Nếu thư mục hoặc file chưa tồn tại, bot sẽ tự tạo và không ghi đè dữ liệu user cũ.
+
+Dữ liệu mỗi thành viên có dạng:
+
+```js
+{
+  "userId": {
+    "githubUsername": null,
+    "githubVerifyCode": null,
+    "githubVerified": false,
+    "lastGithubCheckAt": 0,
+    "lastGithubRewardDate": null,
+    "githubDailyExp": 0,
+    "tuViExp": 0,
+    "congHienExp": 0,
+    "lastMessageCongHienAt": 0,
+    "dailyMessageCongHien": 0,
+    "dailyMessageDate": "YYYY-MM-DD"
+  }
+}
+```
+
 ## Lệnh
 
 ### `/setup-linhcan`
@@ -146,11 +192,13 @@ Phân loại:
 0-34   -> Tạp Linh Căn  = 5 hệ
 35-59  -> Tứ Linh Căn   = 4 hệ
 60-79  -> Tam Linh Căn  = 3 hệ
-85-94  -> Nhị Linh Căn  = 2 hệ
+80-94  -> Nhị Linh Căn  = 2 hệ
 95-99  -> Nhất Linh Căn = 1 hệ
 ```
 
 Bot lấy các hệ có điểm cao nhất theo số hệ tương ứng. Sau khi kiểm tra, bot gán role phân loại linh căn, gán role hệ ngũ hành, và gán `Tán Tu` nếu người dùng chưa có cấp đệ tử.
+
+Nếu người dùng chưa có role tu vi, bot gán `Phàm Nhân` và `Sơ Kỳ`.
 
 Phẩm chất linh căn được tính riêng bằng độ thuần của điểm ngũ hành, không dùng công thức `% 100`:
 
@@ -214,18 +262,124 @@ Trong ticket có nút:
 
 Khi chấp nhận, bot gán `Thân Truyền Đệ Tử` và không xóa role Ngoại Môn, Nội Môn hoặc Chân Truyền. Bot không tự động gán Nội Môn Đệ Tử trở lên; các cấp đó để quản trị duyệt thủ công.
 
+### `/setup-congphap`
+
+Chỉ admin dùng. Bot gửi embed **Công Pháp Tu Luyện** kèm nút chọn công pháp.
+
+Khi thành viên bấm nút, bot xóa công pháp cũ rồi gán công pháp mới. Mỗi người chỉ giữ một công pháp chính và `/profile` sẽ hiển thị công pháp đang tu luyện.
+
+### `/linkgithub username`
+
+Lưu GitHub username và tạo mã xác minh:
+
+```txt
+THIENDAO-<discordUserId>
+```
+
+Đạo hữu thêm mã này vào GitHub bio, sau đó dùng `/verifygithub`.
+
+### `/verifygithub`
+
+Bot gọi GitHub API public profile:
+
+```txt
+https://api.github.com/users/<username>
+```
+
+Nếu bio có mã xác minh, bot lưu trạng thái `githubVerified = true`.
+
+Nếu GitHub API lỗi hoặc rate limit, bot báo:
+
+```txt
+Thiên Đạo chưa thể quan sát GitHub lúc này, hãy thử lại sau.
+```
+
+### `/github`
+
+Hiển thị GitHub đã liên kết, trạng thái xác minh, lần nhận thưởng commit gần nhất và điểm GitHub hôm nay.
+
+### `/checkcommit`
+
+Chỉ dùng khi GitHub đã xác minh. Bot kiểm tra public GitHub events:
+
+```txt
+https://api.github.com/users/<username>/events/public
+```
+
+Bot chỉ tính `PushEvent` trong ngày hiện tại và chỉ cho nhận thưởng một lần mỗi ngày.
+
+Công thức điểm tu vi:
+
+```js
+base = 40;
+commitBonus = Math.min(commitCount * 10, 60);
+gain = base + commitBonus;
+dailyCap = 120;
+```
+
+Nếu hôm nay có commit công khai, bot cộng điểm vào `tuViExp`, đồng bộ role tu vi bằng `syncTuViRoles(member)` và trả embed gồm GitHub username, số commit hôm nay, điểm nhận được, tổng tu vi exp và tu vi hiện tại.
+
+Nếu chưa có commit công khai hôm nay, bot báo chưa tìm thấy commit.
+
+### `/tuvi`
+
+Hiển thị tu vi hiện tại, tiểu cảnh, tổng `tuViExp`, GitHub đã liên kết, trạng thái xác minh và lần nhận thưởng commit gần nhất.
+
+### Chat server và điểm cống hiến
+
+Chat trong server không tăng tu vi nữa. Khi thành viên gửi tin nhắn hợp lệ, bot cộng `+1` điểm cống hiến.
+
+Điều kiện tính cống hiến:
+
+- Bỏ qua bot.
+- Bỏ qua tin nhắn dưới 5 ký tự.
+- Cooldown 90 giây/người.
+- Tối đa 50 cống hiến/ngày.
+
+Bot không cộng điểm trong kênh có tên chứa:
+
+- meme
+- trà-đàm
+- du-hí
+- ẩn-danh
+- góp-ý
+
+Sau khi cộng cống hiến, bot lưu `data/users.json` và tự gọi `syncDiscipleRole(member)`.
+
+### Thăng cấp bằng cống hiến
+
+Bot tự xóa cấp đệ tử cũ rồi gán cấp mới tương ứng với điểm cống hiến:
+
+```txt
+Tán Tu                0
+Ký Danh Đệ Tử         50
+Tạp Dịch Đệ Tử        150
+Ngoại Môn Đệ Tử       400
+Nội Môn Đệ Tử         1000
+Chân Truyền Đệ Tử     2500
+```
+
+Bot không tự gán `Thân Truyền Đệ Tử`, `Thánh Tử`, `Thánh Nữ`; các role này để quản trị hoặc hệ thống bái sư xét riêng.
+
+### `/conghien`
+
+Hiển thị điểm cống hiến hiện tại, cấp đệ tử hiện tại, điểm cần để lên cấp tiếp theo và cống hiến hôm nay.
+
 ### `/profile`
 
 Hiển thị đạo hồ của thành viên:
 
 - Đạo danh
+- GitHub
+- Trạng thái xác minh GitHub
+- Tu vi exp
+- Tu vi hiện tại
+- Điểm cống hiến
 - Cấp đệ tử
 - Linh căn
 - Hệ ngũ hành
 - Phẩm chất linh căn
 - Công pháp tu luyện
-- Tu vi
-- Tiểu cảnh
 
 ## Discloud
 

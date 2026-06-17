@@ -130,6 +130,33 @@ const QUALITY_ROLES = [
   permissions: [],
 }));
 
+const TU_VI_ROLES = [
+  { name: 'Phàm Nhân', color: 0x808080 },
+  { name: 'Luyện Khí', color: 0x8ecae6 },
+  { name: 'Trúc Cơ', color: 0x52b788 },
+  { name: 'Kim Đan', color: 0xffd166 },
+  { name: 'Nguyên Anh', color: 0xf4a261 },
+  { name: 'Hóa Thần', color: 0x9d4edd },
+  { name: 'Luyện Hư', color: 0x4361ee },
+  { name: 'Hợp Thể', color: 0xc77dff },
+  { name: 'Đại Thừa', color: 0xe76f51 },
+  { name: 'Độ Kiếp', color: 0xcaf0f8 },
+  { name: 'Phi Thăng', color: 0xfff8dc },
+].map((role) => ({
+  ...role,
+  permissions: [],
+}));
+
+const MINOR_REALM_ROLES = [
+  { name: 'Sơ Kỳ', color: 0xadb5bd },
+  { name: 'Trung Kỳ', color: 0x74c69d },
+  { name: 'Hậu Kỳ', color: 0xe9c46a },
+  { name: 'Đỉnh Phong', color: 0xf3722c },
+].map((role) => ({
+  ...role,
+  permissions: [],
+}));
+
 const roleConfigs = [
   { name: 'Đạo Tổ', color: 0xf8fafc, permissions: OWNER_PERMISSIONS },
   { name: 'Thái Thượng Trưởng Lão', color: 0xfef3c7, permissions: SECT_MASTER_PERMISSIONS },
@@ -155,6 +182,8 @@ const roleConfigs = [
   { name: 'Hỏa Linh Căn', color: 0xef4444, permissions: [] },
   { name: 'Thổ Linh Căn', color: 0xa16207, permissions: [] },
   ...QUALITY_ROLES,
+  ...TU_VI_ROLES,
+  ...MINOR_REALM_ROLES,
   ...CONG_PHAP_ROLES,
 ];
 

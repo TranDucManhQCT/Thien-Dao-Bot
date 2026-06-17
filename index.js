@@ -1,3 +1,6 @@
+const fs = require('fs');
+const path = require('path');
+
 require('dotenv').config();
 
 const {
@@ -20,6 +23,8 @@ if (!DISCORD_TOKEN) {
 }
 
 const GOLD = 0xffd700;
+const DATA_DIR = path.join(__dirname, 'data');
+const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const OPEN_TICKET_BUTTON = 'thien_dao_open_linh_can_ticket';
 const CLOSE_TICKET_BUTTON = 'thien_dao_close_linh_can_ticket';
 const TICKET_TOPIC_PREFIX = 'linhcan-owner:';
@@ -67,6 +72,34 @@ const DISCIPLE_RANK_ROLES = [
   'Thánh Nữ',
 ];
 const BAI_SU_ELIGIBLE_ROLES = ['Ngoại Môn Đệ Tử', 'Nội Môn Đệ Tử', 'Chân Truyền Đệ Tử'];
+const TU_VI_REALMS = [
+  'Phàm Nhân',
+  'Luyện Khí',
+  'Trúc Cơ',
+  'Kim Đan',
+  'Nguyên Anh',
+  'Hóa Thần',
+  'Luyện Hư',
+  'Hợp Thể',
+  'Đại Thừa',
+  'Độ Kiếp',
+  'Phi Thăng',
+];
+const MINOR_REALMS = ['Sơ Kỳ', 'Trung Kỳ', 'Hậu Kỳ', 'Đỉnh Phong'];
+const MAX_TU_VI_LEVEL = TU_VI_REALMS.length * MINOR_REALMS.length - 1;
+const MESSAGE_CONG_HIEN_COOLDOWN_MS = 90 * 1000;
+const DAILY_MESSAGE_CONG_HIEN_LIMIT = 50;
+const MESSAGE_CONG_HIEN_BLOCKED_CHANNEL_PARTS = ['meme', 'trà-đàm', 'du-hí', 'ẩn-danh', 'góp-ý'];
+const GITHUB_VERIFY_CODE_PREFIX = 'THIENDAO';
+const GITHUB_DAILY_EXP_CAP = 120;
+const AUTO_DISCIPLE_THRESHOLDS = [
+  { roleName: 'Tán Tu', exp: 0 },
+  { roleName: 'Ký Danh Đệ Tử', exp: 50 },
+  { roleName: 'Tạp Dịch Đệ Tử', exp: 150 },
+  { roleName: 'Ngoại Môn Đệ Tử', exp: 400 },
+  { roleName: 'Nội Môn Đệ Tử', exp: 1000 },
+  { roleName: 'Chân Truyền Đệ Tử', exp: 2500 },
+];
 const CONG_PHAP_OPTIONS = [
   { key: 'frontend', emoji: '💻', name: 'frontend-huyễn-diện', roleName: '💻 frontend-huyễn-diện' },
   { key: 'backend', emoji: '⚙️', name: 'backend-hậu-đạo', roleName: '⚙️ backend-hậu-đạo' },
@@ -94,10 +127,16 @@ const LEGACY_CONG_PHAP_ROLE_NAMES = [
 const ALL_CONG_PHAP_ROLE_NAMES = [...CONG_PHAP_ROLE_NAMES, ...LEGACY_CONG_PHAP_ROLE_NAMES];
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+  ],
 });
 
 client.once('clientReady', () => {
+  ensureUsersFile();
   console.log(`Thien Dao da nhap the: ${client.user.tag}`);
 });
 
@@ -121,6 +160,36 @@ client.on('interactionCreate', async (interaction) => {
 
       if (interaction.commandName === 'profile') {
         await handleProfile(interaction);
+        return;
+      }
+
+      if (interaction.commandName === 'linkgithub') {
+        await handleLinkGithub(interaction);
+        return;
+      }
+
+      if (interaction.commandName === 'verifygithub') {
+        await handleVerifyGithub(interaction);
+        return;
+      }
+
+      if (interaction.commandName === 'github') {
+        await handleGithub(interaction);
+        return;
+      }
+
+      if (interaction.commandName === 'checkcommit') {
+        await handleCheckCommit(interaction);
+        return;
+      }
+
+      if (interaction.commandName === 'conghien') {
+        await handleCongHien(interaction);
+        return;
+      }
+
+      if (interaction.commandName === 'tuvi') {
+        await handleTuVi(interaction);
         return;
       }
     }
@@ -189,6 +258,14 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     await interaction.reply(payload).catch(() => null);
+  }
+});
+
+client.on('messageCreate', async (message) => {
+  try {
+    await handleMessageCultivation(message);
+  } catch (error) {
+    console.error('Loi cong diem cong hien khi chat:', error);
   }
 });
 
@@ -300,6 +377,23 @@ async function handleSelectCongPhap(interaction) {
     throw error;
   }
 
+  const users = loadUsers();
+  const userData = getOrCreateUser(users, interaction.user.id);
+  saveUsers(users);
+
+  const refreshedMember = await interaction.guild.members.fetch(interaction.user.id);
+  const hasTuViRole = refreshedMember.roles.cache.some((role) => TU_VI_REALMS.includes(role.name));
+  const hasMinorRole = refreshedMember.roles.cache.some((role) => MINOR_REALMS.includes(role.name));
+
+  if (!hasTuViRole || !hasMinorRole) {
+    const syncResult = await syncTuViRoles(interaction.guild, refreshedMember, userData.tuViExp);
+
+    if (!syncResult.ok) {
+      await interaction.editReply(syncResult.message);
+      return;
+    }
+  }
+
   const embed = new EmbedBuilder()
     .setColor(GOLD)
     .setTitle('Pháp Môn Đã Định')
@@ -329,11 +423,15 @@ async function handleProfile(interaction) {
 
   const targetUser = interaction.options.getUser('thanhvien') ?? interaction.user;
   const member = await interaction.guild.members.fetch(targetUser.id);
-  const discipleRank = getMemberDiscipleRank(member) ?? 'Chưa có cấp đệ tử';
+  const users = loadUsers();
+  const userData = users[targetUser.id] ? getOrCreateUser(users, targetUser.id) : null;
+  const discipleRank = getMemberDiscipleRank(member) ?? (userData ? getDiscipleRankFromContribution(userData.congHienExp).roleName : 'Chưa có cấp đệ tử');
   const linhCanText = getMemberLinhCanClassificationText(member);
   const elementText = getMemberElementText(member);
   const qualityText = getMemberQualityText(member);
   const congPhapText = getMemberCongPhapText(member);
+  const tuViLevel = userData ? getCurrentTuViLevel(member, userData.tuViExp) : 0;
+  const tuVi = userData ? getTuViByLevel(tuViLevel) : null;
 
   const embed = new EmbedBuilder()
     .setColor(GOLD)
@@ -341,15 +439,260 @@ async function handleProfile(interaction) {
     .setThumbnail(targetUser.displayAvatarURL({ size: 256 }))
     .addFields(
       { name: 'Đạo danh', value: `${member}`, inline: true },
+      { name: 'GitHub', value: userData?.githubUsername ?? 'Chưa liên kết', inline: true },
+      { name: 'Trạng thái xác minh GitHub', value: userData?.githubVerified ? 'Đã xác minh' : 'Chưa xác minh', inline: true },
+      { name: 'Tu vi exp', value: userData ? `${userData.tuViExp}` : '0', inline: true },
+      { name: 'Tu vi hiện tại', value: tuVi ? `${tuVi.realm} ${tuVi.minor}` : 'Chưa nhập đạo', inline: true },
+      { name: 'Điểm cống hiến', value: userData ? `${userData.congHienExp}` : '0', inline: true },
       { name: 'Cấp đệ tử', value: discipleRank, inline: true },
       { name: 'Linh căn', value: linhCanText, inline: false },
       { name: 'Hệ ngũ hành', value: elementText, inline: false },
       { name: 'Phẩm chất linh căn', value: qualityText, inline: false },
       { name: 'Công pháp tu luyện', value: congPhapText, inline: false },
-      { name: 'Tu vi', value: 'Chưa xác lập', inline: true },
-      { name: 'Tiểu cảnh', value: 'Chưa xác lập', inline: true },
     )
     .setFooter({ text: 'Thiên Đạo ghi nhận đạo tâm và căn cơ của môn nhân.' });
+
+  await interaction.reply({ embeds: [embed] });
+}
+
+async function handleLinkGithub(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: 'Lệnh này chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  const username = interaction.options.getString('username', true).trim();
+  const users = loadUsers();
+  const userData = getOrCreateUser(users, interaction.user.id);
+  const verifyCode = `${GITHUB_VERIFY_CODE_PREFIX}-${interaction.user.id}`;
+
+  userData.githubUsername = username;
+  userData.githubVerifyCode = verifyCode;
+  userData.githubVerified = false;
+  saveUsers(users);
+
+  const embed = new EmbedBuilder()
+    .setColor(GOLD)
+    .setTitle('Liên Kết GitHub')
+    .setDescription(`${interaction.user} hãy thêm mã xác minh vào GitHub bio để Thiên Đạo nhận ra đạo hữu.`)
+    .addFields(
+      { name: 'GitHub username', value: username, inline: true },
+      { name: 'Mã xác minh', value: `\`${verifyCode}\``, inline: false },
+      { name: 'Bước tiếp theo', value: 'Vào GitHub profile, thêm mã trên vào bio, rồi dùng `/verifygithub`.', inline: false },
+    )
+    .setFooter({ text: 'Không cần token GitHub, chỉ kiểm tra public profile.' });
+
+  await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+}
+
+async function handleVerifyGithub(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: 'Lệnh này chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  const users = loadUsers();
+  const userData = getOrCreateUser(users, interaction.user.id);
+
+  if (!userData.githubUsername || !userData.githubVerifyCode) {
+    await interaction.reply({ content: 'Ngươi chưa liên kết GitHub. Hãy dùng `/linkgithub username` trước.', flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+  try {
+    const githubUser = await fetchGithubUser(userData.githubUsername);
+    const bio = githubUser.bio ?? '';
+
+    if (!bio.includes(userData.githubVerifyCode)) {
+      await interaction.editReply(`Chưa tìm thấy mã \`${userData.githubVerifyCode}\` trong GitHub bio của **${userData.githubUsername}**.`);
+      return;
+    }
+
+    userData.githubVerified = true;
+    userData.githubUsername = githubUser.login;
+    saveUsers(users);
+
+    const embed = new EmbedBuilder()
+      .setColor(GOLD)
+      .setTitle('GitHub Đã Xác Minh')
+      .setDescription(`${interaction.user} đã được Thiên Đạo xác nhận đạo tích GitHub.`)
+      .addFields(
+        { name: 'GitHub', value: githubUser.login, inline: true },
+        { name: 'Trạng thái', value: 'Đã xác minh', inline: true },
+      );
+
+    await interaction.editReply({ embeds: [embed] });
+  } catch (error) {
+    console.error('Loi verify GitHub:', error);
+    await interaction.editReply('Thiên Đạo chưa thể quan sát GitHub lúc này, hãy thử lại sau.');
+  }
+}
+
+async function handleGithub(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: 'Lệnh này chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  const users = loadUsers();
+  const userData = getOrCreateUser(users, interaction.user.id);
+  saveUsers(users);
+
+  const embed = new EmbedBuilder()
+    .setColor(GOLD)
+    .setTitle('Đạo Tích GitHub')
+    .addFields(
+      { name: 'GitHub', value: userData.githubUsername ?? 'Chưa liên kết', inline: true },
+      { name: 'Xác minh', value: userData.githubVerified ? 'Đã xác minh' : 'Chưa xác minh', inline: true },
+      { name: 'Lần nhận thưởng commit gần nhất', value: userData.lastGithubRewardDate ?? 'Chưa có', inline: false },
+      { name: 'Điểm GitHub hôm nay', value: `${userData.githubDailyExp ?? 0}/${GITHUB_DAILY_EXP_CAP}`, inline: true },
+    )
+    .setFooter({ text: 'Dùng /linkgithub username rồi /verifygithub để mở đạo lộ commit.' });
+
+  await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+}
+
+async function handleCheckCommit(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: 'Lệnh này chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  const users = loadUsers();
+  const userData = getOrCreateUser(users, interaction.user.id);
+
+  if (!userData.githubUsername || !userData.githubVerified) {
+    await interaction.reply({ content: 'Ngươi cần liên kết và xác minh GitHub trước khi nhận tu vi từ commit.', flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  const today = getTodayString();
+
+  if (userData.lastGithubRewardDate === today) {
+    await interaction.reply({ content: 'Hôm nay ngươi đã nhận thưởng tu vi từ commit rồi.', flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  await interaction.deferReply();
+
+  try {
+    const events = await fetchGithubEvents(userData.githubUsername);
+    const commitCount = checkGithubCommitsToday(events);
+
+    userData.lastGithubCheckAt = Date.now();
+
+    if (commitCount <= 0) {
+      saveUsers(users);
+      await interaction.editReply('Chưa tìm thấy commit công khai hôm nay trên GitHub của ngươi.');
+      return;
+    }
+
+    const base = 40;
+    const commitBonus = Math.min(commitCount * 10, 60);
+    const gain = Math.min(base + commitBonus, GITHUB_DAILY_EXP_CAP);
+    const member = await interaction.guild.members.fetch(interaction.user.id);
+
+    userData.tuViExp += gain;
+    userData.lastGithubRewardDate = today;
+    userData.githubDailyExp = gain;
+    const syncResult = await syncTuViRoles(interaction.guild, member, userData.tuViExp);
+
+    if (!syncResult.ok) {
+      await interaction.editReply(syncResult.message);
+      return;
+    }
+
+    saveUsers(users);
+
+    const embed = new EmbedBuilder()
+      .setColor(GOLD)
+      .setTitle('GitHub Công Đức Quy Tụ')
+      .setDescription(`${member} đã dùng commit hôm nay để bồi đắp đạo hạnh.`)
+      .addFields(
+        { name: 'GitHub username', value: userData.githubUsername, inline: true },
+        { name: 'Commit hôm nay', value: `${commitCount}`, inline: true },
+        { name: 'Điểm tu luyện nhận được', value: `+${gain}`, inline: true },
+        { name: 'Tổng tu vi exp', value: `${userData.tuViExp}`, inline: true },
+        { name: 'Tu vi hiện tại', value: `${syncResult.tuVi.realm} ${syncResult.tuVi.minor}`, inline: true },
+      );
+
+    await interaction.editReply({ embeds: [embed] });
+  } catch (error) {
+    console.error('Loi check commit GitHub:', error);
+    await interaction.editReply('Thiên Đạo chưa thể quan sát GitHub lúc này, hãy thử lại sau.');
+  }
+}
+
+async function handleTuVi(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: 'Lệnh này chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  const users = loadUsers();
+  let userData = users[interaction.user.id];
+
+  if (!userData) {
+    await interaction.reply({ content: 'Ngươi chưa nhập đạo, hãy kiểm tra linh căn trước.', flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  userData = getOrCreateUser(users, interaction.user.id);
+  const member = await interaction.guild.members.fetch(interaction.user.id);
+  const level = getCurrentTuViLevel(member, userData.tuViExp);
+  const tuVi = getTuViByLevel(level);
+
+  const embed = new EmbedBuilder()
+    .setColor(GOLD)
+    .setTitle(`Tu Vi - ${member.displayName}`)
+    .addFields(
+      { name: 'Tu vi hiện tại', value: tuVi.realm, inline: true },
+      { name: 'Tiểu cảnh', value: tuVi.minor, inline: true },
+      { name: 'Tu vi exp', value: `${userData.tuViExp}`, inline: true },
+      { name: 'GitHub', value: userData.githubUsername ?? 'Chưa liên kết', inline: true },
+      { name: 'Xác minh GitHub', value: userData.githubVerified ? 'Đã xác minh' : 'Chưa xác minh', inline: true },
+      { name: 'Thưởng commit gần nhất', value: userData.lastGithubRewardDate ?? 'Chưa có', inline: true },
+    )
+    .setFooter({ text: 'Tu vi tăng qua hoạt động GitHub public commit.' });
+
+  await interaction.reply({ embeds: [embed] });
+}
+
+async function handleCongHien(interaction) {
+  if (!interaction.inGuild()) {
+    await interaction.reply({ content: 'Lệnh này chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+    return;
+  }
+
+  const users = loadUsers();
+  const userData = getOrCreateUser(users, interaction.user.id);
+  const member = await interaction.guild.members.fetch(interaction.user.id);
+  const rank = getDiscipleRankFromContribution(userData.congHienExp);
+  const nextRank = getNextDiscipleRank(userData.congHienExp);
+  const today = getTodayString();
+
+  if (userData.dailyMessageDate !== today) {
+    userData.dailyMessageDate = today;
+    userData.dailyMessageCongHien = 0;
+    saveUsers(users);
+  }
+
+  const embed = new EmbedBuilder()
+    .setColor(GOLD)
+    .setTitle(`Cống Hiến - ${member.displayName}`)
+    .addFields(
+      { name: 'Điểm cống hiến hiện tại', value: `${userData.congHienExp}`, inline: true },
+      { name: 'Cấp đệ tử hiện tại', value: getMemberDiscipleRank(member) ?? rank.roleName, inline: true },
+      {
+        name: 'Điểm cần để lên cấp tiếp theo',
+        value: nextRank ? `${nextRank.exp - userData.congHienExp} điểm để lên ${nextRank.roleName}` : 'Đã đạt mốc tự động cao nhất',
+        inline: false,
+      },
+      { name: 'Cống hiến hôm nay', value: `${userData.dailyMessageCongHien}/${DAILY_MESSAGE_CONG_HIEN_LIMIT}`, inline: true },
+    )
+    .setFooter({ text: 'Chat hợp lệ trong kênh học/code sẽ tăng cống hiến.' });
 
   await interaction.reply({ embeds: [embed] });
 }
@@ -549,6 +892,11 @@ async function handleAcceptDisciple(interaction) {
     throw error;
   }
 
+  const users = loadUsers();
+  const userData = getOrCreateUser(users, ownerId);
+  userData.congHienExp = Math.max(userData.congHienExp, 400);
+  saveUsers(users);
+
   await interaction.editReply(`${member} đã được thu nhận làm **Ngoại Môn Đệ Tử**.`);
 }
 
@@ -715,6 +1063,23 @@ async function handleLinhCan(interaction) {
     }
 
     throw error;
+  }
+
+  const users = loadUsers();
+  const userData = getOrCreateUser(users, interaction.user.id);
+  saveUsers(users);
+
+  const refreshedMember = await interaction.guild.members.fetch(interaction.user.id);
+  const hasTuViRole = refreshedMember.roles.cache.some((role) => TU_VI_REALMS.includes(role.name));
+  const hasMinorRole = refreshedMember.roles.cache.some((role) => MINOR_REALMS.includes(role.name));
+
+  if (!hasTuViRole || !hasMinorRole) {
+    const syncResult = await syncTuViRoles(interaction.guild, refreshedMember, userData.tuViExp);
+
+    if (!syncResult.ok) {
+      await interaction.editReply(syncResult.message);
+      return;
+    }
   }
 
   const embed = new EmbedBuilder()
@@ -892,7 +1257,9 @@ function buildCongPhapRows() {
 }
 
 function getMemberDiscipleRank(member) {
-  return DISCIPLE_RANK_ROLES.find((roleName) => member.roles.cache.some((role) => role.name === roleName)) ?? null;
+  return [...DISCIPLE_RANK_ROLES]
+    .reverse()
+    .find((roleName) => member.roles.cache.some((role) => role.name === roleName)) ?? null;
 }
 
 function getMemberLinhCanClassificationText(member) {
@@ -1027,6 +1394,307 @@ function getManagedTicketOwnerId(channel) {
   }
 
   return null;
+}
+
+function ensureUsersFile() {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+
+  if (!fs.existsSync(USERS_FILE)) {
+    fs.writeFileSync(USERS_FILE, '{}\n', 'utf8');
+  }
+}
+
+function loadUsers() {
+  ensureUsersFile();
+
+  try {
+    const raw = fs.readFileSync(USERS_FILE, 'utf8');
+    return raw.trim() ? JSON.parse(raw) : {};
+  } catch (error) {
+    console.error('Khong the doc data/users.json:', error);
+    return {};
+  }
+}
+
+function saveUsers(users) {
+  ensureUsersFile();
+  fs.writeFileSync(USERS_FILE, `${JSON.stringify(users, null, 2)}\n`, 'utf8');
+}
+
+function getOrCreateUser(users, userId) {
+  if (!users[userId]) {
+    users[userId] = createDefaultUserData();
+    return users[userId];
+  }
+
+  users[userId] = {
+    ...createDefaultUserData(),
+    ...users[userId],
+  };
+
+  return users[userId];
+}
+
+function createDefaultUserData() {
+  return {
+    githubUsername: null,
+    githubVerifyCode: null,
+    githubVerified: false,
+    lastGithubCheckAt: 0,
+    lastGithubRewardDate: null,
+    githubDailyExp: 0,
+    tuViExp: 0,
+    congHienExp: 0,
+    lastMessageCongHienAt: 0,
+    dailyMessageCongHien: 0,
+    dailyMessageDate: getTodayString(),
+  };
+}
+
+function expRequiredForLevel(level) {
+  return Math.floor(300 * Math.pow(level + 1, 2.2));
+}
+
+function getLevelFromExp(tuViExp) {
+  return Math.min(MAX_TU_VI_LEVEL, Math.floor(Math.pow(tuViExp / 300, 1 / 2.2)));
+}
+
+function getTuViFromExp(tuViExp) {
+  return getTuViByLevel(getLevelFromExp(tuViExp));
+}
+
+function getTuViByLevel(level) {
+  const clampedLevel = Math.max(0, Math.min(MAX_TU_VI_LEVEL, level));
+  const realmIndex = Math.floor(clampedLevel / MINOR_REALMS.length);
+  const minorIndex = clampedLevel % MINOR_REALMS.length;
+
+  return {
+    level: clampedLevel,
+    realmIndex,
+    minorIndex,
+    realm: TU_VI_REALMS[realmIndex],
+    minor: MINOR_REALMS[minorIndex],
+  };
+}
+
+function getCurrentTuViLevel(member, fallbackExp = 0) {
+  const realmIndex = TU_VI_REALMS.findIndex((roleName) =>
+    member.roles.cache.some((role) => role.name === roleName),
+  );
+  const minorIndex = MINOR_REALMS.findIndex((roleName) =>
+    member.roles.cache.some((role) => role.name === roleName),
+  );
+
+  if (realmIndex >= 0 && minorIndex >= 0) {
+    return realmIndex * MINOR_REALMS.length + minorIndex;
+  }
+
+  return getLevelFromExp(fallbackExp);
+}
+
+async function syncTuViRoles(guild, member, tuViExp) {
+  await guild.roles.fetch();
+
+  const tuVi = getTuViFromExp(tuViExp);
+  const realmRole = findRoleByName(guild, tuVi.realm);
+  const minorRole = findRoleByName(guild, tuVi.minor);
+  const missing = [
+    realmRole ? null : tuVi.realm,
+    minorRole ? null : tuVi.minor,
+  ].filter(Boolean);
+
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      message: `Thiếu role tu vi: ${missing.join(', ')}. Hãy chạy \`npm run create:roles\` rồi thử lại.`,
+    };
+  }
+
+  const oldRealmRoles = member.roles.cache.filter(
+    (role) => TU_VI_REALMS.includes(role.name) && role.id !== realmRole.id,
+  );
+  const oldMinorRoles = member.roles.cache.filter(
+    (role) => MINOR_REALMS.includes(role.name) && role.id !== minorRole.id,
+  );
+  const rolesToAdd = [realmRole, minorRole].filter((role) => !member.roles.cache.has(role.id));
+  const blocker = await getTuViRoleManageBlocker(guild, [
+    ...rolesToAdd,
+    ...oldRealmRoles.values(),
+    ...oldMinorRoles.values(),
+  ]);
+
+  if (blocker) {
+    return { ok: false, message: blocker };
+  }
+
+  if (oldRealmRoles.size > 0) {
+    await member.roles.remove(oldRealmRoles, 'Dong bo role canh gioi tu vi.');
+  }
+
+  if (oldMinorRoles.size > 0) {
+    await member.roles.remove(oldMinorRoles, 'Dong bo role tieu canh tu vi.');
+  }
+
+  if (rolesToAdd.length > 0) {
+    await member.roles.add(rolesToAdd, 'Dong bo role tu vi.');
+  }
+
+  return { ok: true, tuVi };
+}
+
+async function syncDiscipleRole(guild, member, congHienExp) {
+  await guild.roles.fetch();
+
+  const rank = getDiscipleRankFromContribution(congHienExp);
+  const targetRole = findRoleByName(guild, rank.roleName);
+
+  if (!targetRole) {
+    return {
+      ok: false,
+      message: `Thiếu role cấp đệ tử: ${rank.roleName}. Hãy chạy \`npm run create:roles\` rồi thử lại.`,
+    };
+  }
+
+  const autoRoleNames = AUTO_DISCIPLE_THRESHOLDS.map((entry) => entry.roleName);
+  const oldRoles = member.roles.cache.filter(
+    (role) => autoRoleNames.includes(role.name) && role.id !== targetRole.id,
+  );
+  const rolesToAdd = member.roles.cache.has(targetRole.id) ? [] : [targetRole];
+  const blocker = await getDiscipleRoleManageBlocker(guild, [...rolesToAdd, ...oldRoles.values()]);
+
+  if (blocker) {
+    return { ok: false, message: blocker };
+  }
+
+  if (oldRoles.size > 0) {
+    await member.roles.remove(oldRoles, 'Dong bo cap de tu theo diem cong hien.');
+  }
+
+  if (rolesToAdd.length > 0) {
+    await member.roles.add(rolesToAdd, 'Dong bo cap de tu theo diem cong hien.');
+  }
+
+  return { ok: true, rank };
+}
+
+function getDiscipleRankFromContribution(congHienExp) {
+  return [...AUTO_DISCIPLE_THRESHOLDS]
+    .reverse()
+    .find((entry) => congHienExp >= entry.exp) ?? AUTO_DISCIPLE_THRESHOLDS[0];
+}
+
+function getNextDiscipleRank(congHienExp) {
+  return AUTO_DISCIPLE_THRESHOLDS.find((entry) => entry.exp > congHienExp) ?? null;
+}
+
+async function fetchGithubUser(username) {
+  return fetchGithubJson(`https://api.github.com/users/${encodeURIComponent(username)}`);
+}
+
+async function fetchGithubEvents(username) {
+  return fetchGithubJson(`https://api.github.com/users/${encodeURIComponent(username)}/events/public`);
+}
+
+async function fetchGithubJson(url) {
+  const response = await fetch(url, {
+    headers: {
+      Accept: 'application/vnd.github+json',
+      'User-Agent': 'Thien-Dao-Bot',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`GitHub API ${response.status}`);
+  }
+
+  return response.json();
+}
+
+function checkGithubCommitsToday(events) {
+  const today = getTodayString();
+
+  return events
+    .filter((event) => event.type === 'PushEvent' && getTodayString(new Date(event.created_at)) === today)
+    .reduce((total, event) => total + (Array.isArray(event.payload?.commits) ? event.payload.commits.length : 0), 0);
+}
+
+async function getTuViRoleManageBlocker(guild, roles) {
+  const botMember = await guild.members.fetchMe();
+
+  if (!botMember.permissions.has(PermissionFlagsBits.ManageRoles)) {
+    return 'Thiên Đạo chưa đủ quyền Quản Lý Vai Trò hoặc role Thiên Đạo đang nằm dưới role tu vi cần gán.';
+  }
+
+  const blockedRole = roles.find((role) => role?.managed || role?.position >= botMember.roles.highest.position);
+
+  if (blockedRole) {
+    return 'Thiên Đạo chưa đủ quyền Quản Lý Vai Trò hoặc role Thiên Đạo đang nằm dưới role tu vi cần gán.';
+  }
+
+  return null;
+}
+
+async function handleMessageCultivation(message) {
+  if (!message.guild || message.author.bot) {
+    return;
+  }
+
+  if (message.content.trim().length < 5) {
+    return;
+  }
+
+  const channelName = message.channel?.name?.toLowerCase() ?? '';
+
+  if (MESSAGE_CONG_HIEN_BLOCKED_CHANNEL_PARTS.some((part) => channelName.includes(part))) {
+    return;
+  }
+
+  const users = loadUsers();
+  const userData = getOrCreateUser(users, message.author.id);
+  const now = Date.now();
+
+  if (now - userData.lastMessageCongHienAt < MESSAGE_CONG_HIEN_COOLDOWN_MS) {
+    return;
+  }
+
+  const today = getTodayString();
+
+  if (userData.dailyMessageDate !== today) {
+    userData.dailyMessageDate = today;
+    userData.dailyMessageCongHien = 0;
+  }
+
+  if (userData.dailyMessageCongHien >= DAILY_MESSAGE_CONG_HIEN_LIMIT) {
+    return;
+  }
+
+  userData.congHienExp += 1;
+  userData.lastMessageCongHienAt = now;
+  userData.dailyMessageCongHien += 1;
+  saveUsers(users);
+
+  const member = await message.guild.members.fetch(message.author.id);
+  const syncResult = await syncDiscipleRole(message.guild, member, userData.congHienExp);
+
+  if (!syncResult.ok) {
+    console.error(syncResult.message);
+  }
+}
+
+function getTodayString(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Ho_Chi_Minh',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const year = parts.find((part) => part.type === 'year')?.value;
+  const month = parts.find((part) => part.type === 'month')?.value;
+  const day = parts.find((part) => part.type === 'day')?.value;
+
+  return `${year}-${month}-${day}`;
 }
 
 function calculateLinhCan(ngay, thang, nam) {
