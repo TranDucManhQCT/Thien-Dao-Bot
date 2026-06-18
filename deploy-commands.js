@@ -214,25 +214,8 @@ const commands = [
     .addStringOption((option) =>
       option
         .setName('item')
-        .setDescription('Vật phẩm muốn mua.')
-        .setRequired(true)
-        .addChoices(
-          { name: 'Git Kiếm', value: 'git_kiem' },
-          { name: 'SQL Trận Bàn', value: 'sql_tran_ban' },
-          { name: 'Docker Hồ Lô', value: 'docker_ho_lo' },
-          { name: 'IDE Khai Ngộ', value: 'ide_khai_ngo' },
-          { name: 'Bàn Phím Linh Khí', value: 'ban_phim_linh_khi' },
-          { name: 'Chuột Trảm Bug', value: 'chuot_tram_bug' },
-          { name: 'Hồi Nguyên Đan', value: 'hoi_nguyen_dan' },
-          { name: 'Linh Khí Đan', value: 'linh_khi_dan' },
-          { name: 'Tĩnh Tâm Đan', value: 'tinh_tam_dan' },
-          { name: 'Công Hiến Đan', value: 'cong_hien_dan' },
-          { name: 'Túi Thô', value: 'tui_tho' },
-          { name: 'Túi Linh Mộc', value: 'tui_linh_moc' },
-          { name: 'Túi Huyền Thiết', value: 'tui_huyen_thiet' },
-          { name: 'Túi Càn Khôn', value: 'tui_can_khon' },
-          { name: 'Túi Tiên Thiên', value: 'tui_tien_thien' },
-        ),
+        .setDescription('Mã vật phẩm muốn mua. Xem mã bằng /shop, ví dụ: git_kiem.')
+        .setRequired(true),
     ),
   new SlashCommandBuilder()
     .setName('tuido')
@@ -245,21 +228,8 @@ const commands = [
     .addStringOption((option) =>
       option
         .setName('item')
-        .setDescription('Vật phẩm muốn trang bị hoặc dùng.')
-        .setRequired(true)
-        .addChoices(
-          { name: 'Git Kiếm', value: 'git_kiem' },
-          { name: 'SQL Trận Bàn', value: 'sql_tran_ban' },
-          { name: 'Docker Hồ Lô', value: 'docker_ho_lo' },
-          { name: 'IDE Khai Ngộ', value: 'ide_khai_ngo' },
-          { name: 'Bàn Phím Linh Khí', value: 'ban_phim_linh_khi' },
-          { name: 'Chuột Trảm Bug', value: 'chuot_tram_bug' },
-          { name: 'Túi Thô', value: 'tui_tho' },
-          { name: 'Túi Linh Mộc', value: 'tui_linh_moc' },
-          { name: 'Túi Huyền Thiết', value: 'tui_huyen_thiet' },
-          { name: 'Túi Càn Khôn', value: 'tui_can_khon' },
-          { name: 'Túi Tiên Thiên', value: 'tui_tien_thien' },
-        ),
+        .setDescription('Mã vật phẩm muốn trang bị hoặc dùng. Ví dụ: git_kiem.')
+        .setRequired(true),
     ),
   new SlashCommandBuilder()
     .setName('dung')
@@ -268,14 +238,8 @@ const commands = [
     .addStringOption((option) =>
       option
         .setName('item')
-        .setDescription('Đan dược muốn dùng.')
-        .setRequired(true)
-        .addChoices(
-          { name: 'Hồi Nguyên Đan', value: 'hoi_nguyen_dan' },
-          { name: 'Linh Khí Đan', value: 'linh_khi_dan' },
-          { name: 'Tĩnh Tâm Đan', value: 'tinh_tam_dan' },
-          { name: 'Công Hiến Đan', value: 'cong_hien_dan' },
-        ),
+        .setDescription('Mã đan dược muốn dùng. Ví dụ: hoi_nguyen_dan.')
+        .setRequired(true),
     ),
   new SlashCommandBuilder()
     .setName('tangitem')
@@ -290,26 +254,19 @@ const commands = [
     .addStringOption((option) =>
       option
         .setName('item')
-        .setDescription('Vật phẩm muốn tặng.')
-        .setRequired(true)
-        .addChoices(
-          { name: 'Git Kiếm', value: 'git_kiem' },
-          { name: 'SQL Trận Bàn', value: 'sql_tran_ban' },
-          { name: 'Docker Hồ Lô', value: 'docker_ho_lo' },
-          { name: 'IDE Khai Ngộ', value: 'ide_khai_ngo' },
-          { name: 'Bàn Phím Linh Khí', value: 'ban_phim_linh_khi' },
-          { name: 'Chuột Trảm Bug', value: 'chuot_tram_bug' },
-          { name: 'Hồi Nguyên Đan', value: 'hoi_nguyen_dan' },
-          { name: 'Linh Khí Đan', value: 'linh_khi_dan' },
-          { name: 'Tĩnh Tâm Đan', value: 'tinh_tam_dan' },
-          { name: 'Công Hiến Đan', value: 'cong_hien_dan' },
-          { name: 'Túi Linh Mộc', value: 'tui_linh_moc' },
-          { name: 'Túi Huyền Thiết', value: 'tui_huyen_thiet' },
-          { name: 'Túi Càn Khôn', value: 'tui_can_khon' },
-          { name: 'Túi Tiên Thiên', value: 'tui_tien_thien' },
-        ),
+        .setDescription('Mã vật phẩm muốn tặng. Xem mã bằng /tuido.')
+        .setRequired(true),
     ),
-
+  new SlashCommandBuilder()
+    .setName('nangpham')
+    .setDescription('Nâng phẩm vật phẩm bằng Refactor Linh Thạch và điểm cống hiến.')
+    .setDMPermission(false)
+    .addStringOption((option) =>
+      option
+        .setName('item')
+        .setDescription('Mã vật phẩm muốn nâng phẩm. Xem mã bằng /tuido.')
+        .setRequired(true),
+    ),
   new SlashCommandBuilder()
     .setName('nhiemvu')
     .setDescription('Mở Trảm Yêu Bảng hôm nay bằng menu và nút chọn hiện đại.')

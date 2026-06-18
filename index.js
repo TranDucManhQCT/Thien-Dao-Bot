@@ -322,6 +322,133 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       grade: 5,
     },
   ];
+
+  const ITEM_QUALITIES = [
+    { key: 'pham_pham', name: 'Phàm Phẩm', multiplier: 1.0, color: 0x9ca3af },
+    { key: 'ha_pham', name: 'Hạ Phẩm', multiplier: 1.1, color: 0x22c55e },
+    { key: 'trung_pham', name: 'Trung Phẩm', multiplier: 1.25, color: 0x3b82f6 },
+    { key: 'thuong_pham', name: 'Thượng Phẩm', multiplier: 1.5, color: 0xa855f7 },
+    { key: 'cuc_pham', name: 'Cực Phẩm', multiplier: 1.9, color: 0xf97316 },
+    { key: 'thien_pham', name: 'Thiên Phẩm', multiplier: 2.5, color: 0xef4444 },
+    { key: 'dao_pham', name: 'Đạo Phẩm', multiplier: 3.5, color: 0xffd700 },
+  ];
+  const DEFAULT_ITEM_QUALITY = 'pham_pham';
+  const MAX_ITEM_QUALITY = 'dao_pham';
+
+  const CURSE_DEFINITIONS = [
+    { key: 'merge_conflict', name: 'Merge Conflict', bonusText: '+ sức mạnh lớn nhưng dễ sinh Tâm Ma khi dùng.', sideEffectText: '10% nhận Tâm Ma Dao Động.' },
+    { key: 'memory_leak', name: 'Memory Leak', bonusText: '+ hiệu ứng kéo dài nhưng dễ tĩnh dưỡng thêm.', sideEffectText: '10% tĩnh dưỡng thêm nếu nhiệm vụ thất bại.' },
+    { key: 'build_fail', name: 'Build Fail', bonusText: '+ mạnh khi Deploy nhưng chạy trốn khó hơn.', sideEffectText: 'Giảm nhẹ tỉ lệ chạy trốn ở nhiệm vụ Deploy.' },
+    { key: 'deadlock', name: 'Deadlock', bonusText: '+ mạnh khi Database nhưng có thể bị kẹt đạo khí.', sideEffectText: '8% bị tĩnh dưỡng thêm 2 giờ.' },
+    { key: 'runtime_error', name: 'Runtime Error', bonusText: '+ lực chiến cao nhưng phản phệ đau hơn.', sideEffectText: 'Nếu thua, tăng phạt tu vi.' },
+    { key: 'production_crash', name: 'Production Crash', bonusText: '+ cực mạnh nhưng thua rất đau.', sideEffectText: 'Rủi ro trọng thương cao hơn.' },
+  ];
+
+  const UPGRADE_RULES = {
+    pham_pham: { next: 'ha_pham', stone: 'tieu_refactor_linh_thach', cost: 100, successRate: 0.95, curseRate: 0 },
+    ha_pham: { next: 'trung_pham', stone: 'tieu_refactor_linh_thach', cost: 250, successRate: 0.85, curseRate: 0.03 },
+    trung_pham: { next: 'thuong_pham', stone: 'trung_refactor_linh_thach', cost: 600, successRate: 0.70, curseRate: 0.05 },
+    thuong_pham: { next: 'cuc_pham', stone: 'dai_refactor_linh_thach', cost: 1500, successRate: 0.50, curseRate: 0.10 },
+    cuc_pham: { next: 'thien_pham', stone: 'thien_refactor_linh_thach', cost: 4000, successRate: 0.30, curseRate: 0.15 },
+    thien_pham: { next: 'dao_pham', stone: 'dao_refactor_linh_thach', cost: 10000, successRate: 0.12, curseRate: 0.25 },
+  };
+
+  SHOP_ITEMS.push(
+    { key: 'tieu_refactor_linh_thach', name: 'Tiểu Refactor Linh Thạch', type: 'upgrade_stone', price: 180, effect: 'Vật phẩm đặc biệt dùng nâng phẩm: Phàm → Hạ hoặc Hạ → Trung.', upgradeTier: 1 },
+    { key: 'trung_refactor_linh_thach', name: 'Trung Refactor Linh Thạch', type: 'upgrade_stone', price: 600, effect: 'Vật phẩm đặc biệt dùng nâng phẩm: Trung → Thượng.', upgradeTier: 2 },
+    { key: 'dai_refactor_linh_thach', name: 'Đại Refactor Linh Thạch', type: 'upgrade_stone', price: 1800, effect: 'Vật phẩm đặc biệt dùng nâng phẩm: Thượng → Cực.', upgradeTier: 3 },
+    { key: 'thien_refactor_linh_thach', name: 'Thiên Refactor Linh Thạch', type: 'upgrade_stone', price: 5200, effect: 'Vật phẩm đặc biệt dùng nâng phẩm: Cực → Thiên.', upgradeTier: 4 },
+    { key: 'dao_refactor_linh_thach', name: 'Đạo Refactor Linh Thạch', type: 'upgrade_stone', price: 15000, effect: 'Vật phẩm đặc biệt cực hiếm dùng nâng phẩm: Thiên → Đạo.', upgradeTier: 5 },
+    { key: 'rollback_phu', name: 'Rollback Phù', type: 'talisman', price: 900, effect: 'Giảm rủi ro bị nguyền khi nâng phẩm thất bại.' },
+    { key: 'safe_deploy_phu', name: 'Safe Deploy Phù', type: 'talisman', price: 1200, effect: '+10% tỉ lệ nâng phẩm thành công ở lần nâng kế tiếp.' },
+  );
+
+  SHOP_ITEMS.push(
+    ...createCatalogItems('artifact', 'frontend', [
+      ['react_huyen_kinh', 'React Huyễn Kính', '+ tỉ lệ thắng nhiệm vụ UI / component.'],
+      ['css_linh_but', 'CSS Linh Bút', '+ hiệu quả khi dọn CSS Loạn Trận.'],
+      ['tailwind_van_y', 'Tailwind Vân Y', '+ thưởng khi quét Layout / Theme.'],
+      ['dom_tran_hon_kinh', 'DOM Trấn Hồn Kính', '+ lực chiến khi gặp DOM Huyết Linh.'],
+      ['component_linh_an', 'Component Linh Ấn', '+ tỉ lệ thắng nhiệm vụ Component.'],
+      ['responsive_ho_phu', 'Responsive Hộ Phù', '+ né trọng thương khi gặp Responsive Quỷ Diện.'],
+    ]),
+    ...createCatalogItems('artifact', 'backend', [
+      ['api_ngoc_gian', 'API Ngọc Giản', '+ lực chiến khi gặp API Tà Linh.'],
+      ['node_hau_dao_an', 'Node Hậu Đạo Ấn', '+ hiệu quả nhiệm vụ backend.'],
+      ['jwt_ho_tam_phu', 'JWT Hộ Tâm Phù', '+ chống Auth Ma Ảnh / Token Expired.'],
+      ['middleware_dao_bao', 'Middleware Đạo Bào', '+ tỉ lệ thắng nhiệm vụ Middleware.'],
+      ['rate_limit_thiet_lenh', 'Rate Limit Thiết Lệnh', '+ chống spam/API quỷ.'],
+      ['queue_huyen_tran', 'Queue Huyền Trận', '+ hiệu quả khi gặp Queue Tắc Nghẽn Ma.'],
+    ]),
+    ...createCatalogItems('artifact', 'database', [
+      ['index_huyen_thach', 'Index Huyền Thạch', '+ chống Slow Query Yêu Xà.'],
+      ['erd_thien_do', 'ERD Thiên Đồ', '+ quét dọn ERD Loạn Dây.'],
+      ['transaction_dinh_hai_chau', 'Transaction Định Hải Châu', '+ chống Deadlock / Transaction Ma Nhãn.'],
+      ['backup_ho_menh_phu', 'Backup Hộ Mệnh Phù', '+ giảm phạt khi gặp Backup Thất Lạc Hồn.'],
+      ['postgres_dia_mach_an', 'PostgreSQL Địa Mạch Ấn', '+ nhiệm vụ PostgreSQL / Database.'],
+      ['migration_tan_quyen', 'Migration Tàn Quyển', '+ chống Migration Oán Linh.'],
+    ]),
+    ...createCatalogItems('artifact', 'devops', [
+      ['ci_cd_thien_xa', 'CI/CD Thiên Xa', '+ chống CI/CD Lôi Quỷ.'],
+      ['github_actions_loi_phu', 'GitHub Actions Lôi Phù', '+ hiệu quả pipeline.'],
+      ['nginx_huyen_mon', 'Nginx Huyền Môn', '+ chống Nginx Huyền Ma.'],
+      ['pm2_bat_tu_phu', 'PM2 Bất Tử Phù', '+ giảm rủi ro bot crash.'],
+      ['linux_thiet_lenh', 'Linux Thiết Lệnh', '+ chống Linux Thiết Quỷ.'],
+      ['oracle_tien_lenh', 'Oracle Tiên Lệnh', '+ chống Hư Không Deploy Chủ.'],
+    ]),
+    ...createCatalogItems('artifact', 'security', [
+      ['xss_tran_ma_phu', 'XSS Trấn Ma Phù', '+ chống XSS Huyết Quỷ.'],
+      ['sql_injection_phong_an', 'SQL Injection Phong Ấn', '+ chống SQL Injection Độc Ma.'],
+      ['oauth_thien_mon_lenh', 'OAuth Thiên Môn Lệnh', '+ chống OAuth / Auth Ma.'],
+      ['permission_kim_toa', 'Permission Kim Tỏa', '+ chống Permission Denied Quỷ.'],
+      ['hash_huyen_phu', 'Hash Huyền Phù', '+ chống Hash Gãy Hồn.'],
+      ['audit_thien_nhan', 'Audit Thiên Nhãn', '+ chống Audit Blind Ma.'],
+    ]),
+    ...createCatalogItems('artifact', 'git', [
+      ['commit_ngoc_an', 'Commit Ngọc Ấn', '+ bonus đạo tích GitHub.'],
+      ['branch_phan_anh_kiem', 'Branch Phân Ảnh Kiếm', '+ chống Branch Loạn Ảnh.'],
+      ['merge_hop_dao_phu', 'Merge Hợp Đạo Phù', '+ chống Merge Conflict Quỷ.'],
+      ['pull_request_lenh', 'Pull Request Lệnh', '+ thưởng khi review / PR.'],
+      ['code_review_thien_nhan', 'Code Review Thiên Nhãn', '+ soi mã và chấm luận đạo.'],
+      ['rebase_nghich_thien_phu', 'Rebase Nghịch Thiên Phù', '+ chống Rebase Nghịch Quỷ.'],
+    ]),
+    ...createCatalogItems('tool', 'clean', [
+      ['clean_code_choi_linh', 'Clean Code Chổi Linh', '+ tỉ lệ quét dọn thành công.'],
+      ['lint_thanh_tay_phu', 'Lint Thanh Tẩy Phù', '+ quét code rác / format lỗi.'],
+      ['format_tinh_tam_phu', 'Format Tịnh Tâm Phù', '+ quét dọn tài liệu / code rối.'],
+      ['refactor_linh_but', 'Refactor Linh Bút', '+ quét Nợ Kỹ Thuật / Legacy Code.'],
+      ['cache_thanh_tru_phu', 'Cache Thanh Trừ Phù', '+ dọn cache / log rác.'],
+      ['log_truy_tung_kinh', 'Log Truy Tung Kính', '+ dò uế khí thật khi quét dọn.'],
+    ]),
+    ...createCatalogItems('pill', 'pill', [
+      ['debug_tinh_than_dan', 'Debug Tỉnh Thần Đan', '+120 tu vi, hợp nhiệm vụ Bug.', { tuViGain: 120 }],
+      ['focus_linh_dan', 'Focus Linh Đan', '+180 tu vi, có thể tăng khí thế nhiệm vụ.', { tuViGain: 180 }],
+      ['clean_code_dan', 'Clean Code Đan', '+100 tu vi, hợp quét dọn.', { tuViGain: 100 }],
+      ['refactor_tay_tuy_dan', 'Refactor Tẩy Tủy Đan', '+260 tu vi.', { tuViGain: 260 }],
+      ['deploy_binh_tam_dan', 'Deploy Bình Tâm Đan', '+200 tu vi.', { tuViGain: 200 }],
+      ['algorithm_khai_ngo_dan', 'Algorithm Khai Ngộ Đan', '+350 tu vi.', { tuViGain: 350 }],
+      ['hac_hoi_nguyen_dan', 'Hắc Hồi Nguyên Đan', '+400 tu vi, có thể bị Tâm Ma.', { tuViGain: 400, cursedByDefault: true }],
+      ['nghich_menh_dan', 'Nghịch Mệnh Đan', '+1000 tu vi, đan bị nguyền cực mạnh.', { tuViGain: 1000, cursedByDefault: true }],
+    ]),
+    ...createCatalogItems('talisman', 'talisman', [
+      ['console_log_phu', 'Console Log Phù', '+ dò lỗi khi diệt Bug Yêu.'],
+      ['breakpoint_phu', 'Breakpoint Phù', '+ tăng tỉ lệ thắng quái Runtime.'],
+      ['hotfix_phu', 'Hotfix Phù', '+ mạnh khi gặp boss lỗi nghiêm trọng.'],
+      ['test_case_ho_than_phu', 'Test Case Hộ Thân Phù', '+ giảm trọng thương khi thua.'],
+      ['than_hanh_phu', 'Thần Hành Phù', '+ tỉ lệ chạy trốn.'],
+      ['an_tuc_phu', 'Ẩn Tức Phù', '+ chạy trốn thất bại cũng giảm phạt.'],
+    ]),
+    ...createCatalogItems('bag', 'bag', [
+      ['json_tui', 'JSON Túi', 'Sức chứa 10 vật phẩm.', { capacity: 10, grade: 2 }],
+      ['sqlite_tui', 'SQLite Túi', 'Sức chứa 15 vật phẩm.', { capacity: 15, grade: 3 }],
+      ['postgresql_tui', 'PostgreSQL Túi', 'Sức chứa 25 vật phẩm.', { capacity: 25, grade: 4 }],
+      ['redis_tui', 'Redis Túi', 'Sức chứa 35 vật phẩm.', { capacity: 35, grade: 5 }],
+      ['supabase_khong_gian', 'Supabase Không Gian', 'Sức chứa 70 vật phẩm.', { capacity: 70, grade: 6 }],
+      ['cloud_storage_tui', 'Cloud Storage Túi', 'Sức chứa 100 vật phẩm.', { capacity: 100, grade: 7 }],
+      ['distributed_storage_tui', 'Distributed Storage Túi', 'Sức chứa 150 vật phẩm.', { capacity: 150, grade: 8 }],
+    ]),
+  );
+
   const DEFAULT_STORAGE_BAG = 'tui_tho';
   const BE_QUAN_OPTIONS = {
     '1h': { label: '1 giờ', durationMs: 60 * 60 * 1000, reward: 30 },
@@ -349,56 +476,84 @@ const AUTO_DISCIPLE_THRESHOLDS = [
   ];
 
   const MISSION_TEMPLATES = [
-    { key: 'tieu_bug_yeu', type: 'hunt', name: 'Tiểu Bug Yêu', minRealmIndex: 0 },
-    { key: 'loan_chat_quy', type: 'hunt', name: 'Loạn Chat Quỷ', minRealmIndex: 0 },
-    { key: 'tam_ma_luoi_hoc', type: 'hunt', name: 'Tâm Ma Lười Học', minRealmIndex: 0 },
-    { key: 'spam_ma', type: 'hunt', name: 'Spam Ma', minRealmIndex: 0 },
-    { key: 'muu_git_yeu', type: 'hunt', name: 'Mù Git Yêu', minRealmIndex: 1 },
-    { key: 'deadline_ma_anh', type: 'hunt', name: 'Deadline Ma Ảnh', minRealmIndex: 1 },
-    { key: 'merge_conflict_quy', type: 'hunt', name: 'Merge Conflict Quỷ', minRealmIndex: 1 },
-    { key: 'loi_deploy_yeu', type: 'hunt', name: 'Lỗi Deploy Yêu', minRealmIndex: 2 },
-    { key: 'database_doc_long', type: 'hunt', name: 'Database Độc Long', minRealmIndex: 2 },
-    { key: 'api_ta_linh', type: 'hunt', name: 'API Tà Linh', minRealmIndex: 2 },
-    { key: 'ui_huyen_yeu', type: 'hunt', name: 'UI Huyễn Yêu', minRealmIndex: 2 },
-    { key: 'docker_am_quy', type: 'hunt', name: 'Docker Âm Quỷ', minRealmIndex: 3 },
-    { key: 'vercel_ta_ma', type: 'hunt', name: 'Vercel Tà Ma', minRealmIndex: 3 },
-    { key: 'supabase_doc_xa', type: 'hunt', name: 'Supabase Độc Xà', minRealmIndex: 3 },
-    { key: 'auth_ma_anh', type: 'hunt', name: 'Auth Ma Ảnh', minRealmIndex: 3 },
-    { key: 'no_ky_thuat_cu_thu', type: 'hunt', name: 'Nợ Kỹ Thuật Cự Thú', minRealmIndex: 4 },
-    { key: 'hu_khong_bug_vuong', type: 'hunt', name: 'Hư Không Bug Vương', minRealmIndex: 4 },
-    { key: 'ta_ma_deploy', type: 'hunt', name: 'Tà Ma Deploy', minRealmIndex: 4 },
-    { key: 'thien_kiep_bug_vuong', type: 'hunt', name: 'Thiên Kiếp Bug Vương', minRealmIndex: 5 },
-    { key: 'hon_loan_server_quy', type: 'hunt', name: 'Hỗn Loạn Server Quỷ', minRealmIndex: 5 },
-    { key: 'nghiep_luc_ma_quan', type: 'hunt', name: 'Nghiệp Lực Ma Quân', minRealmIndex: 5 },
-    { key: 'van_kiep_ta_long', type: 'hunt', name: 'Vạn Kiếp Tà Long', minRealmIndex: 6 },
-    { key: 'thien_dao_nghich_ma', type: 'hunt', name: 'Thiên Đạo Nghịch Ma', minRealmIndex: 6 },
-    { key: 'hon_don_ma_ton', type: 'hunt', name: 'Hỗn Độn Ma Tôn', minRealmIndex: 7 },
-    { key: 'diet_the_yeu_hoang', type: 'hunt', name: 'Diệt Thế Yêu Hoàng', minRealmIndex: 8 },
+    ...createMissionGroup('hunt', 0, [
+      'Tiểu Bug Yêu', 'Loạn Chat Quỷ', 'Tâm Ma Lười Học', 'Spam Ma', 'Syntax Error Quỷ',
+      'Runtime Error Ma', 'Logic Error Tà Linh', 'Null Pointer Âm Hồn', 'Stack Trace Ma Trùng', 'Warning Linh Sa',
+      'Console Log Oán Linh', 'Typo Tiểu Quái', 'Missing Semicolon Yêu', 'Comment Rác Quỷ', 'Todo Ma Ảnh',
+    ]),
+    ...createMissionGroup('hunt', 1, [
+      'Mù Git Yêu', 'Deadline Ma Ảnh', 'Merge Conflict Quỷ', 'Broken Commit Yêu', 'Branch Loạn Ảnh',
+      'Detached HEAD Ma', 'Pull Request Oán Linh', 'Changelog Hắc Linh', 'Version Drift Quỷ', 'Rebase Nghịch Quỷ',
+      'CSS Loạn Ảnh', 'Responsive Quỷ Diện', 'DOM Huyết Linh', 'State Dị Ma', 'Component Hư Ảnh',
+    ]),
+    ...createMissionGroup('hunt', 2, [
+      'Lỗi Deploy Yêu', 'Database Độc Long', 'API Tà Linh', 'UI Huyễn Yêu', 'Docker Âm Quỷ',
+      'Build Error Yêu', 'Env Missing Ma Ảnh', 'Port Binding Quỷ', 'Slow Query Yêu Xà', 'Migration Oán Linh',
+      'Seed Data Tà Ma', 'Foreign Key Quỷ Tỏa', 'Index Huyết Trùng', 'Webhook Oán Hồn', 'Queue Tắc Nghẽn Ma',
+    ]),
+    ...createMissionGroup('hunt', 3, [
+      'Vercel Tà Ma', 'Supabase Độc Xà', 'Auth Ma Ảnh', 'JWT Hắc Phù', 'Session Quỷ',
+      'Middleware Tà Tu', 'Rate Limit Huyết Quỷ', 'CORS Âm Linh', 'Token Expired Ma Ảnh', 'Hash Gãy Hồn',
+      'Docker Layer Huyết Ma', 'CI/CD Lôi Quỷ', 'Pipeline Tà Linh', 'Nginx Huyền Ma', 'PM2 Bất Tử Quỷ',
+    ]),
+    ...createMissionGroup('hunt', 4, [
+      'Nợ Kỹ Thuật Cự Thú', 'Hư Không Bug Vương', 'Tà Ma Deploy', 'Memory Leak Huyết Yêu', 'Infinite Loop Quỷ Ảnh',
+      'Crash Log Ma Linh', 'Deadlock Hắc Long', 'Transaction Ma Nhãn', 'Backup Thất Lạc Hồn', 'Schema Dị Biến Long',
+      'XSS Huyết Quỷ', 'SQL Injection Độc Ma', 'CSRF Âm Phù', 'Permission Denied Quỷ', 'Secrets Leak Tà Linh',
+    ]),
+    ...createMissionGroup('hunt', 5, [
+      'Thiên Kiếp Bug Vương', 'Hỗn Loạn Server Quỷ', 'Nghiệp Lực Ma Quân', 'Privilege Escalation Quỷ Vương', 'Zero Day Ma Chủ',
+      'Linux Thiết Quỷ', 'Log Flood Huyết Linh', 'Disk Full Ma', 'CPU Spike Quỷ', 'RAM Leak Hắc Thú',
+      'Network Timeout Ma', 'DNS Hư Không Quỷ', 'SSL Hết Hạn Tà Linh', 'AI Hallucination Ma', 'Prompt Injection Quỷ',
+    ]),
+    ...createMissionGroup('hunt', 6, [
+      'Vạn Kiếp Tà Long', 'Thiên Đạo Nghịch Ma', 'Embedding Lạc Đạo', 'Model Drift Tà Ảnh', 'Token Overflow Ma',
+      'Context Lost Quỷ', 'Vector Search Yêu Linh', 'Agent Loop Ma Trận', 'Tool Call Hắc Quỷ', 'Inference Timeout Ma',
+      'Legacy Code Cự Thú', 'Architecture Dị Long', 'Monolith Huyết Thú', 'Dependency Quỷ Vương', 'Package Conflict Ma',
+    ]),
+    ...createMissionGroup('hunt', 7, [
+      'Hỗn Độn Ma Tôn', 'Breaking Change Tà Long', 'Circular Import Quỷ', 'Config Drift Ma Chủ', 'System Collapse Đại Ma',
+      'Hư Không Deploy Chủ', 'Database Vạn Độc Long', 'Security Hộ Pháp Kiếp Ma', 'Fullstack Hỗn Độn Thú', 'DevOps Lôi Kiếp Ma',
+      'Git Luân Hồi Quỷ Đế', 'Production Diệt Thế Ma', 'Nghiệp Lực Code Ma Tôn', 'Hỗn Độn Đại Bug Hoàng', 'Rollback Thất Bại Ma Vương',
+    ]),
+    ...createMissionGroup('hunt', 8, [
+      'Diệt Thế Yêu Hoàng', 'Thiên Đạo Production Crash', 'Vạn Pháp Runtime Hoàng', 'Đại Đạo Deadlock Đế', 'Cửu Thiên Security Kiếp',
+      'Hỗn Nguyên Database Tà Long', 'Vô Tận Memory Leak Ma', 'Bất Diệt Legacy Ma Tôn', 'Thiên Ngoại Zero Day', 'Hư Không System Collapse',
+      'Luân Hồi Merge Conflict', 'Vạn Kiếp Build Fail', 'Đại La Bug Tổ', 'Tịch Diệt Deploy Kiếp', 'Hắc Ám Permission Đế',
+    ]),
 
-    { key: 'quet_tap_niem_dong', type: 'clean', name: 'Quét Tạp Niệm Động', minRealmIndex: 0 },
-    { key: 'don_son_mon', type: 'clean', name: 'Dọn Sơn Môn', minRealmIndex: 0 },
-    { key: 'lau_linh_bai', type: 'clean', name: 'Lau Linh Bài', minRealmIndex: 0 },
-    { key: 'gom_linh_thach_tan_mat', type: 'clean', name: 'Gom Linh Thạch Tản Mát', minRealmIndex: 0 },
-    { key: 'thanh_tay_ue_khi', type: 'clean', name: 'Thanh Tẩy Uế Khí', minRealmIndex: 1 },
-    { key: 'don_tang_kinh_loan_cac', type: 'clean', name: 'Dọn Tàng Kinh Loạn Các', minRealmIndex: 1 },
-    { key: 'sap_lai_phap_khi', type: 'clean', name: 'Sắp Lại Pháp Khí', minRealmIndex: 1 },
-    { key: 'quet_bui_chap_phap_duong', type: 'clean', name: 'Quét Bụi Chấp Pháp Đường', minRealmIndex: 1 },
-    { key: 'sua_phap_tran_lech', type: 'clean', name: 'Sửa Pháp Trận Lệch', minRealmIndex: 2 },
-    { key: 'khoi_thong_linh_mach', type: 'clean', name: 'Khơi Thông Linh Mạch', minRealmIndex: 2 },
-    { key: 'don_bi_canh_cu', type: 'clean', name: 'Dọn Bí Cảnh Cũ', minRealmIndex: 2 },
-    { key: 'trung_tu_luyen_ma_duong', type: 'clean', name: 'Trùng Tu Luyện Mã Đường', minRealmIndex: 2 },
-    { key: 'khai_quang_son_mon', type: 'clean', name: 'Khai Quang Sơn Môn', minRealmIndex: 3 },
-    { key: 'tay_tran_dao_truong', type: 'clean', name: 'Tẩy Trần Đạo Trường', minRealmIndex: 3 },
-    { key: 'lap_lai_tang_kinh_muc', type: 'clean', name: 'Lập Lại Tàng Kinh Mục', minRealmIndex: 3 },
-    { key: 'thanh_ly_yeu_khi', type: 'clean', name: 'Thanh Lý Yêu Khí', minRealmIndex: 3 },
-    { key: 'don_ma_vuc_hon_don', type: 'clean', name: 'Dọn Ma Vực Hỗn Độn', minRealmIndex: 4 },
-    { key: 'tu_bo_ho_tong_tran', type: 'clean', name: 'Tu Bổ Hộ Tông Trận', minRealmIndex: 4 },
-    { key: 'chinh_don_chan_truyen_cac', type: 'clean', name: 'Chỉnh Đốn Chân Truyền Các', minRealmIndex: 4 },
-    { key: 'thanh_loc_nghiep_chuong', type: 'clean', name: 'Thanh Lọc Nghiệp Chướng', minRealmIndex: 5 },
-    { key: 'tong_mon_dai_thanh_tay', type: 'clean', name: 'Tông Môn Đại Thanh Tẩy', minRealmIndex: 5 },
-    { key: 'lap_lai_thien_dao_bang', type: 'clean', name: 'Lập Lại Thiên Đạo Bảng', minRealmIndex: 6 },
-    { key: 'trung_kien_dao_tam_dien', type: 'clean', name: 'Trùng Kiến Đạo Tâm Điện', minRealmIndex: 7 },
-    { key: 'quet_sach_hu_khong_vet_nut', type: 'clean', name: 'Quét Sạch Hư Không Vết Nứt', minRealmIndex: 8 },
+    ...createMissionGroup('clean', 0, [
+      'Dọn Tạp Niệm Động', 'Quét Sơn Môn Bụi Code', 'Thanh Tẩy Console Log Rác', 'Dọn README Hoang Phế', 'Sắp Xếp Tàng Kinh Link',
+      'Quét Kênh Sai Chủ Đề', 'Dọn Thread Lạc Đạo', 'Thanh Lọc Meme Quá Đà', 'Gom Tài Nguyên Rải Rác', 'Sửa Mục Lục Tông Môn',
+    ]),
+    ...createMissionGroup('clean', 1, [
+      'Dọn CSS Loạn Trận', 'Sắp Xếp Component Cũ', 'Thanh Tẩy UI Rối', 'Dọn Asset Thất Lạc', 'Quét Layout Vỡ',
+      'Sửa Guide Frontend', 'Dọn Huyễn Diện Các', 'Tẩy Pixel Lệch', 'Gom Theme Màu', 'Sắp Xếp Icon Pháp Trận',
+    ]),
+    ...createMissionGroup('clean', 2, [
+      'Dọn API Guide', 'Sắp Xếp Endpoint', 'Thanh Lọc Auth Note', 'Dọn Middleware Rác', 'Quét Log Backend',
+      'Sửa Server Guide', 'Dọn Hậu Đạo Các', 'Gom API Example', 'Tẩy Config Lệch', 'Sắp Xếp Error Code',
+    ]),
+    ...createMissionGroup('clean', 3, [
+      'Dọn SQL Script', 'Sắp Xếp Migration', 'Thanh Tẩy Seed Cũ', 'Quét Query Rác', 'Dọn ERD Loạn Dây',
+      'Sửa Database Guide', 'Gom Backup Note', 'Tẩy Schema Mờ', 'Dọn Supabase Guide', 'Sắp Xếp Index Note',
+    ]),
+    ...createMissionGroup('clean', 4, [
+      'Dọn Dockerfile Cũ', 'Quét Env Mẫu', 'Thanh Tẩy Deploy Note', 'Sắp Xếp CI/CD Guide', 'Dọn Server Log',
+      'Tẩy Port Config', 'Gom Host Tutorial', 'Dọn Vercel Note', 'Sửa Discloud Guide', 'Sắp Xếp VPS Note',
+    ]),
+    ...createMissionGroup('clean', 5, [
+      'Dọn Git Branch Cũ', 'Sắp Xếp Commit Guide', 'Thanh Tẩy Merge Note', 'Quét PR Lạc Hướng', 'Dọn Changelog',
+      'Sửa GitHub Guide', 'Gom Workflow Team', 'Tẩy Conflict Note', 'Dọn Issue Cũ', 'Sắp Xếp Project Board',
+    ]),
+    ...createMissionGroup('clean', 6, [
+      'Dọn Security Checklist', 'Thanh Tẩy Token Lộ', 'Sắp Xếp Permission Guide', 'Quét Auth Rule', 'Dọn Policy Note',
+      'Gom Audit Checklist', 'Sửa Role Guide', 'Tẩy Secret Rác', 'Dọn OAuth Note', 'Sắp Xếp Backup Rule',
+    ]),
+    ...createMissionGroup('clean', 7, [
+      'Đại Dọn Tông Môn', 'Thanh Tẩy Uế Khí Sơn Môn', 'Dọn Tàng Kinh Loạn Các', 'Sửa Pháp Trận Onboarding', 'Khai Quang Nhập Môn Điện',
+      'Tổng Dọn Luyện Mã Đường', 'Tẩy Trần Chấp Pháp Đường', 'Gom Tinh Hoa Công Pháp', 'Sắp Xếp Đạo Trường', 'Tông Môn Đại Thanh Tẩy',
+    ]),
   ];
 
   const HUNT_REWARD_TOTAL_BY_REALM = [150, 300, 750, 1500, 3000, 5400, 9000, 12000, 16000, 22000, 30000];
@@ -406,6 +561,64 @@ const AUTO_DISCIPLE_THRESHOLDS = [
   const MISSION_TUVI_TOTAL_BY_REALM = [30, 90, 180, 360, 720, 1200, 1800, 2600, 3600, 5000, 7000];
 
 
+
+
+  function createCatalogItems(type, family, entries) {
+    return entries.map(([key, name, effect, extra = {}]) => ({
+      key,
+      name,
+      type,
+      family,
+      price: extra.price ?? getDefaultItemPrice(type, extra),
+      effect,
+      ...extra,
+    }));
+  }
+
+  function getDefaultItemPrice(type, extra = {}) {
+    if (type === 'artifact') return 700;
+    if (type === 'tool') return 450;
+    if (type === 'pill') return extra.cursedByDefault ? 900 : 260;
+    if (type === 'talisman') return 320;
+    if (type === 'bag') return 1200;
+    if (type === 'upgrade_stone') return 500;
+    return 300;
+  }
+
+  function createMissionGroup(type, minRealmIndex, names) {
+    return names.map((name) => ({
+      key: `${type}_${slugifyKey(name)}`,
+      type,
+      name,
+      minRealmIndex,
+      family: inferMissionFamily(name, type),
+    }));
+  }
+
+  function slugifyKey(value) {
+    return String(value)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/đ/g, 'd')
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 80);
+  }
+
+  function inferMissionFamily(name, type = 'hunt') {
+    const text = String(name).toLowerCase();
+    if (/git|merge|branch|commit|pull request|rebase|changelog|version/.test(text)) return 'git';
+    if (/deploy|docker|vercel|discloud|railway|oracle|ci|pipeline|nginx|pm2|linux|server|port|env|ssl|dns/.test(text)) return 'devops';
+    if (/database|sql|query|migration|seed|foreign|index|transaction|schema|backup|supabase|erd/.test(text)) return 'database';
+    if (/api|auth|jwt|session|middleware|cors|webhook|queue|endpoint|backend/.test(text)) return 'backend';
+    if (/ui|css|dom|state|component|responsive|layout|pixel|frontend|asset|theme|icon/.test(text)) return 'frontend';
+    if (/security|xss|csrf|permission|token|hash|secret|audit|zero day|oauth|policy/.test(text)) return 'security';
+    if (/ai|prompt|embedding|model|context|vector|agent|tool call|inference/.test(text)) return 'ai';
+    if (/readme|guide|note|link|tàng kinh|mục lục|thread|kênh|tài nguyên|workflow|project board/.test(text)) return 'docs';
+    if (/legacy|architecture|system|monolith|dependency|package|config/.test(text)) return 'system';
+    return type === 'clean' ? 'clean' : 'bug';
+  }
 
   const client = new Client({
     intents: [
@@ -560,6 +773,11 @@ const AUTO_DISCIPLE_THRESHOLDS = [
 
         if (interaction.commandName === 'tangitem') {
           await handleTangItem(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'nangpham') {
+          await handleNangPham(interaction);
           return;
         }
 
@@ -2587,13 +2805,25 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       lines.push(`Tỉ lệ thắng: ${Math.round(chance * 100)}%`);
       lines.push(`Mỗi thành viên nhận: +${rewardEach} cống hiến, +${tuViEach} tu vi.`);
 
+      const dropLines = [];
+
       for (const memberId of mission.party) {
         const userData = getOrCreateUser(users, memberId);
         normalizeMissionUserData(userData);
         addCongHien(userData, rewardEach);
         userData.tuViExp = Math.max(0, (Number(userData.tuViExp) || 0) + tuViEach);
+        const dropSummary = grantMissionSuccessDrop(userData, mission, isCounterKill);
+        if (dropSummary) {
+          dropLines.push(`<@${memberId}>: ${dropSummary}`);
+        }
         userData.lastMissionDate = getTodayString();
         await syncMissionMemberRoles(guild, memberId, userData);
+      }
+
+      if (dropLines.length > 0) {
+        lines.push('');
+        lines.push('**Thu hoạch:**');
+        lines.push(...dropLines.slice(0, 8));
       }
 
       return { summary: lines.join('\n') };
@@ -2652,6 +2882,134 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     }
 
     return { summary: lines.join('\n') };
+  }
+
+
+  function grantMissionSuccessDrop(userData, mission, isCounterKill = false) {
+    normalizeInventoryData(userData);
+
+    if (mission.type === 'hunt') {
+      return grantHuntDrop(userData, mission, isCounterKill);
+    }
+
+    return grantCleanCoDuyen(userData, mission, isCounterKill);
+  }
+
+  function grantHuntDrop(userData, mission, isCounterKill = false) {
+    const realmIndex = Math.floor((Number(mission.hiddenLevel) || 0) / MINOR_REALMS.length);
+    const drops = [];
+    const stoneKey = rollRefactorStoneDrop(realmIndex, isCounterKill);
+
+    if (stoneKey) {
+      const item = getShopItemByKey(stoneKey);
+      if (maybeAddInventoryDrop(userData, stoneKey, { quality: DEFAULT_ITEM_QUALITY })) {
+        drops.push(`nhận **${item?.name ?? stoneKey}**`);
+      } else {
+        drops.push(`rơi **${item?.name ?? stoneKey}** nhưng túi đã đầy`);
+      }
+    }
+
+    const itemDropChance = Math.min(0.45, 0.12 + realmIndex * 0.03 + (isCounterKill ? 0.08 : 0));
+    if (rollPercent(itemDropChance)) {
+      const item = rollMissionItemDrop(mission, 'hunt');
+      const cursed = rollPercent(Math.min(0.35, 0.06 + realmIndex * 0.025 + (isCounterKill ? 0.08 : 0)));
+      const quality = rollMissionDropQuality(realmIndex, isCounterKill);
+      if (item && maybeAddInventoryDrop(userData, item.key, { quality, cursed })) {
+        drops.push(`rơi **${item.name} - ${getQualityByKey(quality).name}${cursed ? ' [Nguyền]' : ''}**`);
+      }
+    }
+
+    return drops.join('; ');
+  }
+
+  function grantCleanCoDuyen(userData, mission, isCounterClean = false) {
+    const realmIndex = Math.floor((Number(mission.hiddenLevel) || 0) / MINOR_REALMS.length);
+    const eventRoll = Math.random();
+    const drops = [];
+
+    if (eventRoll < 0.18 + realmIndex * 0.01) {
+      const tuViGain = 60 + realmIndex * 45;
+      userData.tuViExp = Math.max(0, (Number(userData.tuViExp) || 0) + tuViGain);
+      drops.push(`Cơ Duyên: **Cao Nhân Chỉ Điểm**, +${tuViGain} tu vi`);
+    } else if (eventRoll < 0.36 + realmIndex * 0.01) {
+      const congHienGain = 30 + realmIndex * 25;
+      addCongHien(userData, congHienGain);
+      drops.push(`Cơ Duyên: **Linh Quang Chợt Hiện**, +${congHienGain} cống hiến`);
+    } else if (eventRoll < 0.58) {
+      const item = rollMissionItemDrop(mission, 'clean');
+      const quality = rollMissionDropQuality(realmIndex, isCounterClean);
+      if (item && maybeAddInventoryDrop(userData, item.key, { quality, cursed: rollPercent(0.04 + realmIndex * 0.01) })) {
+        drops.push(`Cơ Duyên: nhặt được **${item.name} - ${getQualityByKey(quality).name}**`);
+      }
+    } else if (eventRoll < 0.76) {
+      setTemporaryStatus(userData, 'Cơ Duyên Gia Thân', 12 * 60 * 60 * 1000, { tuViMultiplierValue: 1.15 });
+      drops.push('Cơ Duyên: **Cơ Duyên Gia Thân** 12 giờ');
+    } else if (eventRoll < 0.91) {
+      setTemporaryStatus(userData, 'Đạo Tâm Kiên Định', 12 * 60 * 60 * 1000, { dotPhaBonus: true });
+      drops.push('Cơ Duyên: **Đạo Tâm Kiên Định** 12 giờ');
+    } else {
+      setTemporaryStatus(userData, 'Tâm Ma Quấn Thân', 3 * 60 * 60 * 1000, { dotPhaPenalty: true });
+      drops.push('Hung duyên: **Tâm Ma Thoáng Hiện** 3 giờ');
+    }
+
+    return drops.join('; ');
+  }
+
+  function rollRefactorStoneDrop(realmIndex, isCounterKill = false) {
+    const bonus = isCounterKill ? 0.10 : 0;
+    const roll = Math.random();
+
+    if (realmIndex <= 1) {
+      if (roll < 0.28 + bonus) return 'tieu_refactor_linh_thach';
+      if (roll < 0.34 + bonus) return 'trung_refactor_linh_thach';
+      return null;
+    }
+
+    if (realmIndex <= 3) {
+      if (roll < 0.30 + bonus) return 'trung_refactor_linh_thach';
+      if (roll < 0.40 + bonus) return 'dai_refactor_linh_thach';
+      if (roll < 0.42 + bonus) return 'thien_refactor_linh_thach';
+      return null;
+    }
+
+    if (realmIndex <= 5) {
+      if (roll < 0.24 + bonus) return 'dai_refactor_linh_thach';
+      if (roll < 0.34 + bonus) return 'thien_refactor_linh_thach';
+      if (roll < 0.36 + bonus) return 'dao_refactor_linh_thach';
+      return null;
+    }
+
+    if (roll < 0.20 + bonus) return 'thien_refactor_linh_thach';
+    if (roll < 0.25 + bonus) return 'dao_refactor_linh_thach';
+    return null;
+  }
+
+  function rollMissionItemDrop(mission, source) {
+    const family = mission.family || inferMissionFamily(mission.name, mission.type);
+    const preferredTypes = source === 'clean' ? ['tool', 'pill', 'talisman'] : ['artifact', 'pill', 'talisman'];
+    const candidates = SHOP_ITEMS.filter((item) => preferredTypes.includes(item.type) && (item.family === family || item.family === source || item.family === 'clean' || item.family === 'pill' || item.family === 'talisman'));
+    const fallback = SHOP_ITEMS.filter((item) => preferredTypes.includes(item.type));
+    const pool = candidates.length > 0 ? candidates : fallback;
+    return pool[Math.floor(Math.random() * pool.length)] ?? null;
+  }
+
+  function rollMissionDropQuality(realmIndex, lucky = false) {
+    const roll = Math.random() + (lucky ? 0.08 : 0) + Math.min(0.18, realmIndex * 0.025);
+    if (roll > 0.985) return 'dao_pham';
+    if (roll > 0.94) return 'thien_pham';
+    if (roll > 0.84) return 'cuc_pham';
+    if (roll > 0.68) return 'thuong_pham';
+    if (roll > 0.42) return 'trung_pham';
+    if (roll > 0.18) return 'ha_pham';
+    return 'pham_pham';
+  }
+
+  function maybeAddInventoryDrop(userData, key, options = {}) {
+    if (!hasInventorySpace(userData)) {
+      return false;
+    }
+    addItemToInventory(userData, key, options);
+    return true;
   }
 
   function getMissionInjury(ratio, minPercent, maxPercent, minRestMs, maxRestMs) {
@@ -2935,10 +3293,6 @@ const AUTO_DISCIPLE_THRESHOLDS = [
         return;
       }
 
-      if (item.type === 'artifact' && userData.inventory.includes(item.key)) {
-        await interaction.editReply(`Đạo hữu đã sở hữu **${item.name}** rồi.`);
-        return;
-      }
 
       userData.congHienBalance = balance - item.price;
       addItemToInventory(userData, item.key);
@@ -3008,7 +3362,7 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     const userData = getOrCreateUser(users, interaction.user.id);
     normalizeInventoryData(userData);
 
-    if (!userData.inventory.includes(item.key) && item.key !== DEFAULT_STORAGE_BAG) {
+    if (!hasInventoryItem(userData, item.key) && item.key !== DEFAULT_STORAGE_BAG) {
       await interaction.reply({ content: `Đạo hữu chưa sở hữu **${item.name}**.`, flags: MessageFlags.Ephemeral });
       return;
     }
@@ -3058,7 +3412,7 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     const userData = getOrCreateUser(users, interaction.user.id);
     normalizeInventoryData(userData);
 
-    if (!userData.inventory.includes(item.key)) {
+    if (!hasInventoryItem(userData, item.key)) {
       await interaction.editReply(`Đạo hữu chưa có **${item.name}** trong túi.`);
       return;
     }
@@ -3140,7 +3494,7 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     normalizeInventoryData(senderData);
     normalizeInventoryData(targetData);
 
-    if (!senderData.inventory.includes(item.key)) {
+    if (!hasInventoryItem(senderData, item.key)) {
       await interaction.reply({ content: `Đạo hữu không có **${item.name}** trong túi.`, flags: MessageFlags.Ephemeral });
       return;
     }
@@ -3155,8 +3509,10 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       return;
     }
 
-    removeItemFromInventory(senderData, item.key);
-    addItemToInventory(targetData, item.key);
+    const transferIndex = getInventoryItemIndex(senderData, item.key);
+    const transferEntry = transferIndex >= 0 ? senderData.inventory[transferIndex] : item.key;
+    senderData.inventory.splice(transferIndex, 1);
+    targetData.inventory.push(transferEntry);
 
     saveUsers(users);
 
@@ -3170,6 +3526,114 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       );
 
     await interaction.reply({ embeds: [embed] });
+  }
+
+
+  async function handleNangPham(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Nâng phẩm chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    const key = interaction.options.getString('item', true);
+    const item = getShopItemByKey(key);
+
+    if (!item) {
+      await interaction.editReply('Không tìm thấy vật phẩm cần nâng phẩm. Hãy nhập mã vật phẩm trong /tuido hoặc /shop.');
+      return;
+    }
+
+    if (item.type === 'upgrade_stone') {
+      await interaction.editReply('Refactor Linh Thạch là vật phẩm dùng để nâng phẩm, không thể tự nâng phẩm.');
+      return;
+    }
+
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    normalizeInventoryData(userData);
+
+    const itemIndex = getInventoryItemIndex(userData, item.key, (entry) => getShopItemByKey(getInventoryItemKey(entry))?.type !== 'upgrade_stone');
+
+    if (itemIndex < 0) {
+      await interaction.editReply(`Đạo hữu chưa có **${item.name}** trong túi.`);
+      return;
+    }
+
+    let entry = normalizeInventoryEntry(userData.inventory[itemIndex], { keepRawString: false });
+    const quality = getInventoryItemQuality(entry);
+
+    if (quality.key === MAX_ITEM_QUALITY) {
+      await interaction.editReply(`**${getInventoryItemDisplay(entry)}** đã đạt phẩm chất tối cao.`);
+      return;
+    }
+
+    const rule = UPGRADE_RULES[quality.key];
+
+    if (!rule) {
+      await interaction.editReply('Phẩm chất hiện tại chưa hỗ trợ nâng tiếp.');
+      return;
+    }
+
+    const stone = getShopItemByKey(rule.stone);
+    const balance = getSpendableCongHien(userData);
+
+    if (balance < rule.cost) {
+      await interaction.editReply(`Không đủ cống hiến để nâng phẩm. Cần **${rule.cost}**, hiện có **${balance}**.`);
+      return;
+    }
+
+    if (!hasInventoryItem(userData, rule.stone)) {
+      await interaction.editReply(`Thiếu **${stone?.name ?? rule.stone}** để nâng phẩm. Diệt quái có tỉ lệ rơi Refactor Linh Thạch.`);
+      return;
+    }
+
+    const usedSafeDeploy = hasInventoryItem(userData, 'safe_deploy_phu');
+    const usedRollback = hasInventoryItem(userData, 'rollback_phu');
+    const successRate = Math.min(0.98, rule.successRate + (usedSafeDeploy ? 0.10 : 0));
+    const success = rollPercent(successRate);
+    const beforeText = getInventoryItemDisplay(entry);
+    const nextQuality = getQualityByKey(rule.next);
+    const lines = [];
+
+    removeItemFromInventory(userData, rule.stone);
+    if (usedSafeDeploy) removeItemFromInventory(userData, 'safe_deploy_phu');
+    if (usedRollback) removeItemFromInventory(userData, 'rollback_phu');
+    userData.congHienBalance = Math.max(0, balance - rule.cost);
+
+    if (success) {
+      entry.quality = rule.next;
+      lines.push('**Nâng phẩm thành công!**');
+      lines.push(`Từ **${quality.name}** lên **${nextQuality.name}**.`);
+    } else {
+      const curseChance = usedRollback ? 0 : rule.curseRate;
+      const gotCursed = rollPercent(curseChance);
+      lines.push('**Nâng phẩm thất bại.**');
+      lines.push('Vật phẩm giữ nguyên phẩm chất.');
+      if (gotCursed) {
+        entry.cursed = true;
+        entry.curseKey = entry.curseKey ?? getRandomCurseKey();
+        lines.push(`Vật phẩm bị nguyền: **${getCurseByKey(entry.curseKey)?.name ?? 'Không rõ'}**.`);
+      }
+    }
+
+    updateInventoryEntry(userData, itemIndex, entry);
+    saveUsers(users);
+
+    const embed = new EmbedBuilder()
+      .setColor(success ? GOLD : 0x64748b)
+      .setTitle('Nâng Phẩm Vật Phẩm')
+      .setDescription(lines.join('\n'))
+      .addFields(
+        { name: 'Vật phẩm', value: beforeText, inline: false },
+        { name: 'Chi phí', value: `${stone?.name ?? rule.stone} + ${rule.cost} cống hiến`, inline: false },
+        { name: 'Tỉ lệ thành công', value: `${Math.round(successRate * 100)}%`, inline: true },
+        { name: 'Bảo hộ', value: [usedSafeDeploy ? 'Safe Deploy Phù +10%' : null, usedRollback ? 'Rollback Phù chặn nguyền' : null].filter(Boolean).join('\n') || 'Không dùng', inline: true },
+        { name: 'Hiện tại', value: getInventoryItemDisplay(userData.inventory[itemIndex]), inline: false },
+      );
+
+    await interaction.editReply({ embeds: [embed] });
   }
 
   async function startTribulation(interaction, users, userData, member, currentTuVi, nextTuVi, level) {
@@ -4162,11 +4626,15 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       userData.inventory = [];
     }
 
+    userData.inventory = userData.inventory
+      .map((entry) => normalizeInventoryEntry(entry, { keepRawString: true }))
+      .filter(Boolean);
+
     if (!userData.storageBag || !getShopItemByKey(userData.storageBag) || getShopItemByKey(userData.storageBag)?.type !== 'bag') {
       userData.storageBag = DEFAULT_STORAGE_BAG;
     }
 
-    if (userData.equippedArtifact && !userData.inventory.includes(userData.equippedArtifact)) {
+    if (userData.equippedArtifact && !userData.inventory.some((entry) => getInventoryItemKey(entry) === userData.equippedArtifact)) {
       userData.equippedArtifact = null;
     }
 
@@ -4183,24 +4651,133 @@ const AUTO_DISCIPLE_THRESHOLDS = [
   }
 
   function getShopItemByKey(key) {
-    return SHOP_ITEMS.find((item) => item.key === key) ?? null;
+    const normalizedKey = getInventoryItemKey(key);
+    return SHOP_ITEMS.find((item) => item.key === normalizedKey) ?? null;
+  }
+
+  function getQualityByKey(key) {
+    return ITEM_QUALITIES.find((quality) => quality.key === key) ?? ITEM_QUALITIES[0];
+  }
+
+  function getQualityIndex(key) {
+    return Math.max(0, ITEM_QUALITIES.findIndex((quality) => quality.key === key));
+  }
+
+  function getNextQualityKey(key) {
+    const index = getQualityIndex(key);
+    return ITEM_QUALITIES[Math.min(ITEM_QUALITIES.length - 1, index + 1)]?.key ?? key;
+  }
+
+  function getCurseByKey(key) {
+    return CURSE_DEFINITIONS.find((curse) => curse.key === key) ?? null;
+  }
+
+  function getRandomCurseKey() {
+    return CURSE_DEFINITIONS[Math.floor(Math.random() * CURSE_DEFINITIONS.length)]?.key ?? 'runtime_error';
+  }
+
+  function createInventoryItem(key, options = {}) {
+    const catalogItem = getShopItemByKey(key);
+    const quality = options.quality ?? DEFAULT_ITEM_QUALITY;
+    const cursed = Boolean(options.cursed ?? catalogItem?.cursedByDefault ?? false);
+
+    return {
+      id: options.id ?? `item_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+      key,
+      quality,
+      cursed,
+      curseKey: cursed ? (options.curseKey ?? getRandomCurseKey()) : null,
+      createdAt: options.createdAt ?? Date.now(),
+    };
+  }
+
+  function normalizeInventoryEntry(entry, options = {}) {
+    if (!entry) return null;
+
+    if (typeof entry === 'string') {
+      return options.keepRawString ? entry : createInventoryItem(entry);
+    }
+
+    if (typeof entry === 'object' && entry.key) {
+      const quality = getQualityByKey(entry.quality)?.key ?? DEFAULT_ITEM_QUALITY;
+      const cursed = Boolean(entry.cursed);
+      return {
+        id: entry.id ?? `item_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+        key: String(entry.key),
+        quality,
+        cursed,
+        curseKey: cursed ? (entry.curseKey ?? getRandomCurseKey()) : null,
+        createdAt: Number(entry.createdAt) || Date.now(),
+      };
+    }
+
+    return null;
+  }
+
+  function getInventoryItemKey(entry) {
+    if (!entry) return null;
+    if (typeof entry === 'string') return entry;
+    if (typeof entry === 'object' && entry.key) return String(entry.key);
+    return null;
+  }
+
+  function getInventoryItemQuality(entry) {
+    if (typeof entry === 'object' && entry.quality) return getQualityByKey(entry.quality);
+    return getQualityByKey(DEFAULT_ITEM_QUALITY);
+  }
+
+  function isInventoryItemCursed(entry) {
+    return typeof entry === 'object' && Boolean(entry.cursed);
+  }
+
+  function getInventoryItemCurse(entry) {
+    return isInventoryItemCursed(entry) ? getCurseByKey(entry.curseKey) : null;
+  }
+
+  function getInventoryItemDisplay(entry) {
+    const key = getInventoryItemKey(entry);
+    const item = getShopItemByKey(key);
+    const quality = getInventoryItemQuality(entry);
+    const curse = getInventoryItemCurse(entry);
+    const name = item?.name ?? key;
+    const curseText = curse ? ` [Nguyền: ${curse.name}]` : '';
+    return `${name} - ${quality.name}${curseText}`;
+  }
+
+  function isStackableItem(item) {
+    return ['pill', 'talisman', 'upgrade_stone'].includes(item?.type);
   }
 
   function getShopPages() {
-    return [
-      { type: 'artifact', title: 'Pháp Bảo', note: 'Trang bị để tăng hiệu quả tu luyện.' },
+    const configs = [
+      { type: 'artifact', title: 'Pháp Bảo', note: 'Trang bị để tăng hiệu quả chiến đấu và tu luyện.' },
+      { type: 'tool', title: 'Dụng Cụ Quét Dọn', note: 'Tăng hiệu quả nhiệm vụ quét dọn và cơ duyên.' },
       { type: 'pill', title: 'Đan Dược', note: 'Dùng trực tiếp bằng /dung item.' },
+      { type: 'talisman', title: 'Phù Lục', note: 'Dùng hỗ trợ nhiệm vụ, nâng phẩm hoặc phòng thân.' },
+      { type: 'upgrade_stone', title: 'Refactor Linh Thạch', note: 'Vật phẩm đặc biệt dùng nâng phẩm với /nangpham.' },
       { type: 'bag', title: 'Túi Trữ Vật', note: 'Mở rộng sức chứa hành trang.' },
     ];
+    const pageSize = 8;
+    const pages = [];
+
+    for (const config of configs) {
+      const items = SHOP_ITEMS.filter((item) => item.type === config.type);
+      for (let offset = 0; offset < Math.max(1, items.length); offset += pageSize) {
+        pages.push({ ...config, offset, pageSize });
+      }
+    }
+
+    return pages;
   }
 
   function buildShopEmbed(userData, pageIndex = 0) {
     const pages = getShopPages();
     const safePageIndex = Math.max(0, Math.min(pages.length - 1, pageIndex));
     const page = pages[safePageIndex];
-    const lines = SHOP_ITEMS
+    const items = SHOP_ITEMS
       .filter((item) => item.type === page.type)
-      .map((item) => `\`${item.key}\` - **${item.name}**\nGiá: ${item.price} cống hiến\n${item.effect}`);
+      .slice(page.offset, page.offset + page.pageSize);
+    const lines = items.map((item) => `\`${item.key}\` - **${item.name}**\nGiá: ${item.price} cống hiến\n${item.effect}`);
 
     return new EmbedBuilder()
       .setColor(GOLD)
@@ -4208,7 +4785,7 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       .setDescription([
         `Cống hiến khả dụng: **${getSpendableCongHien(userData)}**`,
         `Trang ${safePageIndex + 1}/${pages.length} - ${page.note}`,
-        'Dùng `/mua item` để đổi vật phẩm.',
+        'Dùng `/mua item:<mã_vật_phẩm>` để đổi vật phẩm. Ví dụ: `/mua item:git_kiem`.',
       ].join('\n'))
       .addFields({ name: page.title, value: lines.join('\n\n') || 'Trang này chưa có vật phẩm.', inline: false });
   }
@@ -4251,14 +4828,36 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     return getInventoryUsed(userData) + slots <= getStorageCapacity(userData);
   }
 
-  function addItemToInventory(userData, key) {
+  function addItemToInventory(userData, key, options = {}) {
     normalizeInventoryData(userData);
-    userData.inventory.push(key);
+    userData.inventory.push(createInventoryItem(key, options));
   }
 
-  function removeItemFromInventory(userData, key) {
+  function getInventoryItemIndex(userData, key, predicate = null) {
     normalizeInventoryData(userData);
-    const index = userData.inventory.indexOf(key);
+    return userData.inventory.findIndex((entry) => {
+      if (getInventoryItemKey(entry) !== key) return false;
+      return typeof predicate === 'function' ? predicate(entry) : true;
+    });
+  }
+
+  function getInventoryEntry(userData, key, predicate = null) {
+    const index = getInventoryItemIndex(userData, key, predicate);
+    return index >= 0 ? userData.inventory[index] : null;
+  }
+
+  function hasInventoryItem(userData, key, predicate = null) {
+    return getInventoryItemIndex(userData, key, predicate) >= 0;
+  }
+
+  function countInventoryItem(userData, key) {
+    normalizeInventoryData(userData);
+    return userData.inventory.filter((entry) => getInventoryItemKey(entry) === key).length;
+  }
+
+  function removeItemFromInventory(userData, key, predicate = null) {
+    normalizeInventoryData(userData);
+    const index = getInventoryItemIndex(userData, key, predicate);
 
     if (index >= 0) {
       userData.inventory.splice(index, 1);
@@ -4268,10 +4867,22 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     return false;
   }
 
+  function updateInventoryEntry(userData, index, entry) {
+    normalizeInventoryData(userData);
+    if (index >= 0 && index < userData.inventory.length) {
+      userData.inventory[index] = normalizeInventoryEntry(entry, { keepRawString: false });
+      return userData.inventory[index];
+    }
+    return null;
+  }
+
   function getItemTypeText(type) {
     return {
       artifact: 'Pháp bảo',
+      tool: 'Dụng cụ quét dọn',
       pill: 'Đan dược',
+      talisman: 'Phù lục',
+      upgrade_stone: 'Refactor Linh Thạch',
       bag: 'Túi trữ vật',
     }[type] ?? 'Vật phẩm';
   }
@@ -4288,11 +4899,27 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     userData.congHienBalance = Math.max(0, (Number(userData.congHienBalance) || 0) + value);
   }
 
+  function getBestInventoryEntryByKey(userData, key) {
+    normalizeInventoryData(userData);
+    const entries = userData.inventory.filter((entry) => getInventoryItemKey(entry) === key);
+    if (entries.length === 0) return null;
+    return entries.sort((a, b) => getQualityIndex(getInventoryItemQuality(b).key) - getQualityIndex(getInventoryItemQuality(a).key))[0];
+  }
+
   function getEquippedArtifact(userData) {
     normalizeInventoryData(userData);
     const item = getShopItemByKey(userData.equippedArtifact);
-
-    return item?.type === 'artifact' ? item : null;
+    if (item?.type !== 'artifact') return null;
+    const entry = getBestInventoryEntryByKey(userData, item.key);
+    const quality = getInventoryItemQuality(entry);
+    const curse = getInventoryItemCurse(entry);
+    return {
+      ...item,
+      quality,
+      cursed: Boolean(curse),
+      curse,
+      displayName: `${item.name} - ${quality.name}${curse ? ` [Nguyền: ${curse.name}]` : ''}`,
+    };
   }
 
   function getEquippedArtifactMultiplier(userData, member, source = 'general', context = {}) {
@@ -4302,6 +4929,18 @@ const AUTO_DISCIPLE_THRESHOLDS = [
 
     if (!artifact) {
       return { value, summary: 'Không có pháp bảo đang trang bị.' };
+    }
+
+    const qualityMultiplier = artifact.quality?.multiplier ?? 1;
+    const qualityBonus = 1 + ((qualityMultiplier - 1) * 0.35);
+    value *= qualityBonus;
+    if (qualityBonus > 1) {
+      parts.push(`${artifact.quality.name} tăng hiệu ứng pháp bảo x${qualityBonus.toFixed(2)}`);
+    }
+
+    if (artifact.cursed) {
+      value *= 1.08;
+      parts.push(`Đồ bị nguyền [${artifact.curse?.name ?? 'Không rõ'}] mạnh hơn nhưng có tác dụng phụ.`);
     }
 
     if (artifact.key === 'ban_phim_linh_khi') {
@@ -4331,7 +4970,7 @@ const AUTO_DISCIPLE_THRESHOLDS = [
 
     return {
       value,
-      summary: parts.length > 0 ? parts.join('\n') : `${artifact.name} đang trang bị, không có bonus cho nguồn này.`,
+      summary: parts.length > 0 ? parts.join('\n') : `${artifact.displayName} đang trang bị, không có bonus cho nguồn này.`,
     };
   }
 
@@ -4354,17 +4993,24 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       return [];
     }
 
-    const counts = userData.inventory.reduce((map, key) => {
-      map[key] = (map[key] ?? 0) + 1;
+    const counts = userData.inventory.reduce((map, entry) => {
+      const key = getInventoryItemKey(entry);
+      const item = getShopItemByKey(key);
+      const quality = getInventoryItemQuality(entry);
+      const curse = getInventoryItemCurse(entry);
+      const groupKey = `${key}|${quality.key}|${curse?.key ?? 'normal'}`;
+      if (!map[groupKey]) {
+        map[groupKey] = { key, item, quality, curse, count: 0 };
+      }
+      map[groupKey].count += 1;
       return map;
     }, {});
 
-    return Object.entries(counts).map(([key, count]) => {
-      const item = getShopItemByKey(key);
+    return Object.values(counts).map(({ key, item, quality, curse, count }) => {
       const equippedMark = userData.equippedArtifact === key || userData.storageBag === key ? ' `[đang dùng]`' : '';
-
+      const curseText = curse ? ` [Nguyền: ${curse.name}]` : '';
       return item
-        ? `\`${key}\` - **${item.name}** x${count}${equippedMark}`
+        ? `\`${key}\` - **${item.name}** - ${quality.name}${curseText} x${count}${equippedMark}`
         : `\`${key}\` x${count}`;
     });
   }
@@ -5041,7 +5687,7 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       normalized.storageBag = DEFAULT_STORAGE_BAG;
     }
 
-    if (normalized.equippedArtifact && !normalized.inventory.includes(normalized.equippedArtifact)) {
+    if (normalized.equippedArtifact && !normalized.inventory.some((entry) => getInventoryItemKey(entry) === normalized.equippedArtifact)) {
       normalized.equippedArtifact = null;
     }
 
