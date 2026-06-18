@@ -419,7 +419,7 @@ Hiển thị đạo hồ của thành viên:
 
 ### `/coduyen`
 
-Mỗi người dùng được cầu cơ duyên 24 giờ một lần. Cơ duyên chia thành `Cát duyên` và `Hung duyên`; nếu gặp `Thiên Cơ Che Mờ`, lần cầu duyên sau được tăng nhẹ may mắn gặp cát duyên.
+Mỗi người dùng được cầu cơ duyên 24 giờ một lần. Cơ duyên có 49 biến thể, chia thành `Cát duyên` và `Hung duyên`; nếu gặp `Thiên Cơ Che Mờ`, lần cầu duyên sau được tăng nhẹ may mắn gặp cát duyên.
 
 Nhóm cát duyên:
 
@@ -463,6 +463,15 @@ Người hỏi hoặc quản sự tông môn được chấm câu trả lời. `
 ### `/truyenthua de_tu`
 
 Người đủ tư cách truyền thừa có thể nhận một đệ tử. Profile sẽ hiển thị `Sư phụ` và số lượng `Đệ tử`.
+
+### Shop Tông Môn
+
+- `/shop`: mở shop nhiều trang bằng nút `Trang trước` / `Trang sau`.
+- `/mua item`: dùng cống hiến khả dụng để mua pháp bảo, đan dược hoặc túi trữ vật.
+- `/tuido`: xem túi trữ vật.
+- `/trangbi item`: trang bị pháp bảo hoặc dùng túi trữ vật.
+- `/dung item`: dùng đan dược.
+- `/tangitem thanhvien item`: tặng vật phẩm cho đồng môn.
 
 ### `/bangxephang loai`
 

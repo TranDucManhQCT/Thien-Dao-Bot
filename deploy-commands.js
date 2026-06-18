@@ -178,6 +178,155 @@ const commands = [
           { name: 'Streak', value: 'streak' },
         ),
     ),
+
+  new SlashCommandBuilder()
+    .setName('trangthai')
+    .setDescription('Xem trạng thái, bế quan, túi trữ vật và pháp bảo hiện tại.')
+    .setDMPermission(false),
+  new SlashCommandBuilder()
+    .setName('bequan')
+    .setDescription('Bế quan tu luyện trong một khoảng thời gian.')
+    .setDMPermission(false)
+    .addStringOption((option) =>
+      option
+        .setName('thoigian')
+        .setDescription('Thời gian bế quan.')
+        .setRequired(true)
+        .addChoices(
+          { name: '1 giờ', value: '1h' },
+          { name: '2 giờ', value: '2h' },
+          { name: '4 giờ', value: '4h' },
+          { name: '8 giờ', value: '8h' },
+        ),
+    ),
+  new SlashCommandBuilder()
+    .setName('xuatquan')
+    .setDescription('Xuất quan và nhận tu vi nếu đã bế quan đủ thời gian.')
+    .setDMPermission(false),
+  new SlashCommandBuilder()
+    .setName('shop')
+    .setDescription('Xem Shop Tông Môn: pháp bảo, đan dược và túi trữ vật.')
+    .setDMPermission(false),
+  new SlashCommandBuilder()
+    .setName('mua')
+    .setDescription('Dùng điểm cống hiến để mua vật phẩm trong Shop Tông Môn.')
+    .setDMPermission(false)
+    .addStringOption((option) =>
+      option
+        .setName('item')
+        .setDescription('Vật phẩm muốn mua.')
+        .setRequired(true)
+        .addChoices(
+          { name: 'Git Kiếm', value: 'git_kiem' },
+          { name: 'SQL Trận Bàn', value: 'sql_tran_ban' },
+          { name: 'Docker Hồ Lô', value: 'docker_ho_lo' },
+          { name: 'IDE Khai Ngộ', value: 'ide_khai_ngo' },
+          { name: 'Bàn Phím Linh Khí', value: 'ban_phim_linh_khi' },
+          { name: 'Chuột Trảm Bug', value: 'chuot_tram_bug' },
+          { name: 'Hồi Nguyên Đan', value: 'hoi_nguyen_dan' },
+          { name: 'Linh Khí Đan', value: 'linh_khi_dan' },
+          { name: 'Tĩnh Tâm Đan', value: 'tinh_tam_dan' },
+          { name: 'Công Hiến Đan', value: 'cong_hien_dan' },
+          { name: 'Túi Thô', value: 'tui_tho' },
+          { name: 'Túi Linh Mộc', value: 'tui_linh_moc' },
+          { name: 'Túi Huyền Thiết', value: 'tui_huyen_thiet' },
+          { name: 'Túi Càn Khôn', value: 'tui_can_khon' },
+          { name: 'Túi Tiên Thiên', value: 'tui_tien_thien' },
+        ),
+    ),
+  new SlashCommandBuilder()
+    .setName('tuido')
+    .setDescription('Xem túi trữ vật và vật phẩm đang sở hữu.')
+    .setDMPermission(false),
+  new SlashCommandBuilder()
+    .setName('trangbi')
+    .setDescription('Trang bị pháp bảo hoặc dùng túi trữ vật đã sở hữu.')
+    .setDMPermission(false)
+    .addStringOption((option) =>
+      option
+        .setName('item')
+        .setDescription('Vật phẩm muốn trang bị hoặc dùng.')
+        .setRequired(true)
+        .addChoices(
+          { name: 'Git Kiếm', value: 'git_kiem' },
+          { name: 'SQL Trận Bàn', value: 'sql_tran_ban' },
+          { name: 'Docker Hồ Lô', value: 'docker_ho_lo' },
+          { name: 'IDE Khai Ngộ', value: 'ide_khai_ngo' },
+          { name: 'Bàn Phím Linh Khí', value: 'ban_phim_linh_khi' },
+          { name: 'Chuột Trảm Bug', value: 'chuot_tram_bug' },
+          { name: 'Túi Thô', value: 'tui_tho' },
+          { name: 'Túi Linh Mộc', value: 'tui_linh_moc' },
+          { name: 'Túi Huyền Thiết', value: 'tui_huyen_thiet' },
+          { name: 'Túi Càn Khôn', value: 'tui_can_khon' },
+          { name: 'Túi Tiên Thiên', value: 'tui_tien_thien' },
+        ),
+    ),
+  new SlashCommandBuilder()
+    .setName('dung')
+    .setDescription('Dùng đan dược trong túi trữ vật.')
+    .setDMPermission(false)
+    .addStringOption((option) =>
+      option
+        .setName('item')
+        .setDescription('Đan dược muốn dùng.')
+        .setRequired(true)
+        .addChoices(
+          { name: 'Hồi Nguyên Đan', value: 'hoi_nguyen_dan' },
+          { name: 'Linh Khí Đan', value: 'linh_khi_dan' },
+          { name: 'Tĩnh Tâm Đan', value: 'tinh_tam_dan' },
+          { name: 'Công Hiến Đan', value: 'cong_hien_dan' },
+        ),
+    ),
+  new SlashCommandBuilder()
+    .setName('tangitem')
+    .setDescription('Tặng vật phẩm trong túi cho đồng môn khác.')
+    .setDMPermission(false)
+    .addUserOption((option) =>
+      option
+        .setName('thanhvien')
+        .setDescription('Đồng môn nhận vật phẩm.')
+        .setRequired(true),
+    )
+    .addStringOption((option) =>
+      option
+        .setName('item')
+        .setDescription('Vật phẩm muốn tặng.')
+        .setRequired(true)
+        .addChoices(
+          { name: 'Git Kiếm', value: 'git_kiem' },
+          { name: 'SQL Trận Bàn', value: 'sql_tran_ban' },
+          { name: 'Docker Hồ Lô', value: 'docker_ho_lo' },
+          { name: 'IDE Khai Ngộ', value: 'ide_khai_ngo' },
+          { name: 'Bàn Phím Linh Khí', value: 'ban_phim_linh_khi' },
+          { name: 'Chuột Trảm Bug', value: 'chuot_tram_bug' },
+          { name: 'Hồi Nguyên Đan', value: 'hoi_nguyen_dan' },
+          { name: 'Linh Khí Đan', value: 'linh_khi_dan' },
+          { name: 'Tĩnh Tâm Đan', value: 'tinh_tam_dan' },
+          { name: 'Công Hiến Đan', value: 'cong_hien_dan' },
+          { name: 'Túi Linh Mộc', value: 'tui_linh_moc' },
+          { name: 'Túi Huyền Thiết', value: 'tui_huyen_thiet' },
+          { name: 'Túi Càn Khôn', value: 'tui_can_khon' },
+          { name: 'Túi Tiên Thiên', value: 'tui_tien_thien' },
+        ),
+    ),
+
+  new SlashCommandBuilder()
+    .setName('nhiemvu')
+    .setDescription('Mở Trảm Yêu Bảng hôm nay bằng menu và nút chọn hiện đại.')
+    .setDMPermission(false),
+  new SlashCommandBuilder()
+    .setName('setupnhiemvu')
+    .setDescription('Thiết lập số nhiệm vụ mở trong Trảm Yêu Bảng hôm nay.')
+    .setDMPermission(false)
+    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+    .addIntegerOption((option) =>
+      option
+        .setName('soluong')
+        .setDescription('Số nhiệm vụ mở hôm nay, mặc định 5, giới hạn 3-15.')
+        .setRequired(true)
+        .setMinValue(3)
+        .setMaxValue(15),
+    ),
 ].map((command) => command.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
