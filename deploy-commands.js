@@ -779,8 +779,13 @@ const commands = [
     ),
   new SlashCommandBuilder()
     .setName('xuatson')
-    .setDescription('Mở bảng Xuất Sơn bằng nút bấm: nhận công án, chuẩn bị, xử lý, làm tiếp phase.' )
+    .setDescription('Mở bảng Xuất Sơn cá nhân: nhận công án rồi vào khung hành động bằng nút.' )
     .setDMPermission(false),
+  new SlashCommandBuilder()
+    .setName('setupxuatson')
+    .setDescription('Dựng bảng công án Xuất Sơn public: ai đang làm, ai chưa nhận, nút nhận.')
+    .setDMPermission(false)
+    .setDefaultMemberPermissions(ADMIN_PERMISSION),
   new SlashCommandBuilder()
     .setName('doiconghien')
     .setDescription('Đổi vật chứng/nguyên liệu Dị Lỗi lấy điểm cống hiến tông môn.')

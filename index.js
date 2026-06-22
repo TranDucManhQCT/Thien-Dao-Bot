@@ -284,10 +284,13 @@
   const BICANH_EVENT_ACTION_BUTTON_PREFIX = 'td_bc_event:';
   const BICANH_QUICK_FIGHT_BUTTON_PREFIX = 'td_bc_quick:';
   const XUAT_SON_PICK_BUTTON_PREFIX = 'td_xs_pick:';
+  const XUAT_SON_VIEW_BUTTON_PREFIX = 'td_xs_view:';
   const XUAT_SON_METHOD_BUTTON_PREFIX = 'td_xs_method:';
   const XUAT_SON_PREP_BUTTON_PREFIX = 'td_xs_prep:';
-  const XUAT_SON_FLOW_VERSION = 'xuatson_chain_buttons_v3';
+  const XUAT_SON_FLOW_VERSION = 'xuatson_case_pages_v5';
   const XUAT_SON_ACTIVE_TTL_MS = 18 * 60 * 60 * 1000;
+  const XUAT_SON_STATUS_ROLE_NAME = 'Đang Xuất Sơn';
+  const XUAT_SON_PUBLIC_PICK_OWNER = 'public';
   const HOMNAY_NAV_BUTTON_PREFIX = 'td_today_nav:';
   const BICANH_ROUTE_BUTTON_PREFIX = 'td_bc_route:';
   const BICANH_COMBAT_SKILL_PREFIX = 'td_bc_skill:';
@@ -3971,8 +3974,39 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     return daoNghe.knownBlueprints.length;
   }
 
+  function normalizeCraftMaterialCosts(input) {
+    const raw = Array.isArray(input)
+      ? input
+      : Array.isArray(input?.materialCosts)
+        ? input.materialCosts
+        : Array.isArray(input?.costs)
+          ? input.costs
+          : Array.isArray(input?.materials)
+            ? input.materials
+            : Array.isArray(input?.cost)
+              ? input.cost
+              : input && typeof input === 'object'
+                ? Object.entries(input).map(([key, value]) => ({ key, amount: value }))
+                : [];
+
+    return raw
+      .filter((cost) => cost && typeof cost === 'object')
+      .map((cost) => {
+        const key = String(cost.key || cost.materialKey || cost.id || cost.name || '').trim();
+        const material = getCraftMaterialByKey(key);
+        const amount = Math.max(1, Math.ceil(Number(cost.amount ?? cost.qty ?? cost.quantity ?? cost.value ?? 1) || 1));
+        return {
+          ...cost,
+          key,
+          amount,
+          name: cost.name || material?.name || getDaoNgheDefinition(key)?.materialName || key || 'Nguyên liệu không rõ',
+        };
+      })
+      .filter((cost) => cost.key);
+  }
+
   function getCraftCostLines(recipe, userData = null) {
-    return recipe.costs.map((cost) => {
+    return normalizeCraftMaterialCosts(recipe?.costs).map((cost) => {
       const have = userData ? getCraftMaterialAmount(userData, cost.key) : 0;
       const enough = !userData || have >= cost.amount;
       return `${enough ? '✅' : '❌'} ${cost.name}: **${have}/${cost.amount}**`;
@@ -4010,9 +4044,10 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
   function getAdjustedCraftCosts(recipe, userData) {
     const spec = getUserCraftSpec(userData);
     const mult = Math.max(0.5, Number(spec.costMult) || 1);
+    const baseCosts = normalizeCraftMaterialCosts(recipe?.costs);
     return {
-      congHienCost: Math.max(0, Math.round(recipe.congHienCost * mult)),
-      materialCosts: recipe.costs.map((cost) => ({ ...cost, amount: Math.max(1, Math.ceil(cost.amount * mult)) })),
+      congHienCost: Math.max(0, Math.round((Number(recipe?.congHienCost) || 0) * mult)),
+      materialCosts: baseCosts.map((cost) => ({ ...cost, amount: Math.max(1, Math.ceil((Number(cost.amount) || 1) * mult)) })),
     };
   }
 
@@ -4574,6 +4609,11 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
         return;
       }
 
+      if ((interaction.isChatInputCommand?.() || interaction.isButton?.() || interaction.isStringSelectMenu?.() || interaction.isModalSubmit?.())
+        && await shouldBlockInteractionForXuatSon(interaction)) {
+        return;
+      }
+
       if (interaction.isChatInputCommand()) {
         if (interaction.commandName === 'setup-linhcan' || interaction.commandName === 'setupnhapmon') {
           await handleSetupLinhCan(interaction);
@@ -4792,6 +4832,11 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
 
         if (interaction.commandName === 'xuatson') {
           await handleXuatSon(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'setupxuatson') {
+          await handleSetupXuatSon(interaction);
           return;
         }
 
@@ -5094,6 +5139,11 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
 
         if (interaction.customId.startsWith(BICANH_COMBAT_ESCAPE_PREFIX)) {
           await handleBicanhCombatEscape(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(XUAT_SON_VIEW_BUTTON_PREFIX)) {
+          await handleXuatSonViewButton(interaction);
           return;
         }
 
@@ -9492,18 +9542,56 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     return `${XUAT_SON_PICK_BUTTON_PREFIX}${userId || 'self'}:${getTodayString()}:${index}`;
   }
 
+  function buildPublicXuatSonPickButtonId(index) {
+    return `${XUAT_SON_PICK_BUTTON_PREFIX}${XUAT_SON_PUBLIC_PICK_OWNER}:${getTodayString()}:${index}`;
+  }
+
+  function buildXuatSonViewButtonId(userId, index) {
+    return `${XUAT_SON_VIEW_BUTTON_PREFIX}${userId || 'self'}:${getTodayString()}:${index}`;
+  }
+
+  function buildPublicXuatSonViewButtonId(index) {
+    return `${XUAT_SON_VIEW_BUTTON_PREFIX}${XUAT_SON_PUBLIC_PICK_OWNER}:${getTodayString()}:${index}`;
+  }
+
+  function parseXuatSonIndexedButton(customId, prefix, userId, label = 'Nút') {
+    const raw = String(customId || '').slice(prefix.length);
+    const parts = raw.split(':');
+    if (parts.length >= 3) {
+      const [ownerId, date, indexText] = parts;
+      const isPublic = ownerId === XUAT_SON_PUBLIC_PICK_OWNER;
+      if (!isPublic && ownerId !== String(userId)) return { ok: false, reason: `${label} này không thuộc về đạo hữu. Mở /xuatson của riêng mình, khỏi bấm ké hồ sơ người khác.` };
+      if (date !== getTodayString()) return { ok: false, reason: `${label} này đã cũ. Bấm /xuatson hoặc nhờ dựng lại /setupxuatson.` };
+      const index = Number(indexText);
+      return Number.isInteger(index) && index >= 0 ? { ok: true, index, public: isPublic } : { ok: false, reason: `${label} không hợp lệ. Bấm /xuatson để làm mới.` };
+    }
+    const legacyIndex = Number(raw);
+    return Number.isInteger(legacyIndex) && legacyIndex >= 0 ? { ok: true, index: legacyIndex, public: false } : { ok: false, reason: `${label} không hợp lệ. Bấm /xuatson để làm mới.` };
+  }
+
   function parseXuatSonPickIndex(customId, userId) {
+    const parsed = parseXuatSonIndexedButton(customId, XUAT_SON_PICK_BUTTON_PREFIX, userId, 'Nút Nhận');
+    if (!parsed.ok) return parsed;
+    return parsed;
+  }
+
+  function parseXuatSonViewIndex(customId, userId) {
+    return parseXuatSonIndexedButton(customId, XUAT_SON_VIEW_BUTTON_PREFIX, userId, 'Nút Xem');
+  }
+
+  function parseXuatSonPickIndexLegacy_UNUSED(customId, userId) {
     const raw = String(customId || '').slice(XUAT_SON_PICK_BUTTON_PREFIX.length);
     const parts = raw.split(':');
     if (parts.length >= 3) {
       const [ownerId, date, indexText] = parts;
-      if (ownerId !== String(userId)) return { ok: false, reason: 'Nút Nhận này không thuộc về đạo hữu. Mở `/xuatson` của riêng mình, đừng bấm ké công án như nhặt ví trong chợ.' };
-      if (date !== getTodayString()) return { ok: false, reason: 'Nút Nhận này đã cũ. Bấm `/xuatson` để làm mới danh sách hôm nay.' };
+      const isPublic = ownerId === XUAT_SON_PUBLIC_PICK_OWNER;
+      if (!isPublic && ownerId !== String(userId)) return { ok: false, reason: 'Nút Nhận này không thuộc về đạo hữu. Mở `/xuatson` của riêng mình, đừng bấm ké công án như nhặt ví trong chợ.' };
+      if (date !== getTodayString()) return { ok: false, reason: 'Nút Nhận này đã cũ. Bấm `/xuatson` hoặc nhờ trưởng lão dựng lại bảng công án.' };
       const index = Number(indexText);
-      return Number.isInteger(index) && index >= 0 ? { ok: true, index } : { ok: false, reason: 'Nút Nhận không hợp lệ. Bấm `/xuatson` để làm mới.' };
+      return Number.isInteger(index) && index >= 0 ? { ok: true, index, public: isPublic } : { ok: false, reason: 'Nút Nhận không hợp lệ. Bấm `/xuatson` để làm mới.' };
     }
     const legacyIndex = Number(raw);
-    return Number.isInteger(legacyIndex) && legacyIndex >= 0 ? { ok: true, index: legacyIndex } : { ok: false, reason: 'Nút Nhận không hợp lệ. Bấm `/xuatson` để làm mới.' };
+    return Number.isInteger(legacyIndex) && legacyIndex >= 0 ? { ok: true, index: legacyIndex, public: false } : { ok: false, reason: 'Nút Nhận không hợp lệ. Bấm `/xuatson` để làm mới.' };
   }
 
   function buildXuatSonPrepButtonId(userId, active, prepKey) {
@@ -9569,10 +9657,13 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
   function getXuatSonStepText(userData, member = null) {
     const active = normalizeActiveXuatSonState(userData);
     const quota = getXuatSonRemaining(userData, member);
-    if (!active?.id) return `Bước 1/3: **chọn và nhận công án**. Lượt hôm nay: **${quota.used}/${quota.limit}** đã dùng · còn **${quota.remaining}**.`;
+    if (!active?.id) return `Bảng công án: **chọn Xem # để đọc trang vụ** hoặc **Nhận # để rời tông môn**. Lượt hôm nay: **${quota.used}/${quota.limit}** đã dùng · còn **${quota.remaining}**.`;
+    const mission = getXuatSonById(active.id);
+    const state = getXuatSonCaseState(userData, mission);
     const prep = getXuatSonPrepConfig(active.prep);
-    if (!prep) return `Đã nhận công án. Bước 2/3: chọn **chuẩn bị**. Chưa được xử lý/kết thúc ở bước này.`;
-    return `Đã chuẩn bị: **${prep.name}**. Bước 3/3: chọn cách xử lý.`;
+    if (state.stage >= 2) return `Đã vào **${getXuatSonStageLabel(state.stage)}**. Chọn cách kết án, không cần bước chuẩn bị nữa.`;
+    if (!prep) return `Đã nhận công án. Đang ở **${getXuatSonStageLabel(state.stage)}**: chọn hành động điều tra/truy nguồn trước.`;
+    return `Đã chọn: **${getXuatSonPrepLabelForStage(state.stage, prep.key)}**. Bây giờ chọn cách xử lý để ra kết quả pha này.`;
   }
 
   function getRecommendedMissionsForToday(member, count = 3) {
@@ -9678,8 +9769,12 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
       .slice(0, 300);
     if (!recipes.length) recipes = CRAFT_RECIPE_CATALOG.filter((recipe) => !dao || recipe.professionKey === dao.key).slice(0, 120);
     const scored = recipes.map((recipe) => {
-      const costs = getAdjustedCraftCosts(recipe, userData);
-      const missing = costs.map((cost) => ({ ...cost, have: getCraftMaterialAmount(userData, cost.key), missing: Math.max(0, Number(cost.amount) - getCraftMaterialAmount(userData, cost.key)) }));
+      const adjustedCosts = getAdjustedCraftCosts(recipe, userData);
+      const costs = normalizeCraftMaterialCosts(adjustedCosts.materialCosts);
+      const missing = costs.map((cost) => {
+        const have = getCraftMaterialAmount(userData, cost.key);
+        return { ...cost, have, missing: Math.max(0, Number(cost.amount) - have) };
+      });
       const missingTotal = missing.reduce((sum, item) => sum + item.missing, 0);
       const haveCount = missing.reduce((sum, item) => sum + Math.min(item.have, item.amount), 0);
       const costTotal = missing.reduce((sum, item) => sum + item.amount, 0);
@@ -9906,6 +10001,76 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
       .slice(0, Math.max(1, count));
   }
 
+  function getDailyPublicXuatSonChoices(guildOrId = null, count = 6) {
+    const guildId = typeof guildOrId === 'string' ? guildOrId : (guildOrId?.id || 'guild');
+    const seed = `${getTodayString()}:${guildId}:xuatson-public-board`;
+    const pickFrom = (pool, want, tag) => [...pool]
+      .sort((a, b) => deterministicScoreForKey(a.id, `${seed}:${tag}`) - deterministicScoreForKey(b.id, `${seed}:${tag}`))
+      .slice(0, Math.max(0, want));
+    const groups = [
+      ...pickFrom(XUAT_SON_CATALOG.filter((entry) => entry.rank <= 2), 2, 'easy'),
+      ...pickFrom(XUAT_SON_CATALOG.filter((entry) => entry.rank >= 3 && entry.rank <= 5), 2, 'mid'),
+      ...pickFrom(XUAT_SON_CATALOG.filter((entry) => entry.rank >= 6), 2, 'hard'),
+    ];
+    const unique = [];
+    const seen = new Set();
+    for (const entry of groups) {
+      if (!entry || seen.has(entry.id)) continue;
+      seen.add(entry.id);
+      unique.push(entry);
+      if (unique.length >= count) break;
+    }
+    if (unique.length < count) {
+      for (const entry of pickFrom(XUAT_SON_CATALOG, count, 'fill')) {
+        if (!seen.has(entry.id)) {
+          seen.add(entry.id);
+          unique.push(entry);
+          if (unique.length >= count) break;
+        }
+      }
+    }
+    return unique.slice(0, Math.max(1, count));
+  }
+
+  function getXuatSonRequirementText(mission) {
+    const realmText = TU_VI_REALMS[Math.max(0, Number(mission?.minRealmIndex) || 0)] || 'Phàm Nhân';
+    return `${realmText}+ · ${mission?.minRole || 'Ký Danh Đệ Tử'}+`;
+  }
+
+  function hasXuatSonRoleAccess(member, minRoleName) {
+    if (!member?.roles?.cache) return false;
+    const minRole = String(minRoleName || 'Ký Danh Đệ Tử');
+    const sectPosition = getMemberSectPosition(member);
+    if (sectPosition && SENIOR_DISCIPLE_APPROVER_ROLE_NAMES.includes(sectPosition)) return true;
+    if (DISCIPLE_RANK_ROLES.includes(minRole)) return hasDiscipleRankAtLeast(member, minRole);
+    if (SECT_POSITION_ROLE_NAMES.includes(minRole)) {
+      const currentIndex = SECT_POSITION_ROLE_NAMES.indexOf(sectPosition);
+      const minIndex = SECT_POSITION_ROLE_NAMES.indexOf(minRole);
+      return currentIndex >= 0 && minIndex >= 0 && currentIndex <= minIndex;
+    }
+    return member.roles.cache.some((role) => role.name === minRole);
+  }
+
+  function getXuatSonAccess(member, userData, mission) {
+    const currentLevel = getCurrentTuViLevel(member, Number(userData?.tuViExp) || 0);
+    const currentTuVi = getTuViByLevel(currentLevel);
+    const minRealm = Math.max(0, Number(mission?.minRealmIndex) || 0);
+    const hasRealm = currentTuVi.realmIndex >= minRealm;
+    const hasRole = hasXuatSonRoleAccess(member, mission?.minRole || 'Ký Danh Đệ Tử');
+    const missing = [];
+    if (!hasRealm) missing.push(`tu vi cần **${TU_VI_REALMS[minRealm] || 'Phàm Nhân'}+**, hiện **${currentTuVi.realm} ${currentTuVi.minor}**`);
+    if (!hasRole) missing.push(`thân phận cần **${mission?.minRole || 'Ký Danh Đệ Tử'}+**`);
+    return { ok: hasRealm && hasRole, hasRealm, hasRole, currentTuVi, missing };
+  }
+
+  function getXuatSonAccessMessage(member, userData, mission) {
+    const access = getXuatSonAccess(member, userData, mission);
+    if (access.ok) return 'Đủ điều kiện nhận.';
+    const missingText = access.missing.map((line) => `• ${line}`).join('\n');
+    return `Chưa đủ điều kiện nhận công án **${mission?.name || 'này'}**.\n${missingText}`;
+  }
+
+
   const DISCORD_EMBED_FIELD_VALUE_LIMIT = 1024;
   const SAFE_EMBED_FIELD_VALUE_LIMIT = 950;
 
@@ -9915,11 +10080,82 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     return `${text.slice(0, Math.max(0, maxLength - 24)).trimEnd()}\n… đã rút gọn`;
   }
 
-  function buildCompactXuatSonLine(entry, index) {
+  function getXuatSonCaseBlueprint(mission) {
+    const family = getSourceFamilyByKey(mission?.family) || { name: mission?.familyName || 'Dị Lỗi', short: 'Source', targetStat: 'Logic' };
+    const actionKey = String(mission?.actionType || 'dieutra');
+    const titleMap = {
+      dieutra: `Tiếng Vọng ${family.short} Dưới Giếng Cũ`,
+      hotong: `Đoàn Hộ Tống Qua Vùng ${family.short} Nhiễu`,
+      tranap: `Bóng Đen ${family.short} Ngoài Bìa Rừng`,
+      thuhoi: `Đạo Mã ${family.short} Thất Lạc`,
+      cuunguoi: `Đệ Tử Mất Tích Trong Vùng ${family.short}`,
+      vaphaptac: `Pháp Tắc ${family.short} Bị Vá Sai`,
+      phongan: `Vết Nứt ${family.short} Sau Miếu Cũ`,
+      theodoi: `Dấu Chân Force Push Trong Chợ Đêm`,
+      chungtich: `Chứng Tích ${family.short} Trên Bia Đá`,
+      phaaotang: `Ảo Tầng Cache Nuốt Người Qua Đường`,
+      tinh_anh: `Tinh Anh ${family.short} Giữ Cửa Núi`,
+      ketan: `Hồ Sơ Kết Án ${family.short} Bị Bẻ Nhánh`,
+    };
+    const title = titleMap[actionKey] || `${mission?.actionName || 'Công Án'} · ${family.short}`;
+    const hooks = {
+      dieutra: `Ba đêm liền, dân vùng phụ cận nghe tiếng chuông vọng lên từ một nơi không còn ai canh giữ. Linh khí không biến mất ngay, nó bị kéo lùi từng đoạn như một bản ghi cũ cứ tự khôi phục.`,
+      hotong: `Một đoàn vận chuyển vật chứng phải băng qua vùng nhiễu. Đường không xa, nhưng mỗi lần đổi hướng, dấu chân cả đoàn lại quay về chỗ cũ. Rất tiện nếu muốn phát điên.`,
+      tranap: `Ngoài bìa rừng có thứ gì đó học cách bắt chước khí tức đệ tử tông môn. Nó không mạnh nhất, nhưng biết chờ người sơ hở, đúng là có năng khiếu làm phiền.`,
+      thuhoi: `Một đoạn Đạo Mã thất lạc được rao bán ở chợ đêm. Người bán nói đó là pháp bảo cổ, nhưng dấu ${family.short} trên lõi quá mới để gọi là cổ vật.`,
+      cuunguoi: `Một đệ tử ngoại viện gửi tín phù cầu cứu rồi im bặt. Tín phù còn nóng, nhưng tọa độ bên trong bị thay bằng một vòng lặp trống.`,
+      vaphaptac: `Pháp tắc địa phương bị vá tạm quá nhiều lần. Ban ngày trông bình thường, ban đêm thì tự sinh thêm luật ngu ngốc như thể có ai deploy mà không review.`,
+      phongan: `Sau miếu cũ xuất hiện một vết nứt nhỏ. Không lớn, không ồn, chỉ đều đặn ăn mòn linh mạch như một khoản nợ chưa ai chịu nhận.`,
+      theodoi: `Một tà tu Force Push để lại dấu commit bẩn trong nhiều thôn trấn. Hắn không giấu quá kỹ, hoặc hắn muốn có người đuổi theo. Cả hai khả năng đều phiền.`,
+      chungtich: `Trên bia đá ven đường xuất hiện văn tự không thuộc thời đại này. Mỗi lần đọc lại, nội dung đổi một chữ, vừa đủ để phá mọi kết luận non tay.`,
+      phaaotang: `Một tầng ảo cache nuốt người qua đường rồi trả họ về sau một canh giờ, không mất mạng nhưng mất ký ức gần nhất. Rất nhân văn, nếu bỏ qua phần kinh dị.`,
+      tinh_anh: `Một tinh anh Dị Lỗi chiếm điểm giao mạch. Nó không vội tấn công, chỉ buộc linh khí quanh vùng đi theo luật của nó.`,
+      ketan: `Một hồ sơ công án cũ tự mở lại. Dấu kết án vẫn còn, nhưng vật chứng bên trong đã bị thay bằng bản khác. Tông môn gọi là bất thường, người tỉnh táo gọi là rắc rối.`,
+    };
+    const npcPool = [
+      'lão thôn trưởng nói quá ít',
+      'đạo đồng sửa trận từng biến mất một đêm',
+      'người bán pháp bảo cũ ở chợ đêm',
+      'đệ tử đưa tin bị mất một đoạn ký ức',
+      'bà lão giữ miếu nhớ chuyện hai mươi năm trước',
+      'tán tu lạ mặt luôn đứng ngoài đám đông',
+    ];
+    const seed = `${mission?.id || 'xs'}:npc`;
+    const suspects = [...npcPool]
+      .sort((a, b) => deterministicScoreForKey(a, seed) - deterministicScoreForKey(b, seed))
+      .slice(0, 3);
+    const cluePool = [
+      `Vết ${family.short} còn nóng`,
+      'Lời khai mâu thuẫn',
+      'Log linh khí bị rollback',
+      'Pháp trận phụ bị sửa tay',
+      'Dấu giày không để lại bóng',
+      'Vật chứng bị tráo lõi',
+    ];
+    const clues = [...cluePool]
+      .sort((a, b) => deterministicScoreForKey(a, `${mission?.id || 'xs'}:clue`) - deterministicScoreForKey(b, `${mission?.id || 'xs'}:clue`));
+    return {
+      title,
+      hook: hooks[actionKey] || hooks.dieutra,
+      family,
+      suspects,
+      clues,
+      phaseIntros: [
+        'Giai đoạn 1/3 · Dò dấu vết: thu lời khai, đọc hiện trường, xác định loại nhiễu thật sự.',
+        'Giai đoạn 2/3 · Truy nguồn: lần theo dấu Source, đối chiếu pháp trận, tìm kẻ hoặc thứ đứng sau.',
+        'Giai đoạn 3/3 · Kết án: chọn cách xử lý cuối cùng. Chứng cứ càng sạch, hậu quả càng ít bẩn.',
+      ],
+    };
+  }
+
+  function buildCompactXuatSonLine(entry, index, options = {}) {
+    const holderText = options.holderText ? `\nTrạng thái: ${options.holderText}` : '';
+    const story = getXuatSonCaseBlueprint(entry);
     return [
-      `**${index + 1}. ${entry.actionName}** · ${entry.rankLabel}`,
-      `Hệ: ${entry.familyName} · Rủi ro: **${entry.risk}**`,
-      'Bấm nút **Nhận #** tương ứng để nhận công án. Không cần nhập mã tay.',
+      `**#${index + 1} · ${story.title}**`,
+      `Loại: **${entry.actionName}** · Hệ: **${entry.familyName}** · Rủi ro: **${entry.risk}**`,
+      `Yêu cầu: **${getXuatSonRequirementText(entry)}**`,
+      `Mở đầu: ${story.hook.slice(0, 220)}${story.hook.length > 220 ? '…' : ''}${holderText}`,
     ].join('\n');
   }
 
@@ -9928,42 +10164,190 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     const key = mission?.id || 'unknown';
     const current = userData.xuatSonCases[key] && typeof userData.xuatSonCases[key] === 'object' ? userData.xuatSonCases[key] : {};
     const stage = Math.max(0, Math.min(4, Number(current.stage) || 0));
-    return { key, stage, clues: Math.max(0, Number(current.clues) || 0), resolved: Boolean(current.resolved) };
+    return {
+      key,
+      stage,
+      clues: Math.max(0, Number(current.clues) || 0),
+      evidence: Math.max(0, Math.min(5, Number(current.evidence) || 0)),
+      publicTrust: Math.max(0, Math.min(5, Number(current.publicTrust ?? 3) || 3)),
+      sourceNoise: Math.max(0, Math.min(5, Number(current.sourceNoise ?? 2) || 2)),
+      clueList: Array.isArray(current.clueList) ? current.clueList.slice(0, 6) : [],
+      resolved: Boolean(current.resolved),
+      lastOutcome: typeof current.lastOutcome === 'string' ? current.lastOutcome : '',
+    };
   }
 
   function getXuatSonStageLabel(stage) {
     if (stage <= 0) return 'Vụ 1/3 · Dò dấu vết';
     if (stage === 1) return 'Vụ 2/3 · Truy nguồn';
     if (stage === 2) return 'Vụ 3/3 · Kết án';
-    return 'Chuỗi đã phá án · có thể farm hậu truyện';
+    return 'Chuỗi đã phá án · hậu truyện';
+  }
+
+  function getXuatSonStageActions(stage) {
+    if (stage <= 0) return {
+      clue: { label: 'Tra hỏi dân làng', desc: '+Dân tâm, có thể lấy lời khai sạch.' },
+      gear: { label: 'Dò linh mạch', desc: 'Dùng chỉ số Source/pháp bảo để đọc dấu nhiễu.' },
+      ally: { label: 'Nhờ địa phương dẫn đường', desc: 'An toàn hơn, ít bỏ sót đường phụ.' },
+      rush: { label: 'Xuống hiện trường', desc: 'Nhanh, dễ lấy chứng cứ mạnh, rủi ro cao hơn.' },
+    };
+    if (stage === 1) return {
+      clue: { label: 'Đối chiếu log', desc: '+Chứng cứ, giảm kết án sai.' },
+      gear: { label: 'Dựng trận phản truy', desc: 'Dùng pháp bảo để bám nguồn nhiễu.' },
+      ally: { label: 'Gọi đồng môn phục kích', desc: 'Giảm rủi ro khi truy nhầm nguồn.' },
+      rush: { label: 'Theo dấu nóng', desc: 'Nhanh và lời hơn, nhưng dễ tăng Nhiễu Source.' },
+    };
+    return {
+      commit: { label: 'Phong ấn sạch', desc: 'Chính Đạo, Công Đức, ít hậu quả.' },
+      va_tam: { label: 'Chuyển hóa', desc: 'Trung Đạo, vật chứng tốt, rủi ro vừa.' },
+      force_push: { label: 'Cưỡng ép hấp thu', desc: 'Tà Đạo, thưởng lớn, Tâm Ma/Nghiệp tăng.' },
+    };
+  }
+
+  function getXuatSonPrepLabelForStage(stage, prepKey) {
+    return getXuatSonStageActions(stage)?.[prepKey]?.label || getXuatSonPrepConfig(prepKey)?.button || prepKey;
+  }
+
+  function getXuatSonMethodLabelForStage(stage, methodKey) {
+    return getXuatSonStageActions(stage)?.[methodKey]?.label || getXuatSonMethodConfig(methodKey)?.name || methodKey;
   }
 
   function getXuatSonCaseText(userData, mission) {
     if (!mission) return 'Chưa nhận công án.';
     const state = getXuatSonCaseState(userData, mission);
-    const family = getSourceFamilyByKey(mission.family);
-    const stageNote = state.stage <= 0
-      ? `Mục tiêu: thu manh mối **${family.short}** để mở nhánh truy nguồn.`
-      : state.stage === 1
-        ? 'Mục tiêu: truy đúng nguồn nhiễu. Dò manh mối giúp giảm rủi ro, Đi thẳng dễ bỏ sót chứng tích.'
-        : state.stage === 2
-          ? 'Mục tiêu: kết án/phong ấn. Lựa chọn Đạo Lộ sẽ để lại hậu quả dài hạn.'
-          : 'Công án đã thành hồ sơ tông môn. Làm lại để farm vật chứng, nhưng thưởng chuỗi lớn đã nhận rồi.';
-    return `${getXuatSonStageLabel(state.stage)} · Manh mối ${state.clues}/3
-${stageNote}`;
+    const story = getXuatSonCaseBlueprint(mission);
+    const stageIntro = story.phaseIntros[Math.min(2, state.stage)] || story.phaseIntros[0];
+    const clueText = state.clueList.length ? state.clueList.map((item) => `• ${item}`).join('\n') : 'Chưa có manh mối rõ ràng.';
+    const suspects = story.suspects.map((item) => `• ${item}`).join('\n');
+    return `${stageIntro}\n\n**Chỉ số công án**\nChứng cứ: **${state.evidence}/5** · Dân tâm: **${state.publicTrust}/5** · Nhiễu Source: **${state.sourceNoise}/5**\nManh mối pha hiện tại: **${state.clues}/3**\n\n**Nghi vấn/NPC**\n${suspects}\n\n**Manh mối đã thu**\n${clueText}`;
+  }
+
+  function buildXuatSonCasePageEmbed(member, userData, mission, options = {}) {
+    const story = getXuatSonCaseBlueprint(mission);
+    const state = getXuatSonCaseState(userData, mission);
+    const access = member && userData ? getXuatSonAccess(member, userData, mission) : { ok: false, missing: [] };
+    const active = normalizeActiveXuatSonState(userData || {});
+    const isActive = active?.id === mission?.id;
+    const embed = new EmbedBuilder()
+      .setColor(access.ok ? 0x38bdf8 : 0x94a3b8)
+      .setTitle(`📜 Công Án #${Number(options.index || 0) + 1} · ${story.title}`)
+      .setDescription(story.hook)
+      .addFields(
+        { name: 'Phân loại', value: `Loại: **${mission.actionName}**\nHệ Dị Lỗi: **${mission.familyName}**\nĐộ khó: **${mission.rankLabel}** · Rủi ro: **${mission.risk}**`, inline: false },
+        { name: 'Điều kiện nhận', value: `Yêu cầu: **${getXuatSonRequirementText(mission)}**\nTrạng thái của bạn: ${access.ok ? '✅ Đủ điều kiện' : `❌ Chưa đủ\n${access.missing.map((line) => `• ${line}`).join('\n')}`}`, inline: false },
+        { name: isActive ? 'Trang vụ đang xử lý' : 'Trang vụ', value: getXuatSonCaseText(userData, mission), inline: false },
+      );
+    if (!isActive) embed.addFields({ name: 'Cách chơi', value: 'Bấm **Nhận công án** để rời tông môn và mở khung hành động riêng. Mỗi giai đoạn là một trang nhỏ: dò dấu vết → truy nguồn → kết án.', inline: false });
+    return embed;
   }
 
   function previewXuatSonMethods(userData, member, mission) {
     if (!mission) return 'Chưa có công án để xem trước.';
-    const prepKey = userData?.activeXuatSon?.prep || 'rush';
+    const state = getXuatSonCaseState(userData, mission);
+    const prepKey = userData?.activeXuatSon?.prep || (state.stage >= 2 ? 'clue' : 'rush');
     return ['commit', 'va_tam', 'force_push'].map((methodKey) => {
       const method = getXuatSonMethodConfig(methodKey);
       const chance = getXuatSonSuccessChance(userData, member, mission, method.key, prepKey);
       const risk = method.key === 'commit' ? 'rủi ro thấp' : method.key === 'force_push' ? 'rủi ro cao' : 'rủi ro vừa';
       const pathGain = method.key === 'commit' ? getPathChoicePreview(userData, 'commit', 3) : method.key === 'force_push' ? getPathChoicePreview(userData, 'force_push', 4) : getPathChoicePreview(userData, 'neutral', 3);
-      return `**${method.name}**: ${Math.round(chance * 100)}% · thưởng x${method.rewardMult.toFixed(2)} · ${risk} · ${pathGain}`;
+      return `**${getXuatSonMethodLabelForStage(state.stage, method.key)}**: ${Math.round(chance * 100)}% · thưởng x${method.rewardMult.toFixed(2)} · ${risk} · ${pathGain}`;
     }).join('\n');
   }
+
+  function getActiveXuatSonEntries(users) {
+    return Object.entries(users || {})
+      .map(([userId, raw]) => {
+        const data = normalizeUserData(raw || createDefaultUserData());
+        const active = normalizeActiveXuatSonState(data);
+        const mission = active?.id ? getXuatSonById(active.id) : null;
+        if (!mission) return null;
+        const caseState = getXuatSonCaseState(data, mission);
+        const prep = getXuatSonPrepConfig(active.prep);
+        return { userId, data, active, mission, caseState, prep };
+      })
+      .filter(Boolean);
+  }
+
+  function getXuatSonHolderText(users, mission) {
+    const holders = getActiveXuatSonEntries(users).filter((entry) => entry.mission.id === mission.id);
+    if (!holders.length) return 'Chưa ai nhận.';
+    return holders
+      .slice(0, 3)
+      .map((entry) => `<@${entry.userId}> · ${getXuatSonStageLabel(entry.caseState.stage)}${entry.prep ? ` · ${entry.prep.name}` : ' · đang chuẩn bị'}`)
+      .join('\n');
+  }
+
+  function getXuatSonBoardRosterText(guild, users) {
+    const activeEntries = getActiveXuatSonEntries(users);
+    const activeText = activeEntries.length
+      ? activeEntries.slice(0, 8).map((entry) => `• <@${entry.userId}>: **${entry.mission.actionName}** · ${getXuatSonStageLabel(entry.caseState.stage)}`).join('\n')
+      : 'Chưa ai nhận công án. Một khoảnh khắc yên bình hiếm có, chắc sắp hết.';
+
+    const activeIds = new Set(activeEntries.map((entry) => entry.userId));
+    const knownMembers = guild?.members?.cache
+      ? [...guild.members.cache.values()].filter((member) => !member.user?.bot && member.roles?.cache?.some((role) => role.name === DAI_DAO_TONG_ROLE_NAME || DISCIPLE_RANK_ROLES.includes(role.name)))
+      : [];
+    const idle = knownMembers.filter((member) => !activeIds.has(member.id)).slice(0, 12);
+    const idleText = idle.length
+      ? idle.map((member) => `${member}`).join(' · ')
+      : 'Không có dữ liệu cache thành viên chưa nhận. Discord lại giấu sổ hộ khẩu, rất bình thường.';
+
+    return { activeText, idleText, activeCount: activeEntries.length, idleCount: Math.max(0, knownMembers.length - activeEntries.length) };
+  }
+
+  function buildXuatSonBoardEmbed(guild, users, viewerMember = null, viewerData = null) {
+    const choices = getDailyPublicXuatSonChoices(guild, 6);
+    const roster = getXuatSonBoardRosterText(guild, users);
+    const embed = new EmbedBuilder()
+      .setColor(0x38bdf8)
+      .setTitle('📜 Bảng Công Án Xuất Sơn · Công khai')
+      .setDescription([
+        'Bảng này dùng để xem **hôm nay có vụ nào**, **ai đang làm gì**, và ai chưa nhận công án trong dữ liệu hiện có.',
+        'Bấm **Xem #** để mở trang riêng của từng vụ: bối cảnh, NPC/nghi vấn, điều kiện, manh mối. Bấm **Nhận #** mới rời tông môn và mở khung hành động riêng. Bảng không bị biến thành hồ sơ cá nhân của một người, vì cuối cùng UI cũng biết phép lịch sự.',
+      ].join('\n'));
+
+    embed.addFields(
+      { name: 'Đang Xuất Sơn', value: clampEmbedFieldValue(roster.activeText), inline: false },
+      { name: `Chưa nhận trong cache (${roster.idleCount})`, value: clampEmbedFieldValue(roster.idleText), inline: false },
+    );
+
+    for (let offset = 0; offset < choices.length; offset += 2) {
+      const value = choices.slice(offset, offset + 2).map((entry, localIndex) => {
+        const index = offset + localIndex;
+        const holderText = getXuatSonHolderText(users, entry);
+        const accessText = viewerMember && viewerData ? `\nĐiều kiện của bạn: ${getXuatSonAccess(viewerMember, viewerData, entry).ok ? '✅ đủ' : '❌ chưa đủ'}` : '';
+        return `${buildCompactXuatSonLine(entry, index, { holderText })}${accessText}`;
+      }).join('\n\n');
+      embed.addFields({ name: offset === 0 ? 'Công án mở hôm nay' : `Công án ${offset + 1}-${Math.min(choices.length, offset + 2)}`, value: clampEmbedFieldValue(value), inline: false });
+    }
+
+    embed.setFooter({ text: '/setupxuatson dựng bảng public. Xem # = đọc hồ sơ, Nhận # = rời tông môn và xử lý bằng nút.' });
+    return embed;
+  }
+
+  function buildPublicXuatSonBoardRows(guild) {
+    const choices = getDailyPublicXuatSonChoices(guild, 6);
+    const rows = [];
+    for (let offset = 0; offset < choices.length; offset += 3) {
+      const row = new ActionRowBuilder();
+      for (const [localIndex] of choices.slice(offset, offset + 3).entries()) {
+        const index = offset + localIndex;
+        row.addComponents(new ButtonBuilder().setCustomId(buildPublicXuatSonViewButtonId(index)).setLabel(`Xem #${index + 1}`).setStyle(ButtonStyle.Secondary));
+      }
+      if (row.components.length) rows.push(row);
+    }
+    for (let offset = 0; offset < choices.length; offset += 3) {
+      const row = new ActionRowBuilder();
+      for (const [localIndex, entry] of choices.slice(offset, offset + 3).entries()) {
+        const index = offset + localIndex;
+        const style = Number(entry.rank) >= 7 ? ButtonStyle.Danger : Number(entry.rank) >= 4 ? ButtonStyle.Primary : ButtonStyle.Success;
+        row.addComponents(new ButtonBuilder().setCustomId(buildPublicXuatSonPickButtonId(index)).setLabel(`Nhận #${index + 1}`).setStyle(style));
+      }
+      if (row.components.length) rows.push(row);
+    }
+    return rows.slice(0, 4);
+  }
+
 
   function buildXuatSonEmbed(member, userData) {
     const active = normalizeActiveXuatSonState(userData);
@@ -9979,27 +10363,31 @@ ${stageNote}`;
 
     if (active?.id) {
       const mission = getXuatSonById(active.id);
+      const state = getXuatSonCaseState(userData, mission);
       const prep = getXuatSonPrepConfig(active.prep);
+      const story = mission ? getXuatSonCaseBlueprint(mission) : null;
+      embed.setTitle(mission ? `📜 ${story.title}` : 'Xuất Sơn Lệnh · Công Án Ngoài Tông');
+      embed.setDescription(mission ? story.hook : 'Công án cũ không còn hợp lệ. Bấm Hủy rồi nhận lại.');
       embed.addFields(
         {
-          name: 'Công án đang nhận',
-          value: mission
-            ? `${buildCompactXuatSonLine(mission, 0).replace(/^`#1` /, '')}\n${getXuatSonCaseText(userData, mission)}`
-            : 'Công án cũ không còn hợp lệ. Bấm Hủy rồi nhận lại.',
+          name: 'Trang công án đang xử lý',
+          value: mission ? getXuatSonCaseText(userData, mission) : 'Công án cũ không còn hợp lệ.',
           inline: false,
         },
         {
           name: 'Trạng thái hiện tại',
-          value: prep
-            ? `Đã chuẩn bị: **${prep.name}**. Bây giờ mới được chọn **An toàn / Cân bằng / Mạo hiểm**.`
-            : 'Chưa chọn chuẩn bị. Hãy chọn **Dò manh mối / Mang pháp bảo / Gọi đồng môn / Đi thẳng**.',
+          value: state.stage >= 2
+            ? 'Đã tới giai đoạn **Kết án**. Chọn Phong ấn sạch / Chuyển hóa / Cưỡng ép hấp thu.'
+            : prep
+              ? `Đã chọn: **${getXuatSonPrepLabelForStage(state.stage, prep.key)}**. Bây giờ chọn cách xử lý pha này.`
+              : `Chưa chọn hành động pha. Hãy chọn một nút bên dưới cho **${getXuatSonStageLabel(state.stage)}**.`,
           inline: false,
         },
       );
-      if (mission && prep) {
-        embed.addFields({ name: 'Xem trước trước khi bấm xử lý', value: previewXuatSonMethods(userData, member, mission), inline: false });
+      if (mission && (prep || state.stage >= 2)) {
+        embed.addFields({ name: 'Xem trước trước khi bấm', value: previewXuatSonMethods(userData, member, mission), inline: false });
       }
-      embed.setFooter({ text: 'Đang có công án active nên danh sách Nhận # bị ẩn để tránh nhận nhầm/reroll.' });
+      embed.setFooter({ text: 'Một công án = một trang. Làm xong pha sẽ hiện nút tiếp tục ngay trong khung này.' });
       return embed;
     }
 
@@ -10025,7 +10413,7 @@ ${stageNote}`;
       });
     }
 
-    embed.setFooter({ text: 'Bấm Nhận # để bắt đầu. /xuatson chỉ dùng để mở giao diện, các bước sau ưu tiên nút bấm.' });
+    embed.setFooter({ text: 'Bấm Xem # để đọc từng vụ. Bấm Nhận # để bắt đầu; các bước sau ưu tiên nút bấm.' });
     return embed;
   }
 
@@ -10033,21 +10421,31 @@ ${stageNote}`;
     const userId = member?.id || 'self';
     const active = normalizeActiveXuatSonState(userData);
     if (active?.id) {
+      const mission = getXuatSonById(active.id);
+      const state = getXuatSonCaseState(userData, mission);
       const prep = getXuatSonPrepConfig(active.prep);
+      if (state.stage >= 2) {
+        return [new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(buildXuatSonMethodButtonId(userId, active, 'commit')).setLabel(getXuatSonMethodLabelForStage(state.stage, 'commit')).setStyle(ButtonStyle.Success),
+          new ButtonBuilder().setCustomId(buildXuatSonMethodButtonId(userId, active, 'va_tam')).setLabel(getXuatSonMethodLabelForStage(state.stage, 'va_tam')).setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId(buildXuatSonMethodButtonId(userId, active, 'force_push')).setLabel(getXuatSonMethodLabelForStage(state.stage, 'force_push')).setStyle(ButtonStyle.Danger),
+          new ButtonBuilder().setCustomId(buildXuatSonMethodButtonId(userId, active, 'huy')).setLabel('Hủy').setStyle(ButtonStyle.Secondary),
+        )];
+      }
       if (!prep) {
         return [new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId(buildXuatSonPrepButtonId(userId, active, 'clue')).setLabel('Dò manh mối').setStyle(ButtonStyle.Success),
-          new ButtonBuilder().setCustomId(buildXuatSonPrepButtonId(userId, active, 'gear')).setLabel('Mang pháp bảo').setStyle(ButtonStyle.Primary),
-          new ButtonBuilder().setCustomId(buildXuatSonPrepButtonId(userId, active, 'ally')).setLabel('Gọi đồng môn').setStyle(ButtonStyle.Primary),
-          new ButtonBuilder().setCustomId(buildXuatSonPrepButtonId(userId, active, 'rush')).setLabel('Đi thẳng').setStyle(ButtonStyle.Danger),
+          new ButtonBuilder().setCustomId(buildXuatSonPrepButtonId(userId, active, 'clue')).setLabel(getXuatSonPrepLabelForStage(state.stage, 'clue')).setStyle(ButtonStyle.Success),
+          new ButtonBuilder().setCustomId(buildXuatSonPrepButtonId(userId, active, 'gear')).setLabel(getXuatSonPrepLabelForStage(state.stage, 'gear')).setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId(buildXuatSonPrepButtonId(userId, active, 'ally')).setLabel(getXuatSonPrepLabelForStage(state.stage, 'ally')).setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId(buildXuatSonPrepButtonId(userId, active, 'rush')).setLabel(getXuatSonPrepLabelForStage(state.stage, 'rush')).setStyle(ButtonStyle.Danger),
           new ButtonBuilder().setCustomId(buildXuatSonMethodButtonId(userId, active, 'huy')).setLabel('Hủy').setStyle(ButtonStyle.Secondary),
         )];
       }
       return [new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(buildXuatSonMethodButtonId(userId, active, 'commit')).setLabel('An toàn').setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId(buildXuatSonMethodButtonId(userId, active, 'va_tam')).setLabel('Cân bằng').setStyle(ButtonStyle.Primary),
-        new ButtonBuilder().setCustomId(buildXuatSonMethodButtonId(userId, active, 'force_push')).setLabel('Mạo hiểm').setStyle(ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId(buildXuatSonPrepButtonId(userId, active, 'reset')).setLabel('Đổi chuẩn bị').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(buildXuatSonMethodButtonId(userId, active, 'commit')).setLabel('Xử lý an toàn').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(buildXuatSonMethodButtonId(userId, active, 'va_tam')).setLabel('Xử lý cân bằng').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(buildXuatSonMethodButtonId(userId, active, 'force_push')).setLabel('Xử lý mạo hiểm').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId(buildXuatSonPrepButtonId(userId, active, 'reset')).setLabel('Đổi hành động').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(buildXuatSonMethodButtonId(userId, active, 'huy')).setLabel('Hủy').setStyle(ButtonStyle.Secondary),
       )];
     }
@@ -10061,6 +10459,14 @@ ${stageNote}`;
     const rows = [];
     for (let offset = 0; offset < choices.length; offset += 3) {
       const row = new ActionRowBuilder();
+      for (const [localIndex] of choices.slice(offset, offset + 3).entries()) {
+        const index = offset + localIndex;
+        row.addComponents(new ButtonBuilder().setCustomId(buildXuatSonViewButtonId(userId, index)).setLabel(`Xem #${index + 1}`).setStyle(ButtonStyle.Secondary));
+      }
+      if (row.components.length) rows.push(row);
+    }
+    for (let offset = 0; offset < choices.length; offset += 3) {
+      const row = new ActionRowBuilder();
       for (const [localIndex, entry] of choices.slice(offset, offset + 3).entries()) {
         const index = offset + localIndex;
         const label = `Nhận #${index + 1}`;
@@ -10069,24 +10475,30 @@ ${stageNote}`;
       }
       if (row.components.length) rows.push(row);
     }
-    return rows.slice(0, 2);
+    return rows.slice(0, 4);
   }
 
-  function buildXuatSonResultEmbed(mission, normalizedMethod, summary) {
+  function buildXuatSonResultEmbed(mission, normalizedMethod, summary, userData = null) {
     const methodText = normalizedMethod === 'force_push' ? 'Mạo hiểm' : normalizedMethod === 'va_tam' ? 'Cân bằng' : 'An toàn';
+    const story = getXuatSonCaseBlueprint(mission);
+    const state = userData ? getXuatSonCaseState(userData, mission) : null;
     const detailText = normalizedMethod === 'force_push'
-      ? 'Thưởng cao hơn, tăng rủi ro Nghiệp Lực/Nợ kỹ thuật.'
+      ? 'Thưởng cao hơn, tăng rủi ro Nghiệp Lực/Nợ kỹ thuật. Nói cách khác: nhanh, mạnh, và có mùi kiện tụng với thiên đạo.'
       : normalizedMethod === 'va_tam'
-        ? 'Thưởng vừa, có chút Nợ kỹ thuật.'
-        : 'Ổn định nhất, tăng Công Đức Source và chỉ số bền.';
-    return new EmbedBuilder()
+        ? 'Thưởng vừa, có chút Nợ kỹ thuật. Cách làm của người thực dụng, tức là rất đáng nghi nhưng hiệu quả.'
+        : 'Ổn định nhất, tăng Công Đức Source và chỉ số bền. Ít hào nhoáng, ít cháy nhà.';
+    const embed = new EmbedBuilder()
       .setColor(normalizedMethod === 'force_push' ? 0xef4444 : normalizedMethod === 'commit' ? 0x22c55e : 0xf59e0b)
-      .setTitle(`Xuất Sơn hoàn tất · ${methodText}`)
-      .setDescription(`**${mission.name}**\n${mission.lore}`)
+      .setTitle(`Kết quả công án · ${story.title}`)
+      .setDescription(story.hook)
       .addFields(
-        { name: 'Cách xử lý', value: detailText, inline: false },
-        { name: 'Thu hoạch', value: summary.slice(0, 1000), inline: false },
+        { name: 'Cách xử lý', value: `${methodText} · ${detailText}`, inline: false },
+        { name: 'Diễn biến', value: clampEmbedFieldValue(summary, 1200), inline: false },
       );
+    if (state) {
+      embed.addFields({ name: 'Hồ sơ sau pha này', value: `Chứng cứ: **${state.evidence}/5** · Dân tâm: **${state.publicTrust}/5** · Nhiễu Source: **${state.sourceNoise}/5**\nManh mối: **${state.clues}/3** · Giai đoạn: **${getXuatSonStageLabel(state.stage)}**`, inline: false });
+    }
+    return embed;
   }
 
   function getXuatSonById(id) {
@@ -10162,16 +10574,32 @@ ${stageNote}`;
     } else if (!success) {
       lines.push('Không thu được vật chứng sạch. Ít nhất công án không nổ tung hoàn toàn, một tiêu chuẩn thấp nhưng thực tế.');
     }
-    const nextCase = { ...caseState };
+    const nextCase = { ...caseState, clueList: Array.isArray(caseState.clueList) ? [...caseState.clueList] : [] };
+    const story = getXuatSonCaseBlueprint(mission);
+    const actionLabel = getXuatSonPrepLabelForStage(caseState.stage, prep.key);
+    const gainedClue = story.clues[(Number(nextCase.clueList.length) + Number(caseState.stage || 0)) % story.clues.length];
     if (success) {
-      nextCase.clues = Math.min(3, Number(nextCase.clues || 0) + (prep.key === 'clue' ? 2 : 1) + (great ? 1 : 0));
-      if (nextCase.clues >= 3 || great) {
+      const clueGain = (prep.key === 'clue' ? 2 : 1) + (great ? 1 : 0);
+      nextCase.clues = Math.min(3, Number(nextCase.clues || 0) + clueGain);
+      nextCase.evidence = Math.min(5, Number(nextCase.evidence || 0) + (prep.key === 'clue' || prep.key === 'gear' ? 2 : 1) + (great ? 1 : 0));
+      nextCase.publicTrust = Math.min(5, Math.max(0, Number(nextCase.publicTrust ?? 3) + (prep.key === 'ally' || methodConfig.key === 'commit' ? 1 : methodConfig.key === 'force_push' ? -1 : 0)));
+      nextCase.sourceNoise = Math.min(5, Math.max(0, Number(nextCase.sourceNoise ?? 2) + (prep.key === 'rush' || methodConfig.key === 'force_push' ? 1 : methodConfig.key === 'commit' ? -1 : 0)));
+      if (!nextCase.clueList.includes(gainedClue)) nextCase.clueList.push(gainedClue);
+      lines.push(`Diễn biến: **${actionLabel}** phát hiện **${gainedClue}**.`);
+      if (nextCase.clues >= 3 || great || (nextCase.evidence >= 4 && caseState.stage < 2)) {
         nextCase.stage = Math.min(3, Number(nextCase.stage || 0) + 1);
         nextCase.clues = 0;
-        lines.push(nextCase.stage >= 3 ? 'Công án dây chuyền đã kết án xong: mở thưởng hồ sơ tông môn.' : `Mở tiếp: **${getXuatSonStageLabel(nextCase.stage)}**.`);
+        lines.push(nextCase.stage >= 3 ? 'Kết án đã khép lại: hồ sơ chuyển thành chiến tích tông môn.' : `Mở trang tiếp theo: **${getXuatSonStageLabel(nextCase.stage)}**.`);
       }
-    } else if (methodConfig.key === 'force_push') {
-      lines.push('Dấu vết bị bẻ nhánh: lần sau công án này khó sạch hơn, nhưng Tà Đạo lại rất hài lòng. Thật đáng ngại.');
+    } else {
+      nextCase.sourceNoise = Math.min(5, Number(nextCase.sourceNoise ?? 2) + (methodConfig.key === 'force_push' ? 2 : 1));
+      nextCase.publicTrust = Math.max(0, Number(nextCase.publicTrust ?? 3) - (methodConfig.key === 'force_push' ? 1 : 0));
+      nextCase.lastOutcome = 'Trục trặc, chứng cứ bẩn hơn trước.';
+      if (methodConfig.key === 'force_push') {
+        lines.push('Dấu vết bị bẻ nhánh: lần sau công án này khó sạch hơn, nhưng Tà Đạo lại rất hài lòng. Thật đáng ngại.');
+      } else {
+        lines.push('Công án bị nhiễu thêm. Có lẽ lần sau đừng tin cái pháp trận tự nhận “ổn định”.');
+      }
     }
     if (nextCase.stage >= 3 && !nextCase.resolved) {
       nextCase.resolved = true;
@@ -10195,6 +10623,21 @@ ${stageNote}`;
       lines.push(`Công án còn tiếp: **${getXuatSonStageLabel(nextCase.stage)}**. Chọn chuẩn bị bên dưới để làm tiếp, không cần nhận lại lệnh.`);
     }
     return [`+${Math.max(0, tuVi)} tu vi`, `+${Math.max(0, congHien)} cống hiến`, ...lines].join('\n');
+  }
+
+  async function handleSetupXuatSon(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Bảng công án chỉ dựng được trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({ content: 'Chỉ quản sự/trưởng lão có quyền dựng bảng công án public.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    await interaction.deferReply();
+    const users = loadUsers();
+    await interaction.guild.members.fetch().catch(() => null);
+    await interaction.editReply({ embeds: [buildXuatSonBoardEmbed(interaction.guild, users)], components: buildPublicXuatSonBoardRows(interaction.guild) });
   }
 
   async function handleXuatSon(interaction) {
@@ -10235,17 +10678,25 @@ ${stageNote}`;
         await interaction.reply({ content: 'Công án này không nằm trong danh sách khả dụng hôm nay của đạo hữu. Dùng nút **Nhận #** để tránh nhập nhầm.', flags: MessageFlags.Ephemeral });
         return;
       }
+      const access = getXuatSonAccess(member, userData, selected);
+      if (!access.ok) {
+        saveUsers(users);
+        await interaction.reply({ content: getXuatSonAccessMessage(member, userData, selected), flags: MessageFlags.Ephemeral });
+        return;
+      }
       userData.activeXuatSon = createActiveXuatSonState(selected);
       consumeXuatSonDailySlot(userData);
       saveUsers(users);
-      await interaction.reply({ content: `Đã nhận **${selected.name}**. Lệnh này đã tính 1 lượt hôm nay; làm tiếp các phase của cùng công án không cần nhận lại. Bước tiếp theo: chọn **chuẩn bị**.`, embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData), flags: MessageFlags.Ephemeral });
+      await syncXuatSonStatusRole(interaction.guild, member, userData).catch(() => null);
+      await interaction.reply({ content: `Đã nhận **${selected.name}**. Đạo hữu đã rời tông môn; làm tiếp các phase của cùng công án không cần nhận lại. Bước tiếp theo: chọn **chuẩn bị**.`, embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData), flags: MessageFlags.Ephemeral });
       return;
     }
 
     if (action === 'huy') {
       userData.activeXuatSon = null;
       saveUsers(users);
-      await interaction.reply({ content: 'Đã hủy công án Xuất Sơn đang nhận.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData), flags: MessageFlags.Ephemeral });
+      await syncXuatSonStatusRole(interaction.guild, member, userData).catch(() => null);
+      await interaction.reply({ content: 'Đã hủy công án Xuất Sơn đang nhận. Đạo hữu đã quay về tông môn.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData), flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -10255,13 +10706,15 @@ ${stageNote}`;
         return;
       }
       normalizeActiveXuatSonState(userData);
-      if (!getXuatSonPrepConfig(userData.activeXuatSon?.prep)) {
+      const mission = getXuatSonById(userData.activeXuatSon.id);
+      const caseStateForSlash = getXuatSonCaseState(userData, mission);
+      if (!getXuatSonPrepConfig(userData.activeXuatSon?.prep) && caseStateForSlash.stage < 2) {
         saveUsers(users);
-        await interaction.reply({ content: 'Chưa chọn bước **chuẩn bị** nên chưa thể xử lý. Chọn Dò manh mối / Mang pháp bảo / Gọi đồng môn / Đi thẳng trước.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData), flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: 'Chưa chọn hành động pha nên chưa thể xử lý. Ưu tiên dùng nút trên /xuatson, slash legacy chỉ giữ để khỏi làm Discord cache nổi điên.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData), flags: MessageFlags.Ephemeral });
         return;
       }
+      if (!getXuatSonPrepConfig(userData.activeXuatSon?.prep) && caseStateForSlash.stage >= 2) userData.activeXuatSon.prep = 'clue';
 
-      const mission = getXuatSonById(userData.activeXuatSon.id);
       if (!mission) {
         userData.activeXuatSon = null;
         saveUsers(users);
@@ -10272,10 +10725,11 @@ ${stageNote}`;
       const normalizedMethod = method === 'force_push' ? 'force_push' : method === 'va_tam' ? 'va_tam' : 'commit';
       const summary = applyXuatSonResolution(userData, mission, normalizedMethod, { member, prep: userData.activeXuatSon?.prep || 'rush' });
       await syncMissionMemberRoles(interaction.guild, interaction.user.id, userData).catch(() => null);
+      await syncXuatSonStatusRole(interaction.guild, member, userData).catch(() => null);
       const continueRows = userData.activeXuatSon?.id ? buildXuatSonRows(member, userData) : [];
       const continueContent = userData.activeXuatSon?.id ? 'Công án còn phase tiếp. Chọn chuẩn bị bằng nút bên dưới để làm tiếp.' : null;
       saveUsers(users);
-      const embed = buildXuatSonResultEmbed(mission, normalizedMethod, summary);
+      const embed = buildXuatSonResultEmbed(mission, normalizedMethod, summary, userData);
       await interaction.reply({ content: continueContent, embeds: [embed], components: continueRows, flags: MessageFlags.Ephemeral });
       return;
     }
@@ -10283,13 +10737,60 @@ ${stageNote}`;
     await interaction.reply({ embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData), flags: MessageFlags.Ephemeral });
   }
 
-  async function handleXuatSonPickButton(interaction) {
-    if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate().catch(async () => interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => null));
+  async function handleXuatSonViewButton(interaction) {
+    const parsedView = parseXuatSonViewIndex(interaction.customId, interaction.user.id);
+    const publicView = Boolean(parsedView.public);
+    if (!interaction.deferred && !interaction.replied) {
+      if (publicView) await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => null);
+      else await interaction.deferUpdate().catch(async () => interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => null));
+    }
     if (!interaction.inGuild()) {
       await interaction.editReply({ content: 'Xuất Sơn chỉ dùng trong tông môn.', embeds: [], components: [] }).catch(() => null);
       return;
     }
+    if (!parsedView.ok) {
+      await interaction.editReply({ content: parsedView.reason, embeds: [], components: [] }).catch(() => null);
+      return;
+    }
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    normalizeUserSourceState(userData);
+    normalizeXuatSonDailyCounter(userData);
+    normalizeActiveXuatSonState(userData);
+    const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => interaction.member);
+    const choices = publicView ? getDailyPublicXuatSonChoices(interaction.guild, 6) : getDailyXuatSonChoices(member, 6);
+    const selected = choices[parsedView.index] || null;
+    if (!selected) {
+      await interaction.editReply({ content: 'Công án này không còn trong bảng hôm nay. Mở /xuatson hoặc /setupxuatson để làm mới.', embeds: [], components: [] }).catch(() => null);
+      return;
+    }
+    const rows = [];
+    if (!userData.activeXuatSon?.id && getXuatSonRemaining(userData, member).remaining > 0) {
+      rows.push(new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(publicView ? buildPublicXuatSonPickButtonId(parsedView.index) : buildXuatSonPickButtonId(interaction.user.id, parsedView.index)).setLabel(`Nhận công án #${parsedView.index + 1}`).setStyle(ButtonStyle.Success),
+      ));
+    } else if (userData.activeXuatSon?.id === selected.id) {
+      rows.push(...buildXuatSonRows(member, userData));
+    }
+    saveUsers(users);
+    await interaction.editReply({
+      content: userData.activeXuatSon?.id && userData.activeXuatSon.id !== selected.id ? 'Đạo hữu đang xử lý công án khác. Hoàn tất hoặc hủy trước khi nhận vụ này.' : null,
+      embeds: [buildXuatSonCasePageEmbed(member, userData, selected, { index: parsedView.index })],
+      components: rows,
+    }).catch(() => null);
+  }
+
+  async function handleXuatSonPickButton(interaction) {
     const parsedPick = parseXuatSonPickIndex(interaction.customId, interaction.user.id);
+    const publicPick = Boolean(parsedPick.public);
+    if (!interaction.deferred && !interaction.replied) {
+      if (publicPick) await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => null);
+      else await interaction.deferUpdate().catch(async () => interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => null));
+    }
+    if (!interaction.inGuild()) {
+      await interaction.editReply({ content: 'Xuất Sơn chỉ dùng trong tông môn.', embeds: [], components: [] }).catch(() => null);
+      return;
+    }
     if (!parsedPick.ok) {
       await interaction.editReply({ content: parsedPick.reason, embeds: [], components: [] }).catch(() => null);
       return;
@@ -10312,17 +10813,25 @@ ${stageNote}`;
       await interaction.editReply({ content: `Hôm nay đã dùng hết **${quota.limit}** lượt Xuất Sơn.`, embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
       return;
     }
-    const choices = getDailyXuatSonChoices(member, 6);
+    const choices = publicPick ? getDailyPublicXuatSonChoices(interaction.guild, 6) : getDailyXuatSonChoices(member, 6);
     const selected = choices[index] || null;
     if (!selected) {
-      await interaction.editReply({ content: 'Lệnh này không còn trong danh sách hôm nay. Bấm `/xuatson` để làm mới.', embeds: [], components: [] }).catch(() => null);
+      await interaction.editReply({ content: 'Lệnh này không còn trong danh sách hôm nay. Bấm `/xuatson` hoặc nhờ dựng lại `/setupxuatson`.', embeds: [], components: [] }).catch(() => null);
+      return;
+    }
+    const access = getXuatSonAccess(member, userData, selected);
+    if (!access.ok) {
+      saveUsers(users);
+      await interaction.editReply({ content: getXuatSonAccessMessage(member, userData, selected), embeds: [], components: [] }).catch(() => null);
       return;
     }
     userData.activeXuatSon = createActiveXuatSonState(selected);
     consumeXuatSonDailySlot(userData);
     saveUsers(users);
-    await interaction.editReply({ content: `Đã nhận **${selected.name}**. Lệnh này đã tính 1 lượt hôm nay; làm tiếp các phase của cùng công án không cần nhận lại. Chọn bước chuẩn bị bên dưới.`, embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
+    await syncXuatSonStatusRole(interaction.guild, member, userData).catch(() => null);
+    await interaction.editReply({ content: `Đã nhận **${selected.name}**. Đạo hữu đã rời tông môn, các việc nội tông sẽ bị khóa cho tới khi hoàn tất hoặc hủy công án. Chọn bước chuẩn bị bên dưới.`, embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
   }
+
 
   async function handleXuatSonPrepButton(interaction) {
     if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate().catch(async () => interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => null));
@@ -10367,7 +10876,11 @@ ${stageNote}`;
     userData.activeXuatSon.prep = prep.key;
     userData.activeXuatSon.step = 'resolve';
     saveUsers(users);
-    await interaction.editReply({ content: `Đã chọn chuẩn bị: **${prep.name}**. ${prep.note} Bây giờ chọn cách xử lý.`, embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
+    const mission = getXuatSonById(userData.activeXuatSon.id);
+    const caseState = getXuatSonCaseState(userData, mission);
+    const actionLabel = getXuatSonPrepLabelForStage(caseState.stage, prep.key);
+    const actionDesc = getXuatSonStageActions(caseState.stage)?.[prep.key]?.desc || prep.note;
+    await interaction.editReply({ content: `Đã chọn hành động: **${actionLabel}**. ${actionDesc} Bây giờ chọn cách xử lý.`, embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
   }
 
   async function handleXuatSonMethodButton(interaction) {
@@ -10404,7 +10917,8 @@ ${stageNote}`;
     if (method === 'huy') {
       userData.activeXuatSon = null;
       saveUsers(users);
-      await interaction.editReply({ content: 'Đã hủy công án Xuất Sơn đang nhận.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
+      await syncXuatSonStatusRole(interaction.guild, member, userData).catch(() => null);
+      await interaction.editReply({ content: 'Đã hủy công án Xuất Sơn đang nhận. Đạo hữu đã quay về tông môn.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
       return;
     }
 
@@ -10413,13 +10927,17 @@ ${stageNote}`;
       return;
     }
 
-    if (!getXuatSonPrepConfig(userData.activeXuatSon.prep)) {
+    const mission = getXuatSonById(userData.activeXuatSon.id);
+    const caseStateForMethod = getXuatSonCaseState(userData, mission);
+    if (!getXuatSonPrepConfig(userData.activeXuatSon.prep) && caseStateForMethod.stage < 2) {
       saveUsers(users);
-      await interaction.editReply({ content: 'Còn thiếu bước **chuẩn bị**. Chọn Dò manh mối / Mang pháp bảo / Gọi đồng môn / Đi thẳng trước.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
+      await interaction.editReply({ content: 'Còn thiếu bước **hành động pha**. Chọn một nút trên trang công án trước, rồi mới xử lý.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
       return;
     }
+    if (!getXuatSonPrepConfig(userData.activeXuatSon.prep) && caseStateForMethod.stage >= 2) {
+      userData.activeXuatSon.prep = 'clue';
+    }
 
-    const mission = getXuatSonById(userData.activeXuatSon.id);
     if (!mission) {
       userData.activeXuatSon = null;
       saveUsers(users);
@@ -10429,10 +10947,11 @@ ${stageNote}`;
     const normalizedMethod = method === 'force_push' ? 'force_push' : method === 'va_tam' ? 'va_tam' : 'commit';
     const summary = applyXuatSonResolution(userData, mission, normalizedMethod, { member, prep: userData.activeXuatSon?.prep || 'rush' });
     await syncMissionMemberRoles(interaction.guild, interaction.user.id, userData).catch(() => null);
+    await syncXuatSonStatusRole(interaction.guild, member, userData).catch(() => null);
     const continueRows = userData.activeXuatSon?.id ? buildXuatSonRows(member, userData) : [];
     const continueContent = userData.activeXuatSon?.id ? 'Công án còn phase tiếp. Chọn chuẩn bị bằng nút bên dưới để làm tiếp.' : null;
     saveUsers(users);
-    await interaction.editReply({ content: continueContent, embeds: [buildXuatSonResultEmbed(mission, normalizedMethod, summary)], components: continueRows }).catch(() => null);
+    await interaction.editReply({ content: continueContent, embeds: [buildXuatSonResultEmbed(mission, normalizedMethod, summary, userData)], components: continueRows }).catch(() => null);
   }
 
   async function handleDoiCongHien(interaction) {
@@ -11681,6 +12200,7 @@ ${blocked.join('\n')}`.slice(0, 1900), flags: MessageFlags.Ephemeral });
 
     await syncTuViRoles(guild, member, userData.tuViExp).catch(() => null);
     await syncDiscipleRole(guild, member, userData.congHienExp).catch(() => null);
+    await syncXuatSonStatusRole(guild, member, userData).catch(() => null);
   }
 
 
@@ -11720,6 +12240,7 @@ ${blocked.join('\n')}`.slice(0, 1900), flags: MessageFlags.Ephemeral });
     const equippedGear = getEquippedCombatItems(userData);
     normalizeMissionUserData(userData);
     const beQuanText = getBeQuanStatusText(userData);
+    const xuatSonStatusText = userData.activeXuatSon?.id ? `Đang Xuất Sơn: **${getXuatSonById(userData.activeXuatSon.id)?.name || 'công án ngoài tông'}** · ${getXuatSonStepText(userData, member)}` : 'Đang ở trong tông môn.';
     const statusText = formatTemporaryStatus(userData);
     const restingText = getMissionRestingText(userData);
     const missionUsedText = hasUsedMissionToday(userData) ? 'Đã dùng nhiệm vụ hôm nay' : 'Chưa dùng nhiệm vụ hôm nay';
@@ -11737,6 +12258,7 @@ ${blocked.join('\n')}`.slice(0, 1900), flags: MessageFlags.Ephemeral });
         { name: 'Rủi ro Source', value: formatUserRiskStats(userData), inline: false },
         { name: 'Trạng thái tạm thời', value: statusText === 'Không có' ? 'Đạo tâm bình ổn, chưa có trạng thái đặc biệt.' : statusText, inline: false },
         { name: 'Bế quan', value: beQuanText, inline: false },
+        { name: 'Vị trí hiện tại', value: xuatSonStatusText, inline: false },
         { name: 'Tĩnh dưỡng / nhiệm vụ', value: `${restingText}\n${missionUsedText}`, inline: false },
         { name: 'Túi trữ vật', value: `${bag.name} · ${inventoryText}`, inline: true },
         { name: 'Trang bị chính', value: equippedText.slice(0, 1000), inline: false },
@@ -16232,6 +16754,60 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
     return true;
   }
 
+  const XUAT_SON_ALLOWED_COMMANDS = new Set([
+    'xuatson',
+    'setupxuatson',
+    'profile',
+    'tuvi',
+    'trangthai',
+    'homnay',
+    'goiy',
+  ]);
+
+  function isXuatSonActionButton(customId = '') {
+    const id = String(customId || '');
+    return id.startsWith(XUAT_SON_PICK_BUTTON_PREFIX)
+      || id.startsWith(XUAT_SON_VIEW_BUTTON_PREFIX)
+      || id.startsWith(XUAT_SON_PREP_BUTTON_PREFIX)
+      || id.startsWith(XUAT_SON_METHOD_BUTTON_PREFIX)
+      || (id.startsWith(HOMNAY_NAV_BUTTON_PREFIX) && (id.endsWith(':xuatson') || id.endsWith(':goiy')));
+  }
+
+  function getXuatSonBlockedActionMessage(userData) {
+    const mission = userData?.activeXuatSon?.id ? getXuatSonById(userData.activeXuatSon.id) : null;
+    const name = mission ? `**${mission.name}**` : 'một công án Xuất Sơn';
+    return `Đạo hữu đang **Đang Xuất Sơn** với ${name}. Trong lúc rời tông môn, không thể làm việc nội tông như nhiệm vụ, bí cảnh, shop/craft, điểm danh hay đổi vật phẩm. Hoàn tất hoặc bấm **Hủy** trong /xuatson để quay về.`;
+  }
+
+  async function shouldBlockInteractionForXuatSon(interaction) {
+    if (!interaction.inGuild?.()) return false;
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    const active = normalizeActiveXuatSonState(userData);
+    if (!active?.id) {
+      const member = interaction.member?.roles ? interaction.member : await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+      if (member) await syncXuatSonStatusRole(interaction.guild, member, userData).catch(() => null);
+      return false;
+    }
+
+    if (interaction.isChatInputCommand?.() && XUAT_SON_ALLOWED_COMMANDS.has(String(interaction.commandName || '').toLowerCase())) {
+      return false;
+    }
+
+    if (interaction.isButton?.() && isXuatSonActionButton(interaction.customId)) {
+      return false;
+    }
+
+    const member = interaction.member?.roles ? interaction.member : await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+    if (member) await syncXuatSonStatusRole(interaction.guild, member, userData).catch(() => null);
+    saveUsers(users);
+
+    const payload = { content: getXuatSonBlockedActionMessage(userData), flags: MessageFlags.Ephemeral };
+    if (interaction.deferred || interaction.replied) await interaction.followUp(payload).catch(() => null);
+    else await interaction.reply(payload).catch(() => null);
+    return true;
+  }
+
   function clearBeQuanState(userData) {
     userData.beQuanStartedAt = 0;
     userData.beQuanUntil = 0;
@@ -16661,6 +17237,27 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
       await member.roles.add(rolesToAdd, 'Gan role trang thai tam thoi.');
     }
 
+    return { ok: true };
+  }
+
+  async function syncXuatSonStatusRole(guild, member, userData) {
+    if (!guild || !member?.roles?.cache) return { ok: true, skipped: true };
+    await guild.roles.fetch().catch(() => null);
+    const active = Boolean(normalizeActiveXuatSonState(userData)?.id);
+    const role = findRoleByName(guild, XUAT_SON_STATUS_ROLE_NAME);
+    if (active && !role) {
+      return { ok: false, message: `Thiếu role trạng thái: ${XUAT_SON_STATUS_ROLE_NAME}. Hãy chạy \`npm run create:roles\` rồi thử lại.` };
+    }
+    if (!active) {
+      const old = member.roles.cache.filter((r) => r.name === XUAT_SON_STATUS_ROLE_NAME);
+      if (old.size > 0) await member.roles.remove(old, 'Ket thuc trang thai Xuat Son.').catch(() => null);
+      return { ok: true };
+    }
+    if (role && !member.roles.cache.has(role.id)) {
+      const blocker = await getDiscipleRoleManageBlocker(guild, [role]);
+      if (blocker) return { ok: false, message: blocker };
+      await member.roles.add(role, 'Gan role dang Xuat Son.').catch(() => null);
+    }
     return { ok: true };
   }
 
