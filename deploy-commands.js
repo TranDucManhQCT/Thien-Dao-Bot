@@ -779,25 +779,8 @@ const commands = [
     ),
   new SlashCommandBuilder()
     .setName('xuatson')
-    .setDescription('1440 Xuất Sơn Lệnh ngoài tông môn: điều tra, cứu hộ, phong ấn và can thiệp Source.')
-    .setDMPermission(false)
-    .addStringOption((option) =>
-      option
-        .setName('hanhdong')
-        .setDescription('Hành động Xuất Sơn.')
-        .setRequired(false)
-        .addChoices(
-          { name: 'Xem lệnh khả dụng', value: 'xem' },
-          { name: 'Nhận lệnh', value: 'nhan' },
-          { name: 'Hủy lệnh đang nhận', value: 'huy' },
-        ),
-    )
-    .addStringOption((option) =>
-      option
-        .setName('ma')
-        .setDescription('Mã Xuất Sơn Lệnh khi nhận. Bỏ trống sẽ nhận lệnh đầu tiên.')
-        .setRequired(false),
-    ),
+    .setDescription('Mở bảng Xuất Sơn bằng nút bấm: nhận công án, chuẩn bị, xử lý, làm tiếp phase.' )
+    .setDMPermission(false),
   new SlashCommandBuilder()
     .setName('doiconghien')
     .setDescription('Đổi vật chứng/nguyên liệu Dị Lỗi lấy điểm cống hiến tông môn.')

@@ -286,7 +286,7 @@
   const XUAT_SON_PICK_BUTTON_PREFIX = 'td_xs_pick:';
   const XUAT_SON_METHOD_BUTTON_PREFIX = 'td_xs_method:';
   const XUAT_SON_PREP_BUTTON_PREFIX = 'td_xs_prep:';
-  const XUAT_SON_FLOW_VERSION = 'xuatson_state_machine_v2';
+  const XUAT_SON_FLOW_VERSION = 'xuatson_chain_buttons_v3';
   const XUAT_SON_ACTIVE_TTL_MS = 18 * 60 * 60 * 1000;
   const HOMNAY_NAV_BUTTON_PREFIX = 'td_today_nav:';
   const BICANH_ROUTE_BUTTON_PREFIX = 'td_bc_route:';
@@ -9445,7 +9445,7 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     const now = Date.now();
     const acceptedAt = Math.max(0, Number(active.acceptedAt) || 0);
     const acceptedDate = typeof active.acceptedDate === 'string' && active.acceptedDate ? active.acceptedDate : (acceptedAt ? new Date(acceptedAt).toISOString().slice(0, 10) : null);
-    const expired = (acceptedDate && acceptedDate !== today) || (acceptedAt && now - acceptedAt > XUAT_SON_ACTIVE_TTL_MS) || (!acceptedAt && active.flowVersion !== XUAT_SON_FLOW_VERSION);
+    const expired = active.flowVersion !== XUAT_SON_FLOW_VERSION || (acceptedDate && acceptedDate !== today) || (acceptedAt && now - acceptedAt > XUAT_SON_ACTIVE_TTL_MS);
 
     if (!mission || expired) {
       userData.activeXuatSon = null;
@@ -9465,7 +9465,8 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     return active;
   }
 
-  function createActiveXuatSonState(mission) {
+  function createActiveXuatSonState(mission, options = {}) {
+    const acceptedAt = Math.max(0, Number(options.acceptedAt) || 0) || Date.now();
     return {
       id: mission.id,
       name: mission.name,
@@ -9473,11 +9474,18 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
       rank: mission.rank,
       prep: null,
       step: 'prepare',
-      acceptedAt: Date.now(),
-      acceptedDate: getTodayString(),
+      acceptedAt,
+      acceptedDate: typeof options.acceptedDate === 'string' && options.acceptedDate ? options.acceptedDate : getTodayString(),
       flowVersion: XUAT_SON_FLOW_VERSION,
       token: createXuatSonFlowToken(),
+      chain: Boolean(options.chain),
     };
+  }
+
+  function consumeXuatSonDailySlot(userData) {
+    normalizeXuatSonDailyCounter(userData);
+    userData.lastXuatSonDate = getTodayString();
+    userData.dailyXuatSonCount = Math.max(0, Number(userData.dailyXuatSonCount) || 0) + 1;
   }
 
   function buildXuatSonPickButtonId(userId, index) {
@@ -9520,7 +9528,7 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
   }
 
   function validateXuatSonStageToken(active, parsed) {
-    if (!active?.id) return { ok: false, reason: 'Chưa nhận Xuất Sơn Lệnh nào. Bấm **Nhận #** trước.' };
+    if (!active?.id) return { ok: false, reason: 'Chưa nhận công án nào. Bấm **Nhận #** trước.' };
     if (parsed?.token && parsed.token !== active.token) return { ok: false, reason: 'Nút này thuộc về trạng thái Xuất Sơn cũ. Bấm `/xuatson` để lấy giao diện mới.' };
     return { ok: true };
   }
@@ -9857,7 +9865,9 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     if (view === 'bicanh') {
       const data = repairWeeklyBicanhData(getWeeklyBicanhData());
       const run = getDailyBicanhRun(data, interaction.user.id);
-      await interaction.editReply({ embeds: [run ? buildDailyBicanhRunEmbed(data, run) : buildWeeklyBicanhEmbed(data)], components: ['choice', 'event_choice'].includes(String(run?.status)) ? buildDailyEventActionRows(data, run) : buildWeeklyBicanhPanelRows(data, run), content: null }).catch(() => null);
+      const payload = { embeds: [run ? buildDailyBicanhRunEmbed(data, run) : buildWeeklyBicanhEmbed(data)], components: ['choice', 'event_choice'].includes(String(run?.status)) ? buildDailyEventActionRows(data, run) : buildWeeklyBicanhPanelRows(data, run), content: null };
+      await interaction.channel?.send(payload).catch(() => null);
+      await interaction.followUp?.({ content: 'Đã mở **Bí Cảnh** công khai trong kênh để tổ đội cùng thấy và bấm nút. Bảng `/homnay` vẫn riêng tư, vì lịch sinh hoạt cá nhân chưa cần cả tông môn soi.', flags: MessageFlags.Ephemeral }).catch(() => null);
       return;
     }
     if (view === 'nhiemvu') {
@@ -9908,8 +9918,8 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
   function buildCompactXuatSonLine(entry, index) {
     return [
       `**${index + 1}. ${entry.actionName}** · ${entry.rankLabel}`,
-      `Mã: \`${entry.id}\``,
       `Hệ: ${entry.familyName} · Rủi ro: **${entry.risk}**`,
+      'Bấm nút **Nhận #** tương ứng để nhận công án. Không cần nhập mã tay.',
     ].join('\n');
   }
 
@@ -10010,12 +10020,12 @@ ${stageNote}`;
       }
       embed.addFields({
         name: 'Sau khi nhận mới mở hành động',
-        value: 'Bước 2 sẽ hiện 4 cách chuẩn bị. Bước 3 mới hiện 3 cách xử lý. UI không nhảy cóc nữa, vì cuối cùng nó đã học đi bộ.',
+        value: 'Bước 2 sẽ hiện 4 cách chuẩn bị. Bước 3 mới hiện 3 cách xử lý. Làm xong Vụ 1/3 hoặc Vụ 2/3 thì nút chuẩn bị sẽ hiện tiếp ngay dưới kết quả.',
         inline: false,
       });
     }
 
-    embed.setFooter({ text: 'Bấm Nhận # để bắt đầu. Slash command cũ vẫn dùng được nhưng không được bỏ qua bước chuẩn bị.' });
+    embed.setFooter({ text: 'Bấm Nhận # để bắt đầu. /xuatson chỉ dùng để mở giao diện, các bước sau ưu tiên nút bấm.' });
     return embed;
   }
 
@@ -10175,9 +10185,15 @@ ${stageNote}`;
       addWeeklyContribution(userData, success ? (great ? 6 : 4) : 1, 'xuất sơn');
     }
     userData.xuatSonCases[caseState.key] = nextCase;
-    userData.lastXuatSonDate = getTodayString();
-    userData.dailyXuatSonCount = Number(userData.dailyXuatSonCount || 0) + 1;
-    userData.activeXuatSon = null;
+    if (nextCase.resolved || Number(nextCase.stage || 0) >= 3) {
+      userData.activeXuatSon = null;
+      lines.push('Công án đã khép lại. Mở `/xuatson` để nhận công án khác nếu còn lượt. Một quy trình cuối cùng cũng có điểm kết, thật xúc động.');
+    } else {
+      const previousAcceptedAt = Number(userData.activeXuatSon?.acceptedAt) || Date.now();
+      const previousAcceptedDate = userData.activeXuatSon?.acceptedDate || getTodayString();
+      userData.activeXuatSon = createActiveXuatSonState(mission, { acceptedAt: previousAcceptedAt, acceptedDate: previousAcceptedDate, chain: true });
+      lines.push(`Công án còn tiếp: **${getXuatSonStageLabel(nextCase.stage)}**. Chọn chuẩn bị bên dưới để làm tiếp, không cần nhận lại lệnh.`);
+    }
     return [`+${Math.max(0, tuVi)} tu vi`, `+${Math.max(0, congHien)} cống hiến`, ...lines].join('\n');
   }
 
@@ -10203,7 +10219,7 @@ ${stageNote}`;
     if (action === 'nhan') {
       if (userData.activeXuatSon?.id) {
         saveUsers(users);
-        await interaction.reply({ content: 'Đang có công án chưa xử lý. Hoàn tất hoặc `/xuatson hanhdong:huy` trước khi nhận cái mới.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData), flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: 'Đang có công án chưa xử lý. Hoàn tất hoặc bấm **Hủy** trước khi nhận cái mới.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData), flags: MessageFlags.Ephemeral });
         return;
       }
       const quota = getXuatSonRemaining(userData, member);
@@ -10216,25 +10232,26 @@ ${stageNote}`;
       const choices = getDailyXuatSonChoices(member, 6);
       const selected = id ? getXuatSonById(id) : choices[0];
       if (!selected || !choices.some((entry) => entry.id === selected.id)) {
-        await interaction.reply({ content: 'Mã Xuất Sơn không nằm trong danh sách khả dụng hôm nay của đạo hữu.', flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: 'Công án này không nằm trong danh sách khả dụng hôm nay của đạo hữu. Dùng nút **Nhận #** để tránh nhập nhầm.', flags: MessageFlags.Ephemeral });
         return;
       }
       userData.activeXuatSon = createActiveXuatSonState(selected);
+      consumeXuatSonDailySlot(userData);
       saveUsers(users);
-      await interaction.reply({ content: `Đã nhận **${selected.name}**. Bước tiếp theo: chọn **chuẩn bị**.`, embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData), flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: `Đã nhận **${selected.name}**. Lệnh này đã tính 1 lượt hôm nay; làm tiếp các phase của cùng công án không cần nhận lại. Bước tiếp theo: chọn **chuẩn bị**.`, embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData), flags: MessageFlags.Ephemeral });
       return;
     }
 
     if (action === 'huy') {
       userData.activeXuatSon = null;
       saveUsers(users);
-      await interaction.reply({ content: 'Đã hủy Xuất Sơn Lệnh đang nhận.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData), flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: 'Đã hủy công án Xuất Sơn đang nhận.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData), flags: MessageFlags.Ephemeral });
       return;
     }
 
     if (action === 'canthiep') {
       if (!userData.activeXuatSon?.id) {
-        await interaction.reply({ content: 'Đạo hữu chưa nhận Xuất Sơn Lệnh nào.', flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: 'Đạo hữu chưa nhận công án nào. Mở `/xuatson` rồi bấm **Nhận #**.', flags: MessageFlags.Ephemeral });
         return;
       }
       normalizeActiveXuatSonState(userData);
@@ -10248,16 +10265,18 @@ ${stageNote}`;
       if (!mission) {
         userData.activeXuatSon = null;
         saveUsers(users);
-        await interaction.reply({ content: 'Xuất Sơn Lệnh cũ đã lệch catalog, đã hủy để nhận lại.', flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: 'Công án cũ đã lệch dữ liệu, đã hủy để nhận lại.', flags: MessageFlags.Ephemeral });
         return;
       }
       const method = interaction.options.getString('cach', false) || 'commit';
       const normalizedMethod = method === 'force_push' ? 'force_push' : method === 'va_tam' ? 'va_tam' : 'commit';
       const summary = applyXuatSonResolution(userData, mission, normalizedMethod, { member, prep: userData.activeXuatSon?.prep || 'rush' });
       await syncMissionMemberRoles(interaction.guild, interaction.user.id, userData).catch(() => null);
+      const continueRows = userData.activeXuatSon?.id ? buildXuatSonRows(member, userData) : [];
+      const continueContent = userData.activeXuatSon?.id ? 'Công án còn phase tiếp. Chọn chuẩn bị bằng nút bên dưới để làm tiếp.' : null;
       saveUsers(users);
       const embed = buildXuatSonResultEmbed(mission, normalizedMethod, summary);
-      await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: continueContent, embeds: [embed], components: continueRows, flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -10300,8 +10319,9 @@ ${stageNote}`;
       return;
     }
     userData.activeXuatSon = createActiveXuatSonState(selected);
+    consumeXuatSonDailySlot(userData);
     saveUsers(users);
-    await interaction.editReply({ content: `Đã nhận **${selected.name}**. Chọn bước chuẩn bị bên dưới.`, embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
+    await interaction.editReply({ content: `Đã nhận **${selected.name}**. Lệnh này đã tính 1 lượt hôm nay; làm tiếp các phase của cùng công án không cần nhận lại. Chọn bước chuẩn bị bên dưới.`, embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
   }
 
   async function handleXuatSonPrepButton(interaction) {
@@ -10329,7 +10349,7 @@ ${stageNote}`;
     }
     if (!userData.activeXuatSon?.id) {
       saveUsers(users);
-      await interaction.editReply({ content: 'Chưa nhận Xuất Sơn Lệnh nào. Bấm **Nhận #** trước.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
+      await interaction.editReply({ content: 'Chưa nhận công án nào. Bấm **Nhận #** trước.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
       return;
     }
     if (prepKey === 'reset') {
@@ -10384,12 +10404,12 @@ ${stageNote}`;
     if (method === 'huy') {
       userData.activeXuatSon = null;
       saveUsers(users);
-      await interaction.editReply({ content: 'Đã hủy Xuất Sơn Lệnh đang nhận.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
+      await interaction.editReply({ content: 'Đã hủy công án Xuất Sơn đang nhận.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
       return;
     }
 
     if (!userData.activeXuatSon?.id) {
-      await interaction.editReply({ content: 'Chưa nhận Xuất Sơn Lệnh nào. Bấm **Nhận #** trước, khỏi nhập mã tay.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
+      await interaction.editReply({ content: 'Chưa nhận công án nào. Bấm **Nhận #** trước, khỏi nhập mã tay.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
       return;
     }
 
@@ -10403,14 +10423,16 @@ ${stageNote}`;
     if (!mission) {
       userData.activeXuatSon = null;
       saveUsers(users);
-      await interaction.editReply({ content: 'Xuất Sơn Lệnh cũ đã lệch catalog, đã hủy để nhận lại.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
+      await interaction.editReply({ content: 'Công án cũ đã lệch dữ liệu, đã hủy để nhận lại.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
       return;
     }
     const normalizedMethod = method === 'force_push' ? 'force_push' : method === 'va_tam' ? 'va_tam' : 'commit';
     const summary = applyXuatSonResolution(userData, mission, normalizedMethod, { member, prep: userData.activeXuatSon?.prep || 'rush' });
     await syncMissionMemberRoles(interaction.guild, interaction.user.id, userData).catch(() => null);
+    const continueRows = userData.activeXuatSon?.id ? buildXuatSonRows(member, userData) : [];
+    const continueContent = userData.activeXuatSon?.id ? 'Công án còn phase tiếp. Chọn chuẩn bị bằng nút bên dưới để làm tiếp.' : null;
     saveUsers(users);
-    await interaction.editReply({ content: null, embeds: [buildXuatSonResultEmbed(mission, normalizedMethod, summary)], components: [] }).catch(() => null);
+    await interaction.editReply({ content: continueContent, embeds: [buildXuatSonResultEmbed(mission, normalizedMethod, summary)], components: continueRows }).catch(() => null);
   }
 
   async function handleDoiCongHien(interaction) {
@@ -19540,7 +19562,9 @@ Kết quả đã khắc vào đạo hồ.`, inline: false },
     data.guildId = interaction.guild.id;
     saveBicanhData(data);
     const run = getDailyBicanhRun(data, interaction.user.id);
-    await interaction.reply({ embeds: [run ? buildDailyBicanhRunEmbed(data, run) : buildWeeklyBicanhEmbed(data)], components: ['choice', 'event_choice'].includes(String(run?.status)) ? buildDailyEventActionRows(data, run) : buildWeeklyBicanhPanelRows(data, run), flags: MessageFlags.Ephemeral });
+    // Bí Cảnh là hoạt động tổ đội, nên giao diện chính phải công khai.
+    // Private/ephemeral làm đồng đội không thấy nút và biến party thành trò độc diễn, quá chuẩn Discord nếu ta không khóa lại.
+    await interaction.reply({ embeds: [run ? buildDailyBicanhRunEmbed(data, run) : buildWeeklyBicanhEmbed(data)], components: ['choice', 'event_choice'].includes(String(run?.status)) ? buildDailyEventActionRows(data, run) : buildWeeklyBicanhPanelRows(data, run) });
   }
 
   async function handleSetupPhoBan(interaction) {
@@ -19570,7 +19594,7 @@ Kết quả đã khắc vào đạo hồ.`, inline: false },
   }
 
   async function handleBicanhExploreButton(interaction) {
-    if (!interaction.deferred && !interaction.replied) await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => null);
+    if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate().catch(async () => interaction.deferReply().catch(() => null));
     const data = repairWeeklyBicanhData(getWeeklyBicanhData());
     const buttonWeekKey = String(interaction.customId || '').slice(BICANH_EXPLORE_BUTTON_PREFIX.length);
     if (buttonWeekKey && buttonWeekKey !== data.weekKey) {
@@ -19893,7 +19917,7 @@ Kết quả đã khắc vào đạo hồ.`, inline: false },
   }
 
   async function handleBicanhEventAction(interaction) {
-    if (!interaction.deferred && !interaction.replied) await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => null);
+    if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate().catch(async () => interaction.deferReply().catch(() => null));
     const raw = String(interaction.customId || '').slice(BICANH_EVENT_ACTION_BUTTON_PREFIX.length);
     const parts = raw.split(':');
     const weekKey = parts[0] || '';
@@ -19942,7 +19966,7 @@ Kết quả đã khắc vào đạo hồ.`, inline: false },
   }
 
   async function handleBicanhCellSelect(interaction) {
-    if (!interaction.deferred && !interaction.replied) await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => null);
+    if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate().catch(async () => interaction.deferReply().catch(() => null));
     const data = repairWeeklyBicanhData(getWeeklyBicanhData());
     const runId = String(interaction.customId || '').split(':').pop();
     const run = data.runs?.[runId] || getDailyBicanhRun(data, interaction.user.id);
@@ -20411,7 +20435,7 @@ Kết quả đã khắc vào đạo hồ.`, inline: false },
   }
 
   async function handleBicanhJoinParty(interaction) {
-    if (!interaction.deferred && !interaction.replied) await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => null);
+    if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate().catch(async () => interaction.deferReply().catch(() => null));
     const data = repairWeeklyBicanhData(getWeeklyBicanhData());
     const lobby = getLatestBicanhLobby(data);
     if (!lobby) {
@@ -20486,7 +20510,7 @@ Kết quả đã khắc vào đạo hồ.`, inline: false },
   }
 
   async function handleBicanhQuickFight(interaction) {
-    if (!interaction.deferred && !interaction.replied) await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => null);
+    if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate().catch(async () => interaction.deferReply().catch(() => null));
     const data = repairWeeklyBicanhData(getWeeklyBicanhData());
     const token = parseBicanhRunActionToken(interaction.customId, BICANH_QUICK_FIGHT_BUTTON_PREFIX);
     const { pending, run } = getBicanhPendingForUser(data, interaction.user.id);
@@ -20513,7 +20537,7 @@ Kết quả đã khắc vào đạo hồ.`, inline: false },
   }
 
   async function handleBicanhEscape(interaction) {
-    if (!interaction.deferred && !interaction.replied) await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => null);
+    if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate().catch(async () => interaction.deferReply().catch(() => null));
     const data = repairWeeklyBicanhData(getWeeklyBicanhData());
     const token = parseBicanhRunActionToken(interaction.customId, BICANH_ESCAPE_BUTTON_PREFIX);
     if (token.weekKey && token.weekKey !== data.weekKey) {
