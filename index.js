@@ -12,11 +12,16 @@
     EmbedBuilder,
     GatewayIntentBits,
     MessageFlags,
+    ModalBuilder,
     PermissionFlagsBits,
     StringSelectMenuBuilder,
+    TextInputBuilder,
+    TextInputStyle,
   } = require('discord.js');
 
   const { DISCORD_TOKEN } = process.env;
+  const PROFILE_ART_URL = process.env.PROFILE_ART_URL || '';
+  const PROFILE_BANNER_URL = process.env.PROFILE_BANNER_URL || 'https://i.pinimg.com/1200x/d3/c7/1c/d3c71c951b70d5748e1a5187507393f4.jpg';
 
   if (!DISCORD_TOKEN) {
     console.error('Thieu DISCORD_TOKEN trong .env');
@@ -24,13 +29,202 @@
   }
 
   const GOLD = 0xffd700;
+
+  // ===== Direct stat keys must be initialized before generated item/catalog builders =====
+  const DIRECT_STAT_KEYS = [
+    'tuVi',
+    'congHien',
+    'lucChien',
+    'dotPha',
+    'tamMaRisk',
+    'trongThuongDuration',
+    'tuViLoss',
+    'statusDuration',
+  ];
+
+  // ===== UI V19 · Premium Thiên Cơ skin =====
+  const THIEN_CO_UI_VERSION = 'v19-ui-x100';
+  const UI_V19 = {
+    colors: {
+      gold: 0xf1c40f,
+      jade: 0x2ecc71,
+      azure: 0x3498db,
+      violet: 0x9b59b6,
+      crimson: 0xe74c3c,
+      orange: 0xf97316,
+      slate: 0x2f3136,
+    },
+    icons: {
+      sect: '𓆩✦𓆪',
+      dot: '◆',
+      sub: '↳',
+      line: '━━━━━━━━━━━━━━━━━━━━',
+      smallLine: '────────────',
+      exp: '✦',
+      bag: '⬙',
+      root: '◇',
+      fate: '☯',
+      body: '✧',
+      art: '⚔',
+      shop: '◈',
+      event: '✺',
+      danger: '⚠',
+      ok: '✓',
+    },
+  };
+
+  function uiBar(current, total, size = 10) {
+    const safeTotal = Math.max(1, Number(total) || 1);
+    const safeCurrent = Math.max(0, Math.min(safeTotal, Number(current) || 0));
+    const filled = Math.round((safeCurrent / safeTotal) * size);
+    return `${'▰'.repeat(filled)}${'▱'.repeat(size - filled)} ${safeCurrent}/${safeTotal}`;
+  }
+
+  function uiNumber(value) {
+    return new Intl.NumberFormat('vi-VN').format(Math.max(0, Number(value) || 0));
+  }
+
+
+  function uiCompactValue(value, max = 700) {
+    return uiTrim(String(value ?? 'Chưa có').replace(new RegExp('```' + 'ansi', 'g'), '```').replace(/\u001b\[[0-9;]*m/g, ''), max);
+  }
+
+  function uiTrim(value, max = 180) {
+    const text = String(value ?? 'Chưa có').replace(/\s+/g, ' ').trim();
+    return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+  }
+
+  function uiPair(label, value, icon = '•') {
+    return `${icon} **${label}:** ${value ?? 'Chưa có'}`;
+  }
+
+  function uiSectionTitle(title, icon = '✦') {
+    return `${icon} ${title}`;
+  }
+
+  function uiFooter(text = 'Thiên Cơ · nửa code nửa tu tiên') {
+    return { text };
+  }
+
+  function uiEmbedBase(title, userOrMember = null, color = UI_V19.colors.gold) {
+    const embed = new EmbedBuilder()
+      .setColor(color)
+      .setTitle(title)
+      .setFooter(uiFooter('Thiên Cơ · gọn, rõ, đúng trọng tâm'));
+    const avatar = userOrMember?.displayAvatarURL?.({ size: 128 }) || userOrMember?.user?.displayAvatarURL?.({ size: 128 });
+    if (avatar) embed.setThumbnail(avatar);
+    return embed;
+  }
+
+
+  // ===== Display Safety Audit · applies to every embed =====
+  // Discord silently enforces strict limits: title 256, description 4096,
+  // field value 1024. This guard keeps the 1440-content systems from
+  // exploding just because a generated mission decided to write a novel.
+  const TD_DISPLAY_LIMITS = Object.freeze({
+    title: 256,
+    description: 4000,
+    fieldName: 256,
+    fieldValue: 1000,
+    footer: 1900,
+  });
+
+  function tdCleanDisplayText(value, fallback = 'Không có dữ liệu.') {
+    const text = String(value ?? fallback)
+      .replace(/\u001b\[[0-9;]*m/g, '')
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
+      .replace(/@everyone/g, '@\u200beveryone')
+      .replace(/@here/g, '@\u200bhere')
+      .replace(/[ \t]{2,}/g, ' ')
+      .replace(/\n{4,}/g, '\n\n\n')
+      .trim();
+    return text || fallback;
+  }
+
+  function tdClampDisplayText(value, maxLength, fallback = 'Không có dữ liệu.') {
+    const text = tdCleanDisplayText(value, fallback);
+    if (text.length <= maxLength) return text;
+    const suffix = '\n… đã rút gọn để không vượt giới hạn Discord';
+    const safeMax = Math.max(1, maxLength - suffix.length);
+    return `${text.slice(0, safeMax).trimEnd()}${suffix}`;
+  }
+
+  function tdNormalizeEmbedField(field) {
+    if (!field || typeof field !== 'object') return field;
+    return {
+      ...field,
+      name: tdClampDisplayText(field.name, TD_DISPLAY_LIMITS.fieldName, 'Thông tin'),
+      value: tdClampDisplayText(field.value, TD_DISPLAY_LIMITS.fieldValue, 'Không có dữ liệu.'),
+      inline: Boolean(field.inline),
+    };
+  }
+
+  function tdInstallEmbedDisplayGuard() {
+    if (EmbedBuilder.prototype.__tdDisplayGuardInstalled) return;
+    Object.defineProperty(EmbedBuilder.prototype, '__tdDisplayGuardInstalled', { value: true, enumerable: false });
+
+    const originalSetTitle = EmbedBuilder.prototype.setTitle;
+    EmbedBuilder.prototype.setTitle = function setTitleGuarded(value) {
+      return originalSetTitle.call(this, tdClampDisplayText(value, TD_DISPLAY_LIMITS.title, 'Thiên Đạo'));
+    };
+
+    const originalSetDescription = EmbedBuilder.prototype.setDescription;
+    EmbedBuilder.prototype.setDescription = function setDescriptionGuarded(value) {
+      return originalSetDescription.call(this, tdClampDisplayText(value, TD_DISPLAY_LIMITS.description, 'Không có mô tả.'));
+    };
+
+    const originalAddFields = EmbedBuilder.prototype.addFields;
+    EmbedBuilder.prototype.addFields = function addFieldsGuarded(...fields) {
+      const flat = fields.flat().filter(Boolean).slice(0, 25).map(tdNormalizeEmbedField);
+      if (flat.length <= 0) return this;
+      return originalAddFields.call(this, ...flat);
+    };
+
+    const originalSetFields = EmbedBuilder.prototype.setFields;
+    if (typeof originalSetFields === 'function') {
+      EmbedBuilder.prototype.setFields = function setFieldsGuarded(...fields) {
+        const flat = fields.flat().filter(Boolean).slice(0, 25).map(tdNormalizeEmbedField);
+        return originalSetFields.call(this, ...flat);
+      };
+    }
+
+    const originalSetFooter = EmbedBuilder.prototype.setFooter;
+    EmbedBuilder.prototype.setFooter = function setFooterGuarded(options) {
+      if (typeof options === 'string') {
+        return originalSetFooter.call(this, { text: tdClampDisplayText(options, TD_DISPLAY_LIMITS.footer, 'Thiên Đạo') });
+      }
+      if (!options || typeof options !== 'object') return originalSetFooter.call(this, options);
+      return originalSetFooter.call(this, {
+        ...options,
+        text: tdClampDisplayText(options.text, TD_DISPLAY_LIMITS.footer, 'Thiên Đạo'),
+      });
+    };
+  }
+
+  tdInstallEmbedDisplayGuard();
+
+  function uiActionRow(buttons) {
+    return new ActionRowBuilder().addComponents(...buttons);
+  }
+
+
   const DATA_DIR = path.join(__dirname, 'data');
   const USERS_FILE = path.join(DATA_DIR, 'users.json');
   const LUANDAO_FILE = path.join(DATA_DIR, 'luandao.json');
   const TRIBULATIONS_FILE = path.join(DATA_DIR, 'tribulations.json');
   const MISSIONS_FILE = path.join(DATA_DIR, 'missions.json');
+  const SU_KIEN_FILE = path.join(DATA_DIR, 'su_kien.json');
+  const BICANH_FILE = path.join(DATA_DIR, 'bicanh_weekly.json');
   const OPEN_TICKET_BUTTON = 'thien_dao_open_linh_can_ticket';
   const CLOSE_TICKET_BUTTON = 'thien_dao_close_linh_can_ticket';
+  const ONBOARDING_LINH_CAN_BUTTON = 'thien_dao_onboarding_linh_can';
+  const ONBOARDING_HUYEN_MACH_BUTTON = 'thien_dao_onboarding_huyen_mach';
+  const ONBOARDING_MENH_CACH_BUTTON = 'thien_dao_onboarding_menh_cach';
+  const ONBOARDING_STATUS_BUTTON = 'thien_dao_onboarding_status';
+  const ONBOARDING_BIRTH_MODAL_ID = 'thien_dao_onboarding_birth_modal';
+  const ONBOARDING_BIRTH_DAY_INPUT = 'thien_dao_birth_day';
+  const ONBOARDING_BIRTH_MONTH_INPUT = 'thien_dao_birth_month';
+  const ONBOARDING_BIRTH_YEAR_INPUT = 'thien_dao_birth_year';
   const TICKET_TOPIC_PREFIX = 'linhcan-owner:';
   const THU_NHAN_TOPIC_PREFIX = 'thu-nhan-owner:';
   const BAI_SU_TOPIC_PREFIX = 'bai-su-owner:';
@@ -41,10 +235,25 @@
   const ACCEPT_MASTER_BUTTON = 'thien_dao_accept_master';
   const REJECT_MASTER_BUTTON = 'thien_dao_reject_master';
   const CLOSE_REQUEST_TICKET_BUTTON = 'thien_dao_close_request_ticket';
+  const RELATION_ACCEPT_BUTTON_PREFIX = 'thien_dao_relation_accept:';
+  const RELATION_REJECT_BUTTON_PREFIX = 'thien_dao_relation_reject:';
+
   const CONG_PHAP_BUTTON_PREFIX = 'thien_dao_cong_phap:';
+  const CONG_PHAP_SELECT_CUSTOM_ID = 'thien_dao_cong_phap_select';
+  const DESTINY_PAGE_BUTTON_PREFIX = 'thien_dao_destiny_page:';
+  const DESTINY_PAGE_COUNT = 5;
   const TRIBULATION_SUPPORT_BUTTON_PREFIX = 'thien_dao_tribulation_support:';
   const TRIBULATION_SNEAK_BUTTON_PREFIX = 'thien_dao_tribulation_sneak:';
   const SHOP_PAGE_BUTTON_PREFIX = 'thien_dao_shop_page:';
+  const SHOP_CATEGORY_BUTTON_PREFIX = 'thien_dao_shop_category:';
+  const SHOP_ITEM_BUTTON_PREFIX = 'thien_dao_shop_item:';
+  const SHOP_BACK_BUTTON_PREFIX = 'thien_dao_shop_back:';
+  const SHOP_BUY_BUTTON_PREFIX = 'thien_dao_shop_buy:';
+  const TUIDO_CATEGORY_BUTTON_PREFIX = 'thien_dao_tuido_category:';
+  const TUIDO_ITEM_BUTTON_PREFIX = 'thien_dao_tuido_item:';
+  const TUIDO_BACK_BUTTON_PREFIX = 'thien_dao_tuido_back:';
+  const MISSION_NAV_BUTTON_PREFIX = 'thien_dao_mission_nav:';
+  const DUNGEON_NAV_BUTTON_PREFIX = 'thien_dao_dungeon_nav:';
   const MISSION_SELECT_CUSTOM_ID = 'thien_dao_mission_select';
   const MISSION_CREATE_PARTY_PREFIX = 'thien_dao_mission_create:';
   const MISSION_JOIN_PARTY_PREFIX = 'thien_dao_mission_join:';
@@ -52,11 +261,964 @@
   const MISSION_START_PREFIX = 'thien_dao_mission_start:';
   const MISSION_FIGHT_PREFIX = 'thien_dao_mission_fight:';
   const MISSION_ESCAPE_PREFIX = 'thien_dao_mission_escape:';
+  const MISSION_LOOT_CHOICE_PREFIX = 'thien_dao_mission_loot:';
+  const MISSION_CLOSE_TICKET_PREFIX = 'thien_dao_mission_close_ticket:';
+  const MISSION_COMBAT_SKILL_PREFIX = 'td_ms_skill:';
+  const MISSION_COMBAT_DEFEND_PREFIX = 'td_ms_def:';
+  const MISSION_COMBAT_AUTO_PREFIX = 'td_ms_auto:';
+  const MISSION_COMBAT_ESCAPE_PREFIX = 'td_ms_run:';
   const MISSION_REFRESH_BUTTON = 'thien_dao_mission_refresh';
+  const MISSION_REFRESH_BUTTON_PREFIX = 'thien_dao_mission_refresh:';
   const MISSION_MY_STATUS_BUTTON = 'thien_dao_mission_my_status';
+  const MISSION_CONTENT_VERSION = 'noi_tong_display_clear_v4';
+  const MISSION_STRATEGY_PREFIX = 'td_ms_strategy:';
+  const DUNGEON_SELECT_CUSTOM_ID = 'thien_dao_dungeon_select';
+  const DUNGEON_OPEN_PREFIX = 'thien_dao_dungeon_open:';
+  const DUNGEON_REFRESH_BUTTON = 'thien_dao_dungeon_refresh';
+  const BICANH_CELL_SELECT_PREFIX = 'thien_dao_bicanh_cell:';
+  const BICANH_REFRESH_BUTTON_PREFIX = 'thien_dao_bicanh_refresh:';
+  const BICANH_EXPLORE_BUTTON_PREFIX = 'thien_dao_bicanh_explore:';
+  const BICANH_JOIN_PARTY_BUTTON_PREFIX = 'thien_dao_bicanh_join:';
+  const BICANH_FIGHT_BUTTON_PREFIX = 'thien_dao_bicanh_fight:';
+  const BICANH_ESCAPE_BUTTON_PREFIX = 'thien_dao_bicanh_escape:';
+  const BICANH_EVENT_ACTION_BUTTON_PREFIX = 'td_bc_event:';
+  const BICANH_QUICK_FIGHT_BUTTON_PREFIX = 'td_bc_quick:';
+  const XUAT_SON_PICK_BUTTON_PREFIX = 'td_xs_pick:';
+  const XUAT_SON_METHOD_BUTTON_PREFIX = 'td_xs_method:';
+  const XUAT_SON_PREP_BUTTON_PREFIX = 'td_xs_prep:';
+  const XUAT_SON_FLOW_VERSION = 'xuatson_state_machine_v2';
+  const XUAT_SON_ACTIVE_TTL_MS = 18 * 60 * 60 * 1000;
+  const HOMNAY_NAV_BUTTON_PREFIX = 'td_today_nav:';
+  const BICANH_ROUTE_BUTTON_PREFIX = 'td_bc_route:';
+  const BICANH_COMBAT_SKILL_PREFIX = 'td_bc_skill:';
+  const BICANH_COMBAT_DEFEND_PREFIX = 'td_bc_def:';
+  const BICANH_COMBAT_AUTO_PREFIX = 'td_bc_auto:';
+  const BICANH_COMBAT_ESCAPE_PREFIX = 'td_bc_run:';
+  const BICANH_AUTO_RESOLVE_MS = 24 * 60 * 60 * 1000;
+  const MISSION_TICKET_DELETE_DELAY_MS = 12 * 1000;
+  const REQUEST_TICKET_DELETE_DELAY_MS = 15 * 1000;
+  const ONBOARDING_TICKET_DELETE_DELAY_MS = 30 * 1000;
+
+  const MISSION_STRATEGY_CONFIGS = {
+    safe: {
+      key: 'safe',
+      emoji: '🛡️',
+      name: 'An Toàn · Giảm rủi ro',
+      shortName: 'An Toàn',
+      buttonLabel: 'An Toàn',
+      chanceBonus: 0.12,
+      powerMult: 1.06,
+      rewardMult: 0.88,
+      tuViMult: 0.92,
+      injuryMult: 0.55,
+      masteryMult: 1.05,
+      materialBonus: 0,
+      note: 'Dễ thành công hơn, ít phạt khi thất bại, thưởng thấp hơn.',
+    },
+    balanced: {
+      key: 'balanced',
+      emoji: '⚖️',
+      name: 'Cân Bằng · Thưởng ổn',
+      shortName: 'Cân Bằng',
+      buttonLabel: 'Cân Bằng',
+      chanceBonus: 0.03,
+      powerMult: 1.00,
+      rewardMult: 1.00,
+      tuViMult: 1.00,
+      injuryMult: 1.00,
+      masteryMult: 1.15,
+      materialBonus: 1,
+      note: 'Cân bằng tỉ lệ thành công, thưởng và thuần thục.',
+    },
+    risky: {
+      key: 'risky',
+      emoji: '🧨',
+      name: 'Mạo Hiểm · Thưởng cao',
+      shortName: 'Mạo Hiểm',
+      buttonLabel: 'Mạo Hiểm',
+      chanceBonus: -0.10,
+      powerMult: 0.96,
+      rewardMult: 1.28,
+      tuViMult: 1.18,
+      injuryMult: 1.35,
+      masteryMult: 1.35,
+      materialBonus: 2,
+      note: 'Thưởng và vật chứng cao hơn, nhưng thất bại bị phạt nặng hơn.',
+    },
+  };
+
+  const MISSION_PARTY_ROLE_CONFIGS = {
+    doc_hanh: { emoji: '🧍', name: 'Độc Hành', effect: 'Đi một mình: +3% tỉ lệ thành công, giảm nhẹ phạt thất bại.' },
+    chu_tri: { emoji: '🧭', name: 'Chủ Trì', effect: 'Điều phối đội: +4% tỉ lệ thành công.' },
+    do_mach: { emoji: '🔎', name: 'Dò Mạch', effect: 'Đọc đúng loại lỗi: tăng sức xử lý và vật chứng.' },
+    ho_phap: { emoji: '🛡️', name: 'Hộ Pháp', effect: 'Che chắn cho đội: giảm thương tích khi thất bại.' },
+    ky_luc: { emoji: '📚', name: 'Ký Lục', effect: 'Ghi lại kết quả: tăng cống hiến và thuần thục.' },
+  };
+  const TICKET_OPEN_COOLDOWN_MS = 5 * 60 * 1000;
+  const REQUEST_TICKET_OPEN_COOLDOWN_MS = 10 * 60 * 1000;
+  const STALE_ONBOARDING_TICKET_MS = 24 * 60 * 60 * 1000;
+  const STALE_REQUEST_TICKET_MS = 24 * 60 * 60 * 1000;
+  const TICKET_OPEN_COOLDOWNS = new Map();
+  const BICANH_MAP_SIZE = 6;
+  const BICANH_MAP_CELLS = BICANH_MAP_SIZE * BICANH_MAP_SIZE;
+
+  const SU_KIEN_JOIN_BUTTON_PREFIX = 'thien_dao_su_kien_join:';
+  const KY_NGO_COOLDOWN_MS = 4 * 60 * 60 * 1000;
+  const PASSIVE_KY_NGO_COOLDOWN_MS = 90 * 60 * 1000;
+  const TU_LINH_HARVEST_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+  const DAU_PHAP_COOLDOWN_MS = 20 * 60 * 1000;
+  const DAU_PHAP_CHALLENGE_TTL_MS = 5 * 60 * 1000;
+  const DAU_PHAP_ACCEPT_BUTTON_PREFIX = 'thien_dao_dau_phap_accept:';
+  const DAU_PHAP_REJECT_BUTTON_PREFIX = 'thien_dao_dau_phap_reject:';
+  const DAU_PHAP_CHALLENGES = new Map();
+  const SU_KIEN_DURATION_MS = 2 * 60 * 60 * 1000;
+  const SU_KIEN_CREATE_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 
 
   const ELEMENTS = ['Kim', 'Mộc', 'Thủy', 'Hỏa', 'Thổ'];
+
+  function getTuViRoleName(realm, minor) {
+    return `${realm} ${minor}`;
+  }
+
+  function getTuViDaoTitle(realm) {
+    return TU_VI_REALM_TITLES?.[realm] ?? '';
+  }
+
+  function formatTuViRealmName(tuVi) {
+    const title = getTuViDaoTitle(tuVi?.realm);
+    return title ? `${tuVi.realm} · ${tuVi.minor} · ${title}` : `${tuVi.realm} · ${tuVi.minor}`;
+  }
+
+  function stripLinhCanSuffix(roleName) {
+    return String(roleName || '').replace(/\s*Linh Căn$/u, '').trim();
+  }
+
+  function getLinhCanCompactRoleName(quality, classification) {
+    return `${stripLinhCanSuffix(quality)} ${stripLinhCanSuffix(classification)} Linh Căn`;
+  }
+
+  function parseLinhCanCompactRoleName(roleName) {
+    const name = String(roleName || '').trim();
+
+    for (const quality of QUALITY_ROLES) {
+      for (const classification of CLASSIFICATION_ROLES) {
+        if (name === getLinhCanCompactRoleName(quality, classification)) {
+          return { quality, classification };
+        }
+      }
+    }
+
+    return null;
+  }
+
+  const MENH_CACH_ARCHETYPES =   [
+    {
+        "key": "thien_sinh_debugger",
+        "name": "Thiên Sinh Debugger",
+        "rarity": "Hiếm",
+        "element": "Kim",
+        "dao": "Sinh ra đã nghe được tiếng lỗi trong biển log, lấy bug làm yêu thú để trảm.",
+        "boon": "+8% thiên hướng nhận thưởng khi làm nhiệm vụ Trảm Bug / Code Review.",
+        "flaw": "Dễ cầu toàn, thấy warning nhỏ cũng muốn bế quan sửa tới sáng.",
+        "buff": "Chỉ số cũ: +5% tu vi từ chat có chữ bug/fix/debug; giảm nhẹ rủi ro Tâm Ma Debug."
+    },
+    {
+        "key": "co_tinh_doc_hanh",
+        "name": "Cô Tinh Độc Hành",
+        "rarity": "Hiếm",
+        "element": "Thủy",
+        "dao": "Đạo lộ cô độc, càng ít nhiễu loạn càng dễ nhập định và đọc xuyên code lạ.",
+        "boon": "Solo bí cảnh có thiên hướng rơi đồ tốt hơn.",
+        "flaw": "Đi tiểu đội đông người thì đạo tâm khó hòa hợp.",
+        "buff": "Chỉ số cũ: +6% tu vi khi tự tu luyện/kỳ ngộ đơn độc; đấu pháp bị đánh hội đồng giảm hiệu quả."
+    },
+    {
+        "key": "van_phap_quy_nhat",
+        "name": "Vạn Pháp Quy Nhất",
+        "rarity": "Cực hiếm",
+        "element": "Thổ",
+        "dao": "Vạn nhánh frontend, backend, data, tool-chain quy về một lõi fullstack.",
+        "boon": "Gợi ý cân bằng mọi loại nhiệm vụ, ít bị lệch hệ.",
+        "flaw": "Không bùng nổ sớm, sức mạnh tăng chậm nhưng rất bền.",
+        "buff": "Chỉ số cũ: +7% hiệu quả công pháp chủ tu và +3% mọi nguồn tu vi."
+    },
+    {
+        "key": "dao_tam_bat_on",
+        "name": "Đạo Tâm Bất Ổn",
+        "rarity": "Dị biến",
+        "element": "Hỏa",
+        "dao": "Sprint tới thì bốc cháy như hỏa kiếp, nhưng tâm ma deadline cũng dễ mượn gió nổi lên.",
+        "boon": "Gợi ý nhận tu vi cao khi liều lĩnh.",
+        "flaw": "Thiên kiếp và thất bại có xu hướng nặng hơn.",
+        "buff": "Chỉ số cũ: thưởng tu vi dao động mạnh, có cơ hội bạo kích nhưng dễ sinh Tâm Ma."
+    },
+    {
+        "key": "dia_mach_kien_co",
+        "name": "Địa Mạch Kiến Cơ",
+        "rarity": "Ổn định",
+        "element": "Thổ",
+        "dao": "Căn cơ dày như schema chuẩn hóa, hợp database, kiến trúc và hệ thống lâu dài.",
+        "boon": "Gợi ý ổn định phần thưởng, ít biến động xấu.",
+        "flaw": "Ít gặp kỳ ngộ bùng nổ.",
+        "buff": "Chỉ số cũ: +8% tiến độ Tụ Linh Trận, nhận thưởng ổn định hơn khi sự kiện tông môn hoàn thành."
+    },
+    {
+        "key": "phong_van_co_duyen",
+        "name": "Phong Vân Kỳ Ngộ",
+        "rarity": "Hiếm",
+        "element": "Mộc",
+        "dao": "Gặp task nhỏ hóa kỳ ngộ, từ một issue phụ có thể mọc thành module lớn.",
+        "boon": "Gợi ý gặp vật phẩm phụ khi điểm danh, nhiệm vụ, bí cảnh.",
+        "flaw": "Kết quả dao động, lúc rất tốt lúc rất thường.",
+        "buff": "Chỉ số cũ: +8% tỉ lệ kỳ ngộ tốt, tăng nhẹ vật phẩm rơi từ shop/sự kiện."
+    },
+    {
+        "key": "thien_co_an_tang",
+        "name": "Thiên Cơ Ẩn Tàng",
+        "rarity": "Thiên mệnh",
+        "element": "Kim",
+        "dao": "Mệnh số bị Thiên Đạo che nửa log, càng về sau càng lộ dị tượng kiến trúc.",
+        "boon": "Late-game có thiên hướng mạnh, hợp nâng phẩm và đạo thể hiếm.",
+        "flaw": "Giai đoạn đầu dễ thấy yếu hơn người cùng cảnh.",
+        "buff": "Chỉ số cũ: +10% may mắn ẩn khi bốc kỳ ngộ, có cơ hội né kết quả hung."
+    },
+    {
+        "key": "huyen_dien_luu_quang",
+        "name": "Huyễn Diện Lưu Quang",
+        "rarity": "Hiếm",
+        "element": "Hỏa",
+        "dao": "Mỹ cảm giao diện hóa thành pháp tắc, mỗi layout như một tầng ảo trận.",
+        "boon": "Gợi ý tốt với nhiệm vụ Huyễn Diện, UI, trình bày.",
+        "flaw": "Dễ mất kiên nhẫn với hạ tầng và dữ liệu khô cứng.",
+        "buff": "Chỉ số cũ: +6% lợi thế đấu pháp khi lực chiến thấp hơn đối thủ."
+    },
+    {
+        "key": "hau_dao_tram_tinh",
+        "name": "Hậu Đạo Trầm Tĩnh",
+        "rarity": "Ổn định",
+        "element": "Thủy",
+        "dao": "Ẩn sau màn hình, âm thầm điều phối API, auth, state và nghiệp vụ.",
+        "boon": "Gợi ý tốt với backend, API, auth, logic hệ thống.",
+        "flaw": "Ít nổi bật trên bảng khoe thành tựu nếu không làm nhiệm vụ lớn.",
+        "buff": "Chỉ số cũ: giảm tác hại Tâm Ma, +5% tu vi từ điểm danh và tụ linh."
+    },
+    {
+        "key": "nghich_thien_ma_menh",
+        "name": "Nghịch Thiên Ma Mệnh",
+        "rarity": "Cấm kỵ",
+        "element": "Hỏa",
+        "dao": "Không thuận thiên thời, nhưng càng bị production ép càng dễ bộc phát hotfix.",
+        "boon": "Khi thất bại liên tiếp, lần sau có thiên hướng bật ngược mạnh.",
+        "flaw": "Dễ dính trạng thái xấu, không hợp người thích ổn định.",
+        "buff": "Chỉ số cũ: +12% tu vi khi gặp hung hiểm, nhưng Tâm Ma kéo dài lâu hơn."
+    },
+    {
+        "key": "kiem_tam_code_reviewer",
+        "name": "Kiếm Tâm Code Reviewer",
+        "rarity": "Hiếm",
+        "element": "Kim",
+        "dao": "Một ánh mắt quét qua PR đã thấy sát khí null, lệch chuẩn và nợ kỹ thuật.",
+        "boon": "Gợi ý tốt với review, refactor, chuẩn hóa convention.",
+        "flaw": "Dễ làm đồng môn rén vì chém comment quá sắc.",
+        "buff": "Chỉ số cũ: +6% tu vi từ nhiệm vụ/sự kiện liên quan review, fix lỗi, kiểm tra."
+    },
+    {
+        "key": "tran_do_system_architect",
+        "name": "Trận Đồ System Architect",
+        "rarity": "Cực hiếm",
+        "element": "Thổ",
+        "dao": "Lấy service làm trận nhãn, lấy database làm địa mạch, dựng đại trận hệ thống.",
+        "boon": "Gợi ý mạnh với thiết kế module, phân quyền, luồng nghiệp vụ.",
+        "flaw": "Dễ nghĩ quá lớn khiến task nhỏ thành trận pháp nhiều tầng.",
+        "buff": "Chỉ số cũ: +7% hiệu quả Tụ Linh Trận và +5% lực chiến đấu pháp."
+    },
+    {
+        "key": "linh_van_api_su",
+        "name": "Linh Văn API Sư",
+        "rarity": "Hiếm",
+        "element": "Mộc",
+        "dao": "Khắc endpoint thành linh văn, nối các pháp khí rời rạc thành một mạch vận hành.",
+        "boon": "Gợi ý tốt khi làm API, integration, webhook và adapter.",
+        "flaw": "Nếu contract đổi liên tục, đạo tâm dễ rạn.",
+        "buff": "Chỉ số cũ: +6% cống hiến từ sự kiện tông môn, tăng nhẹ thưởng khi hỗ trợ người khác."
+    },
+    {
+        "key": "dan_tam_database_chu",
+        "name": "Đan Tâm Database Chủ",
+        "rarity": "Hiếm",
+        "element": "Thổ",
+        "dao": "Luyện bảng như luyện đan, constraint là lò, transaction là hỏa hầu.",
+        "boon": "Gợi ý tốt với SQL, migration, seed, backup và BI view.",
+        "flaw": "Dễ khó chịu với dữ liệu bẩn và schema tùy tiện.",
+        "buff": "Chỉ số cũ: +8% cống hiến, +5% tỉ lệ giữ vật phẩm khi gặp biến cố xấu."
+    },
+    {
+        "key": "phu_luc_regex_menh",
+        "name": "Phù Lục Regex Mệnh",
+        "rarity": "Dị biến",
+        "element": "Kim",
+        "dao": "Một dòng phù chú có thể trói nghìn chuỗi ký tự, cũng có thể tự trói chính mình.",
+        "boon": "Gợi ý phá nhanh task xử lý text, validate, parse log.",
+        "flaw": "Sai một ký tự là phù lục phản phệ khó dò.",
+        "buff": "Chỉ số cũ: +8% tỉ lệ kỳ ngộ dị biến, nhưng thưởng có biên độ thất thường."
+    },
+    {
+        "key": "van_du_devops_menh",
+        "name": "Vân Du DevOps Mệnh",
+        "rarity": "Hiếm",
+        "element": "Thủy",
+        "dao": "Cưỡi mây qua Docker, Vercel, Supabase, lấy pipeline làm phi kiếm.",
+        "boon": "Gợi ý tốt với deploy, env, CI/CD, monitoring.",
+        "flaw": "Dễ bị thiên kiếp do thiếu biến môi trường hoặc quyền hạ tầng.",
+        "buff": "Chỉ số cũ: giảm 8% cooldown Kỳ Ngộ/Tụ Linh, hợp với công pháp DevOps."
+    },
+    {
+        "key": "thien_co_ai_dao",
+        "name": "Thiên Cơ AI Đạo",
+        "rarity": "Thiên mệnh",
+        "element": "Mộc",
+        "dao": "Nghe được tiếng máy học trong thiên cơ, biết dùng agent, prompt và tool để mượn lực.",
+        "boon": "Gợi ý tốt với automation, AI workflow, phân tích và tạo nội dung.",
+        "flaw": "Dễ ỷ lại vào ngoại vật, bỏ quên căn cơ tự luyện.",
+        "buff": "Chỉ số cũ: +9% may mắn khi nhận kết quả ngẫu nhiên, tăng tỉ lệ vật phẩm hiếm."
+    },
+    {
+        "key": "ngu_hanh_fullstack",
+        "name": "Ngũ Hành Fullstack",
+        "rarity": "Cực hiếm",
+        "element": "Thổ",
+        "dao": "Kim Mộc Thủy Hỏa Thổ đều nhập repository, trước sau trong ngoài đều có thể tu.",
+        "boon": "Gợi ý nhận bonus nhẹ ở mọi hệ nhiệm vụ.",
+        "flaw": "Dễ phân tán nếu không chọn một pháp môn chủ tu.",
+        "buff": "Chỉ số cũ: +5% mọi hệ tu luyện, không bị phạt khi công pháp lệch mệnh."
+    },
+    {
+        "key": "cuu_chuyen_refactor",
+        "name": "Cửu Chuyển Refactor",
+        "rarity": "Hiếm",
+        "element": "Kim",
+        "dao": "Qua chín lần phá rồi lập, code mục nát hóa thành pháp bảo sạch sẽ.",
+        "boon": "Gợi ý tốt khi dọn legacy, tách module, giảm debt.",
+        "flaw": "Dễ refactor quá tay làm trễ tính năng.",
+        "buff": "Chỉ số cũ: +7% khi dùng vật phẩm nâng cấp/tẩy tủy, giảm lãng phí tiến độ."
+    },
+    {
+        "key": "hac_hoa_hotfix",
+        "name": "Hắc Hỏa Hotfix",
+        "rarity": "Dị biến",
+        "element": "Hỏa",
+        "dao": "Khi production đỏ lửa, hắc hỏa trong tâm bùng lên vá trời trong một commit.",
+        "boon": "Gợi ý mạnh trong tình huống khẩn cấp, bug blocker, demo sát giờ.",
+        "flaw": "Sau khi cứu hỏa dễ để lại than tro kỹ thuật cần dọn.",
+        "buff": "Chỉ số cũ: +10% tu vi khi đang có Tâm Ma hoặc trạng thái xấu."
+    },
+    {
+        "key": "thanh_lien_ux_menh",
+        "name": "Thanh Liên UX Mệnh",
+        "rarity": "Hiếm",
+        "element": "Mộc",
+        "dao": "Từ bùn requirement mọc lên đóa sen trải nghiệm, khiến người dùng bớt lạc trong mê trận.",
+        "boon": "Gợi ý tốt với UI/UX, flow, onboarding, wording.",
+        "flaw": "Dễ nhạy cảm với giao diện xấu và thao tác thừa.",
+        "buff": "Chỉ số cũ: +6% cống hiến từ sự kiện cộng đồng, giảm xác suất bị hung kỳ ngộ."
+    },
+    {
+        "key": "bach_ho_security_menh",
+        "name": "Bạch Hổ Security Mệnh",
+        "rarity": "Hiếm",
+        "element": "Kim",
+        "dao": "Sát khí bạch hổ trấn cổng auth, nhìn đâu cũng thấy lỗ hổng và quyền vượt cấp.",
+        "boon": "Gợi ý tốt với security, RLS, permission, validation.",
+        "flaw": "Dễ nghi ngờ mọi thứ, tốc độ triển khai bị chậm.",
+        "buff": "Chỉ số cũ: +8% lực chiến đấu pháp phòng thủ, tăng tỉ lệ phản kích."
+    },
+    {
+        "key": "chu_tuoc_demo_menh",
+        "name": "Chu Tước Demo Mệnh",
+        "rarity": "Hiếm",
+        "element": "Hỏa",
+        "dao": "Lời nói hóa hỏa điểu, biến tính năng khô cứng thành màn trình diễn có khí thế.",
+        "boon": "Gợi ý tốt khi thuyết trình, demo, làm slide, showcase.",
+        "flaw": "Nếu lõi chưa chắc, ánh lửa dễ thành phô trương.",
+        "buff": "Chỉ số cũ: +7% tu vi/cống hiến từ sự kiện tông môn công khai."
+    },
+    {
+        "key": "huyen_vu_backup_menh",
+        "name": "Huyền Vũ Backup Mệnh",
+        "rarity": "Ổn định",
+        "element": "Thủy",
+        "dao": "Mang mai rùa backup, rollback và log, chậm mà chắc, sống dai qua nhiều kiếp lỗi.",
+        "boon": "Gợi ý giảm rủi ro mất dữ liệu, hợp vận hành dài hạn.",
+        "flaw": "Ít thích thử nghiệm liều lĩnh.",
+        "buff": "Chỉ số cũ: có cơ hội bảo toàn một phần tổn thất khi đấu pháp thua hoặc gặp hung."
+    },
+    {
+        "key": "long_mach_product_dao",
+        "name": "Long Mạch Product Đạo",
+        "rarity": "Cực hiếm",
+        "element": "Thổ",
+        "dao": "Nhìn xuyên nhu cầu người dùng như nhìn long mạch, biết tính năng nào nên sinh, nên diệt.",
+        "boon": "Gợi ý tốt với roadmap, scope, MVP và ưu tiên sản phẩm.",
+        "flaw": "Dễ bị giằng giữa kỹ thuật đẹp và giá trị thật.",
+        "buff": "Chỉ số cũ: +8% thưởng sự kiện dài hạn và +5% tiến độ Tụ Linh Trận."
+    },
+    {
+        "key": "vo_tuong_algorithm",
+        "name": "Vô Tướng Algorithm",
+        "rarity": "Cực hiếm",
+        "element": "Kim",
+        "dao": "Thuật toán vô hình, không chấp ngôn ngữ, chỉ chấp độ phức tạp và đường đi tối ưu.",
+        "boon": "Gợi ý tốt với thuật toán, tối ưu, cấu trúc dữ liệu.",
+        "flaw": "Dễ xem nhẹ phần người dùng và nghiệp vụ.",
+        "buff": "Chỉ số cũ: +9% lực chiến đấu pháp, tăng bạo kích nếu đối thủ cao cảnh giới."
+    },
+    {
+        "key": "tinh_ban_data_menh",
+        "name": "Tinh Bàn Data Mệnh",
+        "rarity": "Hiếm",
+        "element": "Thủy",
+        "dao": "Xem dữ liệu như tinh bàn, từ số liệu rời rạc suy ra vận hành của tông môn.",
+        "boon": "Gợi ý tốt với dashboard, BI, report, thống kê.",
+        "flaw": "Nếu data sai thì thiên cơ luận ra cũng lệch.",
+        "buff": "Chỉ số cũ: +7% cống hiến và may mắn khi nhận thưởng theo chuỗi/ngày."
+    },
+    {
+        "key": "loi_kiep_cicd_menh",
+        "name": "Lôi Kiếp CI/CD Mệnh",
+        "rarity": "Dị biến",
+        "element": "Hỏa",
+        "dao": "Mỗi lần push là một lần nghênh lôi, build xanh thì đạo tâm sáng rực.",
+        "boon": "Gợi ý tốt với pipeline, test, lint, release.",
+        "flaw": "Một cấu hình sai có thể dẫn thiên lôi đánh thẳng production.",
+        "buff": "Chỉ số cũ: +9% thưởng khi đột phá/vượt kiếp, nhưng thất bại đau hơn."
+    },
+    {
+        "key": "thai_hu_cloud_menh",
+        "name": "Thái Hư Cloud Mệnh",
+        "rarity": "Hiếm",
+        "element": "Thủy",
+        "dao": "Thân ở local nhưng thần du cloud, tài nguyên co giãn như linh khí trong hư không.",
+        "boon": "Gợi ý tốt với cloud, serverless, storage, scaling.",
+        "flaw": "Dễ tốn linh thạch nếu không kiểm soát tài nguyên.",
+        "buff": "Chỉ số cũ: giảm cooldown nhẹ, +6% tu vi từ tụ linh và kỳ ngộ."
+    },
+    {
+        "key": "linh_lung_frontend_menh",
+        "name": "Linh Lung Frontend Mệnh",
+        "rarity": "Hiếm",
+        "element": "Mộc",
+        "dao": "Component trong tay như ngọc linh lung, mỗi state đổi là một lớp trận mở.",
+        "boon": "Gợi ý tốt với React, state, component, animation.",
+        "flaw": "Dễ mắc kẹt trong pixel và hiệu ứng.",
+        "buff": "Chỉ số cũ: +6% cống hiến sự kiện cộng đồng, tăng điểm duyên khi chat."
+    },
+    {
+        "key": "van_tuong_toolsmith",
+        "name": "Vạn Tượng Toolsmith",
+        "rarity": "Cực hiếm",
+        "element": "Kim",
+        "dao": "Biết rèn tool như rèn pháp khí, một script tốt tiết kiệm trăm ngày công.",
+        "boon": "Gợi ý tốt với CLI, automation, generator, bot.",
+        "flaw": "Dễ mất thời gian làm tool cho việc chỉ cần làm tay một lần.",
+        "buff": "Chỉ số cũ: +8% hiệu quả pháp bảo/vật phẩm hỗ trợ."
+    },
+    {
+        "key": "nghiep_hoa_legacy_menh",
+        "name": "Nghiệp Hỏa Legacy Mệnh",
+        "rarity": "Cấm kỵ",
+        "element": "Hỏa",
+        "dao": "Mang nghiệp hỏa từ code cũ, càng mục nát càng có đất luyện ma công bảo trì.",
+        "boon": "Gợi ý mạnh khi cứu repo cũ, vá lỗi dây chuyền, đọc code hỗn loạn.",
+        "flaw": "Dễ nhiễm thói quen xấu của tiền nhân.",
+        "buff": "Chỉ số cũ: +12% tu vi từ nguồn rủi ro, nhưng dễ kích hoạt phản phệ Legacy."
+    },
+    {
+        "key": "hu_khong_async_menh",
+        "name": "Hư Không Async Mệnh",
+        "rarity": "Dị biến",
+        "element": "Thủy",
+        "dao": "Thần thức phân luồng trong hư không, hiểu await, race condition và callback nghiệp.",
+        "boon": "Gợi ý tốt với async flow, queue, realtime, websocket.",
+        "flaw": "Dễ gặp bug ẩn lúc chạy thật mới hiện hình.",
+        "buff": "Chỉ số cũ: giảm cooldown Kỳ Ngộ 10%, thưởng tụ linh đến chậm nhưng cao hơn."
+    },
+    {
+        "key": "chan_ngon_typescript",
+        "name": "Chân Ngôn TypeScript",
+        "rarity": "Hiếm",
+        "element": "Kim",
+        "dao": "Lấy type làm chân ngôn hộ thể, chưa chạy đã trấn áp nhiều yêu lỗi.",
+        "boon": "Gợi ý tốt với type safety, interface, refactor an toàn.",
+        "flaw": "Dễ bị rối bởi generic tầng tầng lớp lớp.",
+        "buff": "Chỉ số cũ: giảm biến động xấu, +6% tu vi ổn định từ mọi nguồn."
+    },
+    {
+        "key": "can_khon_git_menh",
+        "name": "Càn Khôn Git Mệnh",
+        "rarity": "Ổn định",
+        "element": "Thổ",
+        "dao": "Một tay xoay branch, một tay định commit, biết hợp nhất càn khôn mà không sinh xung đột.",
+        "boon": "Gợi ý tốt với teamwork, merge, versioning, release note.",
+        "flaw": "Gặp conflict lớn vẫn cần tĩnh tâm rất lâu.",
+        "buff": "Chỉ số cũ: +7% thưởng từ hoạt động Git/commit, tăng ổn định đạo tâm."
+    },
+    {
+        "key": "dai_dao_tech_lead",
+        "name": "Đại Đạo Tech Lead",
+        "rarity": "Thiên mệnh",
+        "element": "Thổ",
+        "dao": "Không chỉ tu một pháp, mà biết chia đạo lộ, nâng đồng môn và giữ hướng đại cục.",
+        "boon": "Gợi ý tốt với lãnh đạo kỹ thuật, phân rã task, review và quyết sách.",
+        "flaw": "Gánh nhiều nhân quả, sai một quyết định ảnh hưởng cả tông môn.",
+        "buff": "Chỉ số cũ: +10% cống hiến sự kiện tông môn và +6% lực chiến khi hỗ trợ đồng môn."
+    }
+];
+
+  const HUYEN_MACH_ARCHETYPES =   [
+    {
+        "key": "vo_cau_dao_the",
+        "name": "Vô Cấu Đạo Thể",
+        "rarity": "Cực hiếm",
+        "element": "Thủy",
+        "effect": "Căn cơ sạch như repo mới init, ít nhiễm debt, hợp nâng phẩm và giữ đạo tâm.",
+        "awakening": "Tịnh hóa",
+        "buff": "Chỉ số cũ: giảm tác hại Tâm Ma, +6% tu vi khi không có trạng thái xấu."
+    },
+    {
+        "key": "kiem_tam_thong_minh",
+        "name": "Kiếm Tâm Thông Minh",
+        "rarity": "Hiếm",
+        "element": "Kim",
+        "effect": "Quyết đoán, hợp pháp bảo dạng kiếm, trảm bug, phản ứng nhanh.",
+        "awakening": "Kiếm minh",
+        "buff": "Chỉ số cũ: +8% lực chiến đấu pháp, tăng tỉ lệ bạo kích khi dùng Kim hệ."
+    },
+    {
+        "key": "hon_don_dao_the",
+        "name": "Hỗn Độn Đạo Thể",
+        "rarity": "Dị biến",
+        "element": "Thổ",
+        "effect": "Mọi kết quả có xu hướng dao động mạnh, có thể rất cao hoặc rất thấp.",
+        "awakening": "Hỗn nguyên",
+        "buff": "Chỉ số cũ: buff ngẫu nhiên mỗi nguồn thưởng; có thể cao nhưng không ổn định."
+    },
+    {
+        "key": "bug_ma_chi_the",
+        "name": "Bug Ma Chi Thể",
+        "rarity": "Cấm kỵ",
+        "element": "Hỏa",
+        "effect": "Càng gặp lỗi càng hưng phấn, hợp nhiệm vụ Trảm Bug nhưng dễ sinh Tâm Ma.",
+        "awakening": "Ma hóa debug",
+        "buff": "Chỉ số cũ: +12% tu vi khi trảm bug/kỳ ngộ hung, nhưng dễ nhiễm Tâm Ma Debug."
+    },
+    {
+        "key": "dia_mach_long_cot",
+        "name": "Địa Mạch Long Cốt",
+        "rarity": "Hiếm",
+        "element": "Thổ",
+        "effect": "Căn cốt bền, hợp database, kiến trúc, hệ thống và nhiệm vụ dài hơi.",
+        "awakening": "Long cốt",
+        "buff": "Chỉ số cũ: +10% tiến độ Tụ Linh Trận, tăng phòng thủ đấu pháp."
+    },
+    {
+        "key": "linh_van_than_toc",
+        "name": "Linh Văn Thần Tốc",
+        "rarity": "Hiếm",
+        "element": "Mộc",
+        "effect": "Học nhanh, thích nghi nhanh, hợp đa công pháp và nhiệm vụ mới.",
+        "awakening": "Linh văn",
+        "buff": "Chỉ số cũ: giảm 8% cooldown Tụ Linh/Kỳ Ngộ, tăng thưởng từ chat."
+    },
+    {
+        "key": "thien_loi_chien_the",
+        "name": "Thiên Lôi Chiến Thể",
+        "rarity": "Cực hiếm",
+        "element": "Kim",
+        "effect": "Càng gần thiên kiếp càng mạnh, hợp đột phá và chinh phạt nguy hiểm.",
+        "awakening": "Lôi văn",
+        "buff": "Chỉ số cũ: +10% đấu pháp tấn công, có cơ hội lôi kích thêm thưởng."
+    },
+    {
+        "key": "huyen_anh_dao_the",
+        "name": "Huyễn Ảnh Đạo Thể",
+        "rarity": "Hiếm",
+        "element": "Thủy",
+        "effect": "Ẩn hiện khó lường, hợp né rủi ro, solo, lối chơi mộng cảnh.",
+        "awakening": "Ảnh độn",
+        "buff": "Chỉ số cũ: +8% né hung kỳ ngộ, đấu pháp có cơ hội né đòn."
+    },
+    {
+        "key": "van_tuong_than_co",
+        "name": "Vạn Tượng Thần Cơ",
+        "rarity": "Thiên mệnh",
+        "element": "Mộc",
+        "effect": "Tư duy hệ thống mạnh, hợp fullstack, AI agent, tool-chain và kiến trúc.",
+        "awakening": "Thần cơ",
+        "buff": "Chỉ số cũ: +9% hiệu quả mọi tính năng ngẫu nhiên: kỳ ngộ, sự kiện, vật phẩm."
+    },
+    {
+        "key": "thai_hu_cloud_the",
+        "name": "Thái Hư Cloud Thể",
+        "rarity": "Hiếm",
+        "element": "Thủy",
+        "effect": "Linh khí trú trong cloud, hợp serverless, storage, scaling và deploy đa cảnh giới.",
+        "awakening": "Cloud độn",
+        "buff": "Chỉ số cũ: giảm cooldown nhẹ, tăng thưởng tụ linh theo cấp trận."
+    },
+    {
+        "key": "hu_khong_async_the",
+        "name": "Hư Không Async Thể",
+        "rarity": "Dị biến",
+        "element": "Thủy",
+        "effect": "Kinh mạch chạy song song, hợp await, queue, realtime nhưng dễ gặp race condition.",
+        "awakening": "Async tức",
+        "buff": "Chỉ số cũ: nhận thêm lợi ích từ hành động có cooldown; hợp Kỳ Ngộ/Tụ Linh."
+    },
+    {
+        "key": "cuu_duong_runtime_the",
+        "name": "Cửu Dương Runtime Thể",
+        "rarity": "Hiếm",
+        "element": "Hỏa",
+        "effect": "Dương hỏa vận hành mạnh, hợp performance, runtime, xử lý nóng và tối ưu tốc độ.",
+        "awakening": "Runtime hỏa",
+        "buff": "Chỉ số cũ: +9% tu vi trực tiếp từ đan dược và sự kiện nóng."
+    },
+    {
+        "key": "cuu_am_cache_the",
+        "name": "Cửu Âm Cache Thể",
+        "rarity": "Hiếm",
+        "element": "Thủy",
+        "effect": "Âm khí lưu trữ sâu, hợp cache, memoization, CDN và giảm tải hệ thống.",
+        "awakening": "Cache ảnh",
+        "buff": "Chỉ số cũ: tích trữ một phần thưởng, tụ linh nhận nhiều hơn sau cooldown dài."
+    },
+    {
+        "key": "tien_thien_compiler_thai",
+        "name": "Tiên Thiên Compiler Thai",
+        "rarity": "Cực hiếm",
+        "element": "Kim",
+        "effect": "Trời sinh hiểu luật biên dịch, hợp TypeScript, transpile, build và static analysis.",
+        "awakening": "Biên dịch",
+        "buff": "Chỉ số cũ: +10% hiệu quả công pháp và giảm lỗi khi đổi build tu luyện."
+    },
+    {
+        "key": "van_phap_framework_thai",
+        "name": "Vạn Pháp Framework Thai",
+        "rarity": "Hiếm",
+        "element": "Mộc",
+        "effect": "Dung nạp nhiều framework mà không loạn căn cơ, hợp đổi stack và ráp sản phẩm nhanh.",
+        "awakening": "Framework hợp nhất",
+        "buff": "Chỉ số cũ: +7% mọi nguồn thưởng nếu đã chọn công pháp chủ tu."
+    },
+    {
+        "key": "bat_diet_legacy_than",
+        "name": "Bất Diệt Legacy Thân",
+        "rarity": "Cấm kỵ",
+        "element": "Thổ",
+        "effect": "Dù code cũ mục nát vẫn không gục, hợp bảo trì, vá lỗi và sống chung với nợ kỹ thuật.",
+        "awakening": "Legacy bất diệt",
+        "buff": "Chỉ số cũ: khó bị mất lợi ích khi thất bại, nhưng phản phệ legacy nặng hơn."
+    },
+    {
+        "key": "long_tuong_load_balancer_the",
+        "name": "Long Tượng Load Balancer Thể",
+        "rarity": "Hiếm",
+        "element": "Thổ",
+        "effect": "Khí lực phân tải như long tượng, hợp scaling, traffic và điều phối request.",
+        "awakening": "Phân tải",
+        "buff": "Chỉ số cũ: +8% sự kiện đông người, lực chiến ổn định khi bị thách đấu."
+    },
+    {
+        "key": "tinh_than_data_lake_the",
+        "name": "Tinh Thần Data Lake Thể",
+        "rarity": "Hiếm",
+        "element": "Thủy",
+        "effect": "Tinh thần chứa biển dữ liệu, hợp BI, log, analytics và báo cáo vận hành.",
+        "awakening": "Data triều",
+        "buff": "Chỉ số cũ: +8% cống hiến/nhiệm vụ và tăng tỉ lệ nhận vật phẩm tài nguyên."
+    },
+    {
+        "key": "nguyen_tu_network_the",
+        "name": "Nguyên Từ Network Thể",
+        "rarity": "Hiếm",
+        "element": "Kim",
+        "effect": "Cảm được luồng packet và độ trễ, hợp API gateway, socket, network và integration.",
+        "awakening": "Nguyên từ",
+        "buff": "Chỉ số cũ: +6% thưởng khi tương tác nhiều người, tăng hiệu quả sự kiện tông môn."
+    },
+    {
+        "key": "hon_nguyen_kernel_the",
+        "name": "Hỗn Nguyên Kernel Thể",
+        "rarity": "Cực hiếm",
+        "element": "Thổ",
+        "effect": "Căn cốt chạm tầng lõi, hợp OS, hạ tầng, process, memory và cơ chế nền.",
+        "awakening": "Kernel khai nguyên",
+        "buff": "Chỉ số cũ: +9% tu vi gốc, tăng lực chiến nền theo cảnh giới."
+    },
+    {
+        "key": "thanh_lien_ux_the",
+        "name": "Thanh Liên UX Thể",
+        "rarity": "Hiếm",
+        "element": "Mộc",
+        "effect": "Sinh cơ trong trải nghiệm, hợp user flow, layout, wording và giảm ma sát thao tác.",
+        "awakening": "UX khai hoa",
+        "buff": "Chỉ số cũ: giảm rủi ro hung, +6% cống hiến từ hoạt động cộng đồng."
+    },
+    {
+        "key": "kim_cuong_validation_than",
+        "name": "Kim Cương Validation Thân",
+        "rarity": "Hiếm",
+        "element": "Kim",
+        "effect": "Thân cứng như rule kiểm tra, hợp validation, schema, form guard và chặn input tà đạo.",
+        "awakening": "Kim cương",
+        "buff": "Chỉ số cũ: giảm thất bại khi tẩy tủy/đột phá, tăng phòng thủ đấu pháp."
+    },
+    {
+        "key": "phuong_hoang_rollback_the",
+        "name": "Phượng Hoàng Rollback Thể",
+        "rarity": "Thiên mệnh",
+        "element": "Hỏa",
+        "effect": "Sau mỗi lần deploy sụp có thể niết bàn bằng rollback, backup và migration ngược.",
+        "awakening": "Rollback niết bàn",
+        "buff": "Chỉ số cũ: có cơ hội hồi lại sau kết quả xấu, nhận thêm thưởng khi vượt Tâm Ma."
+    },
+    {
+        "key": "chan_long_architecture_cot",
+        "name": "Chân Long Architecture Cốt",
+        "rarity": "Thiên mệnh",
+        "element": "Thổ",
+        "effect": "Long cốt chống đại cục, hợp kiến trúc tổng thể, domain model và module lõi.",
+        "awakening": "Chân long",
+        "buff": "Chỉ số cũ: +10% Tụ Linh Trận và +8% lực chiến tổng hợp."
+    },
+    {
+        "key": "huyen_vu_backup_the",
+        "name": "Huyền Vũ Backup Thể",
+        "rarity": "Hiếm",
+        "element": "Thủy",
+        "effect": "Mai rùa che dữ liệu, hợp backup, restore, audit log và vận hành bền bỉ.",
+        "awakening": "Huyền vũ",
+        "buff": "Chỉ số cũ: bảo toàn một phần tổn thất khi hung kỳ ngộ hoặc thua đấu pháp."
+    },
+    {
+        "key": "bach_ho_pentest_the",
+        "name": "Bạch Hổ Pentest Thể",
+        "rarity": "Hiếm",
+        "element": "Kim",
+        "effect": "Sát khí kiểm thử xâm nhập, hợp security audit, quyền truy cập và truy lỗ hổng.",
+        "awakening": "Bạch hổ",
+        "buff": "Chỉ số cũ: +9% đấu pháp, tăng khả năng xuyên phòng thủ đối thủ."
+    },
+    {
+        "key": "chu_tuoc_presentation_the",
+        "name": "Chu Tước Presentation Thể",
+        "rarity": "Hiếm",
+        "element": "Hỏa",
+        "effect": "Hỏa điểu truyền ý, hợp demo, slide, showcase và biến kỹ thuật thành câu chuyện.",
+        "awakening": "Chu tước",
+        "buff": "Chỉ số cũ: +8% thưởng sự kiện công khai và tăng cống hiến khi tham gia đông người."
+    },
+    {
+        "key": "thanh_long_growth_the",
+        "name": "Thanh Long Growth Thể",
+        "rarity": "Cực hiếm",
+        "element": "Mộc",
+        "effect": "Sinh khí tăng trưởng, hợp cộng đồng, sản phẩm dài hạn, mentor và mở rộng hệ sinh thái.",
+        "awakening": "Thanh long",
+        "buff": "Chỉ số cũ: +9% tăng trưởng dài hạn, tụ linh và tẩy tủy có thêm lợi ích nhỏ."
+    },
+    {
+        "key": "co_than_mainframe_cot",
+        "name": "Cổ Thần Mainframe Cốt",
+        "rarity": "Cấm kỵ",
+        "element": "Thổ",
+        "effect": "Cốt cách cổ xưa, đọc được hệ thống cũ nặng nề mà người thường không dám chạm.",
+        "awakening": "Cổ thần",
+        "buff": "Chỉ số cũ: lực chiến nền rất cao, nhưng cooldown hoạt động lâu hơn chút."
+    },
+    {
+        "key": "thon_thien_stress_test_the",
+        "name": "Thôn Thiên Stress Test Thể",
+        "rarity": "Cấm kỵ",
+        "element": "Hỏa",
+        "effect": "Nuốt áp lực tải lớn thành sức mạnh, hợp benchmark, stress test và chống sập.",
+        "awakening": "Thôn thiên",
+        "buff": "Chỉ số cũ: càng nhiều Tâm Ma/hung hiểm càng tăng thưởng, rủi ro phản phệ cao."
+    },
+    {
+        "key": "thien_co_agent_cot",
+        "name": "Thiên Cơ Agent Cốt",
+        "rarity": "Thiên mệnh",
+        "element": "Mộc",
+        "effect": "Thần cốt khắc agent, hợp automation, workflow, prompt, tool use và điều phối AI.",
+        "awakening": "Agent khai cơ",
+        "buff": "Chỉ số cũ: +10% may mắn tự động trong kỳ ngộ/sự kiện, hợp build AI."
+    },
+    {
+        "key": "dia_sat_migration_cot",
+        "name": "Địa Sát Migration Cốt",
+        "rarity": "Dị biến",
+        "element": "Thổ",
+        "effect": "Chịu được địa sát dữ liệu, hợp migration, seed, schema diff và sửa bảng rối.",
+        "awakening": "Migration sát",
+        "buff": "Chỉ số cũ: +8% khi đổi trạng thái/nâng cấp, nhưng thao tác lỗi dễ phản phệ."
+    },
+    {
+        "key": "khong_linh_zero_state",
+        "name": "Không Linh Zero State",
+        "rarity": "Hiếm",
+        "element": "Thủy",
+        "effect": "Tâm trí rỗng sáng như màn hình chưa có dữ liệu, hợp onboarding và trạng thái trống.",
+        "awakening": "Zero state",
+        "buff": "Chỉ số cũ: trạng thái sạch cho +7% tu vi; khi không có role xấu sẽ mạnh hơn."
+    },
+    {
+        "key": "van_kiem_algorithm_cot",
+        "name": "Vạn Kiếm Algorithm Cốt",
+        "rarity": "Cực hiếm",
+        "element": "Kim",
+        "effect": "Vạn kiếm trong cốt, hợp thuật toán, tối ưu, code review và quyết đoán kỹ thuật.",
+        "awakening": "Vạn kiếm",
+        "buff": "Chỉ số cũ: +10% lực chiến đấu pháp và +5% tu vi từ công pháp thuật toán."
+    },
+    {
+        "key": "linh_lung_component_the",
+        "name": "Linh Lung Component Thể",
+        "rarity": "Hiếm",
+        "element": "Mộc",
+        "effect": "Kinh mạch chia thành component tinh xảo, hợp React, design system và tái sử dụng UI.",
+        "awakening": "Component linh",
+        "buff": "Chỉ số cũ: +7% thưởng từ công pháp frontend/component, tăng cống hiến cộng đồng."
+    },
+    {
+        "key": "dai_nhat_deploy_than",
+        "name": "Đại Nhật Deploy Thân",
+        "rarity": "Thiên mệnh",
+        "element": "Hỏa",
+        "effect": "Thân sáng dưới đại nhật release, hợp deploy, công khai thành quả và dẫn khí thế demo.",
+        "awakening": "Đại nhật deploy",
+        "buff": "Chỉ số cũ: +10% tu vi từ sự kiện/deploy, giảm Tâm Ma khi hoàn tất nhiệm vụ lớn."
+    }
+];
+
+  const MENH_CACH_ROLE_NAMES = MENH_CACH_ARCHETYPES.map((entry) => entry.name);
+  const DAO_THE_ROLE_NAMES = HUYEN_MACH_ARCHETYPES.map((entry) => entry.name);
+
+  const THIEN_TUONG_ARCHETYPES = [
+    { key: 'linh_khi_bao_phat', name: 'Linh Khí Bạo Phát', element: 'Mộc', omen: 'Linh khí từ địa mạch dâng lên, thích hợp tu luyện và điểm danh.', effect: 'Nên làm nhiệm vụ thường, điểm danh, tích tu vi.' },
+    { key: 'bug_trieu_xam_lan', name: 'Bug Triều Xâm Lấn', element: 'Hỏa', omen: 'Bug khí cuộn quanh Sơn Môn, nhiệm vụ Trảm Bug dễ sinh dị biến.', effect: 'Nên đi nhiệm vụ Trảm Bug, bí cảnh rủi ro cao hơn nhưng có màu.' },
+    { key: 'dia_mach_nhieu_loan', name: 'Địa Mạch Nhiễu Loạn', element: 'Thổ', omen: 'Mạch dữ liệu dưới tông môn rung chuyển, schema và SQL sinh dị tượng.', effect: 'Nên làm nhiệm vụ database, dọn migration, backup, seed.' },
+    { key: 'hac_van_ap_dinh', name: 'Hắc Vân Áp Đỉnh', element: 'Thủy', omen: 'Hắc vân che đạo quang, tâm ma dễ hiện nhưng kỳ ngộ cũng sâu.', effect: 'Bí cảnh khó hơn về cảm giác, hợp người muốn liều.' },
+    { key: 'thien_dao_gia_ho', name: 'Thiên Đạo Gia Hộ', element: 'Kim', omen: 'Kim quang phủ pháp đàn, nâng phẩm và đột phá đều có điềm lành.', effect: 'Nên nâng phẩm, chuẩn bị đột phá, kiểm tra hành trang.' },
+    { key: 'vo_tuong_tinh_da', name: 'Vô Tướng Tĩnh Dạ', element: 'Thủy', omen: 'Đêm tĩnh không tiếng bug, hợp bế quan và ngộ đạo.', effect: 'Nên bế quan, xem mệnh, dò huyền mạch, sắp lại build.' },
+    { key: 'xich_hoa_luyen_tam', name: 'Xích Hỏa Luyện Tâm', element: 'Hỏa', omen: 'Hỏa khí luyện tâm, thành thì bùng nổ, bại thì sinh ma.', effect: 'Nên thử nhiệm vụ khó nếu đã chuẩn bị kỹ.' },
+  ];
+
+  const KY_NGO_EVENTS = [
+    {
+      key: 'legacy_code_co_dong',
+      name: 'Legacy Code Cổ Động',
+      group: 'Cát duyên',
+      text: 'Ngươi nhặt được một đoạn legacy code cổ, càng đọc càng thấy đạo lý kiến trúc cũ.',
+      tuVi: 90,
+      congHien: 18,
+      tuLinhExp: 10,
+    },
+    {
+      key: 'bug_core_roi_xuong',
+      name: 'Bug Core Rơi Xuống',
+      group: 'Cát duyên',
+      text: 'Một Bug Core rơi ra từ khe nứt runtime, tông môn ghi công đạo hữu đã trấn áp dị tượng.',
+      tuVi: 60,
+      congHien: 35,
+      item: 'tieu_refactor_linh_thach',
+      tuLinhExp: 8,
+    },
+    {
+      key: 'linh_mach_sang_len',
+      name: 'Linh Mạch Sáng Lên',
+      group: 'Cát duyên',
+      text: 'Tụ linh trận trong động phủ tự sáng, linh căn được rửa qua một lớp thanh khí.',
+      tuVi: 40,
+      congHien: 10,
+      linhCanPurify: 35,
+      tuLinhExp: 18,
+    },
+    {
+      key: 'thien_dao_trace_log',
+      name: 'Thiên Đạo Trace Log',
+      group: 'Cát duyên',
+      text: 'Trong lúc debug, ngươi nhìn thấy một dòng trace log do Thiên Đạo để lại.',
+      tuVi: 120,
+      congHien: 12,
+      status: { name: 'Kỳ Ngộ Gia Thân', hours: 6, tuViMultiplierValue: 1.12 },
+      tuLinhExp: 12,
+    },
+    {
+      key: 'tam_ma_debug_noi_day',
+      name: 'Tâm Ma Debug Nổi Dậy',
+      group: 'Hung duyên',
+      text: 'Ngươi fix một bug nhưng sinh ra ba bug mới. Tâm ma debug thừa cơ xâm nhập đạo tâm.',
+      tuVi: 30,
+      congHien: 5,
+      status: { name: 'Tâm Ma Quấn Thân', hours: 3, dotPhaPenalty: true },
+    },
+    {
+      key: 'deploy_lac_nhip',
+      name: 'Deploy Lạc Nhịp',
+      group: 'Hung duyên',
+      text: 'Một lần deploy lệch nhánh khiến linh khí nghịch lưu. May mà rollback kịp nên chưa tổn thương căn cơ.',
+      tuVi: 20,
+      congHien: 8,
+      status: { name: 'Tâm Ma Quấn Thân', hours: 2, dotPhaPenalty: true },
+    },
+  ];
+
+  const TU_LINH_LEVEL_CAP = 12;
+
+  const SU_KIEN_TEMPLATES = [
+    {
+      key: 'bug_ma_xam_nhap',
+      name: 'Bug Ma Xâm Nhập Tàng Kinh Các',
+      description: 'Bug Ma lẩn vào Tàng Kinh Các, nhiễu loạn công pháp và làm vẩn đục linh mạch. Đồng môn cùng trấn áp để nhận thưởng.',
+      target: 8,
+      actionLabel: 'Trấn Áp Bug Ma',
+      rewardTuVi: 160,
+      rewardCongHien: 45,
+      tuLinhExp: 25,
+    },
+    {
+      key: 'linh_vu_tuoi_xuong',
+      name: 'Linh Vũ Tưới Xuống Sơn Môn',
+      description: 'Mưa linh khí rơi xuống Sơn Môn. Ai kịp tụ khí sẽ nhận linh lực và điểm tụ linh trận.',
+      target: 6,
+      actionLabel: 'Tụ Khí',
+      rewardTuVi: 120,
+      rewardCongHien: 30,
+      tuLinhExp: 35,
+    },
+    {
+      key: 'server_room_loi_kiep',
+      name: 'Server Room Lôi Kiếp',
+      description: 'Lôi quang đánh xuống server room cổ, log cháy thành đạo văn. Cần đồng môn cùng ổn định pháp trận.',
+      target: 10,
+      actionLabel: 'Ổn Định Pháp Trận',
+      rewardTuVi: 190,
+      rewardCongHien: 55,
+      tuLinhExp: 20,
+    },
+    {
+      key: 'dia_mach_cache_day_song',
+      name: 'Địa Mạch Cache Dậy Sóng',
+      description: 'Cache địa mạch dâng sóng, dữ liệu cũ và linh khí mới va vào nhau. Ai tham gia khai thông sẽ được thưởng.',
+      target: 7,
+      actionLabel: 'Khai Thông Địa Mạch',
+      rewardTuVi: 145,
+      rewardCongHien: 38,
+      tuLinhExp: 30,
+    },
+  ];
   const CAN_NAMES = ['Giáp', 'Ất', 'Bính', 'Đinh', 'Mậu', 'Kỷ', 'Canh', 'Tân', 'Nhâm', 'Quý'];
   const CHI_NAMES = ['Tý', 'Sửu', 'Dần', 'Mão', 'Thìn', 'Tỵ', 'Ngọ', 'Mùi', 'Thân', 'Dậu', 'Tuất', 'Hợi'];
   const CLASSIFICATION_ROLES = [
@@ -72,8 +1234,42 @@
     'Thượng Phẩm Linh Căn',
     'Cực Phẩm Linh Căn',
     'Thiên Phẩm Linh Căn',
+    'Thánh Phẩm Linh Căn',
+    'Tiên Phẩm Linh Căn',
+    'Hỗn Độn Linh Căn',
+    'Đạo Nguyên Linh Căn',
   ];
-  const ELEMENT_ROLE_NAMES = ELEMENTS.map((element) => `${element} Linh Căn`);
+  const LINH_CAN_COMPACT_ROLE_NAMES = QUALITY_ROLES.flatMap((quality) =>
+    CLASSIFICATION_ROLES.map((classification) => getLinhCanCompactRoleName(quality, classification)),
+  );
+  const LINH_CAN_PURIFY_COSTS = {
+    'Hạ Phẩm Linh Căn': 120,
+    'Trung Phẩm Linh Căn': 220,
+    'Thượng Phẩm Linh Căn': 360,
+    'Cực Phẩm Linh Căn': 520,
+    'Thiên Phẩm Linh Căn': 800,
+    'Thánh Phẩm Linh Căn': 1200,
+    'Tiên Phẩm Linh Căn': 1800,
+    'Hỗn Độn Linh Căn': 2600,
+  };
+  const DESTINY_RARITY_BUFFS = {
+    'Ổn định': 1.02,
+    'Hiếm': 1.04,
+    'Dị biến': 1.05,
+    'Cực hiếm': 1.07,
+    'Thiên mệnh': 1.09,
+    'Cấm kỵ': 1.10,
+  };
+  const DAO_BODY_RARITY_BUFFS = {
+    'Ổn định': 1.02,
+    'Hiếm': 1.03,
+    'Dị biến': 1.04,
+    'Cực hiếm': 1.06,
+    'Thiên mệnh': 1.08,
+    'Cấm kỵ': 1.09,
+  };
+  const LEGACY_ELEMENT_ROLE_NAMES = ELEMENTS.map((element) => `${element} Linh Căn`);
+  const ELEMENT_ROLE_NAMES = LEGACY_ELEMENT_ROLE_NAMES; // chi dung de don role cu, khong tao/gán role ngũ hành mới
   const STAFF_ROLE_NAMES = ['Trưởng Lão', 'Chấp Pháp Sứ'];
   const SENIOR_DISCIPLE_APPROVER_ROLE_NAMES = [
     'Đạo Tổ',
@@ -102,10 +1298,10 @@
     'Đại Trưởng Lão',
     'Trưởng Lão',
     'Chấp Pháp Trưởng Lão',
-    'Đường Chủ',
     'Chấp Pháp Sứ',
     'Chấp Sự',
     'Dẫn Đạo Sư',
+    'Đường Chủ',
   ];
   const MASTER_STAFF_ROLE_NAMES = ['Trưởng Lão', 'Đường Chủ'];
   const ALL_QUALITY_ROLE_NAMES = [...QUALITY_ROLES];
@@ -113,12 +1309,16 @@
     'Tâm Ma Quấn Thân',
     'Bế Quan',
     'Linh Khí Bạo Phát',
-    'Cơ Duyên Gia Thân',
+    'Kỳ Ngộ Gia Thân',
     'Đạo Tâm Kiên Định',
     'Đạo Cơ Rạn Nứt',
     'Thiên Lôi Tôi Thể',
     'Nghiệp Lực',
+    'Trọng Thương',
+    'Nhiễm Uế Khí',
+    'Tĩnh Dưỡng',
   ];
+  const DAI_DAO_TONG_ROLE_NAME = 'Đại Đạo Tông';
   const DISCIPLE_RANK_ROLES = [
     'Tán Tu',
     'Ký Danh Đệ Tử',
@@ -135,6 +1335,104 @@
     'Phàm Nhân',
     'Luyện Khí',
     'Trúc Cơ',
+    'Kết Đan',
+    'Kim Đan',
+    'Nguyên Anh',
+    'Hóa Thần',
+    'Luyện Hư',
+    'Hợp Thể',
+    'Đại Thừa',
+    'Độ Kiếp',
+    'Tán Tiên',
+    'Nhân Tiên',
+    'Địa Tiên',
+    'Thiên Tiên',
+    'Chân Tiên',
+    'Huyền Tiên',
+    'Kim Tiên',
+    'Thái Ất Chân Tiên',
+    'Đại La Kim Tiên',
+    'Tiên Vương',
+    'Tiên Tôn',
+    'Tiên Đế',
+    'Chuẩn Thánh',
+    'Thánh Nhân',
+    'Đạo Tổ',
+  ];
+
+  const TU_VI_REALM_TITLES = {
+    'Phàm Nhân': 'Sơ Kiến Mã Đạo',
+    'Luyện Khí': 'Dẫn Khí Nhập Mạch Lệnh',
+    'Trúc Cơ': 'Dựng Nền Đạo Cơ',
+    'Kết Đan': 'Kết Mã Nguyên Đan',
+    'Kim Đan': 'Lõi Đạo Thành Kim',
+    'Nguyên Anh': 'Phân Hồn Khởi Tiến Trình',
+    'Hóa Thần': 'Thần Niệm Hóa Thuật',
+    'Luyện Hư': 'Giải Cấu Hư Không',
+    'Hợp Thể': 'Đồng Bộ Thân Pháp',
+    'Đại Thừa': 'Kiến Trúc Đại Đạo',
+    'Độ Kiếp': 'Thiên Lôi Kiểm Mã',
+    'Tán Tiên': 'Thoát Xác Legacy',
+    'Nhân Tiên': 'Mã Hồn Nhập Tiên Cốt',
+    'Địa Tiên': 'Địa Mạch Khởi Cơ Sở',
+    'Thiên Tiên': 'Thiên Cơ Liên Cloud',
+    'Chân Tiên': 'Chân Lệnh Bất Diệt',
+    'Huyền Tiên': 'Huyền Thuật Bất Đồng Bộ',
+    'Kim Tiên': 'Kim Thân Biên Dịch',
+    'Thái Ất Chân Tiên': 'Vạn Luồng Quy Tâm',
+    'Đại La Kim Tiên': 'Đại La Mã Hải',
+    'Tiên Vương': 'Chưởng Vực Root Quyền',
+    'Tiên Tôn': 'Thiên Quy Trấn Protocol',
+    'Tiên Đế': 'Đế Lệnh Áp Vạn Server',
+    'Chuẩn Thánh': 'Chạm Ngưỡng Source Thiên Đạo',
+    'Thánh Nhân': 'Bất Nhiễm Bug Nhân Quả',
+    'Đạo Tổ': 'Khai Nguyên Main Đạo',
+  };
+
+  // Giữ map legacy để người từng có role Code Đạo/Đại La từ bản thử nghiệm cũ
+  // vẫn được nhận diện và tự dọn role cũ khi đồng bộ cảnh giới.
+  const LEGACY_TU_VI_REALMS = [
+    'Phàm Nhân Script',
+    'Nhập Môn Code Đạo',
+    'Luyện Khí Debug',
+    'Trúc Cơ Syntax',
+    'Kết Đan Runtime',
+    'Kim Đan Git Đạo',
+    'Nguyên Anh Core Linh',
+    'Hóa Thần Framework',
+    'Luyện Hư Refactor',
+    'Hợp Thể Merge Đạo',
+    'Đại Thừa Release',
+    'Độ Kiếp Production',
+    'Phi Thăng Cloud Realm',
+    'Nhân Tiên Server Linh',
+    'Địa Tiên Database',
+    'Thiên Tiên Backend Đạo',
+    'Chân Tiên Fullstack',
+    'Huyền Tiên Kernel',
+    'Kim Tiên Compiler',
+    'Thái Ất DevOps',
+    'Thái Ất Architect',
+    'Đại La Kim Tiên Principal',
+    'Tiên Vương Tech Lead',
+    'Tiên Tôn Staff Engineer',
+    'Tiên Đế Distinguished',
+    'Hỗn Nguyên System Architect',
+    'Chuẩn Thánh Root Admin',
+    'Thánh Nhân Source Master',
+    'Thiên Đạo Superuser',
+    'Đại Đạo Kernel Source',
+    'Đạo Tổ Maintainer',
+  ];
+
+  const LEGACY_TU_VI_REALM_MAP = LEGACY_TU_VI_REALMS.reduce((map, name, index) => {
+    map[name] = Math.min(TU_VI_REALMS.length - 1, Math.max(0, Math.floor(index * (TU_VI_REALMS.length - 1) / Math.max(1, LEGACY_TU_VI_REALMS.length - 1))));
+    return map;
+  }, {});
+  const LEGACY_BARE_TU_VI_REALMS = [
+    'Phàm Nhân',
+    'Luyện Khí',
+    'Trúc Cơ',
     'Kim Đan',
     'Nguyên Anh',
     'Hóa Thần',
@@ -145,6 +1443,16 @@
     'Phi Thăng',
   ];
   const MINOR_REALMS = ['Sơ Kỳ', 'Trung Kỳ', 'Hậu Kỳ', 'Đỉnh Phong'];
+  const TU_VI_COMPACT_ROLE_ENTRIES = TU_VI_REALMS.flatMap((realm, realmIndex) =>
+    MINOR_REALMS.map((minor, minorIndex) => ({
+      realm,
+      minor,
+      level: realmIndex * MINOR_REALMS.length + minorIndex,
+      roleName: getTuViRoleName(realm, minor),
+    })),
+  );
+  const TU_VI_COMPACT_ROLE_NAMES = TU_VI_COMPACT_ROLE_ENTRIES.map((entry) => entry.roleName);
+  const ALL_TU_VI_REALM_ROLE_NAMES = [...new Set([...TU_VI_COMPACT_ROLE_NAMES, ...LEGACY_BARE_TU_VI_REALMS, ...LEGACY_TU_VI_REALMS])];
   const MAX_TU_VI_LEVEL = TU_VI_REALMS.length * MINOR_REALMS.length - 1;
   const MESSAGE_CONG_HIEN_COOLDOWN_MS = 90 * 1000;
   const DAILY_MESSAGE_CONG_HIEN_LIMIT = 50;
@@ -154,7 +1462,6 @@ const GITHUB_DAILY_EXP_CAP = 120;
 const GITHUB_DAILY_TUVI_CAP = 1500;
 const LEGACY_USER_FIELDS = ['lastCultivateAt', 'lastBreakthroughAt', 'lastMessageExpAt', 'dailyMessageExp'];
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-const CO_DUYEN_COOLDOWN_MS = ONE_DAY_MS;
 const DOT_PHA_FAIL_COOLDOWN_MS = 12 * 60 * 60 * 1000;
 const TRIBULATION_ACTION_COST = 50;
 const LUAN_DAO_STAFF_ROLE_NAMES = [
@@ -168,13 +1475,114 @@ const LUAN_DAO_STAFF_ROLE_NAMES = [
     'Dẫn Đạo Sư',
   ];
 const AUTO_DISCIPLE_THRESHOLDS = [
-    { roleName: 'Tán Tu', exp: 0 },
-    { roleName: 'Ký Danh Đệ Tử', exp: 100 },
-    { roleName: 'Tạp Dịch Đệ Tử', exp: 300 },
+    { roleName: 'Ký Danh Đệ Tử', exp: 0 },
+    { roleName: 'Tạp Dịch Đệ Tử', exp: 250 },
     { roleName: 'Ngoại Môn Đệ Tử', exp: 800 },
     { roleName: 'Nội Môn Đệ Tử', exp: 2000 },
     { roleName: 'Chân Truyền Đệ Tử', exp: 5000 },
   ];
+  const DISCIPLE_UPGRADE_COSTS = AUTO_DISCIPLE_THRESHOLDS;
+  const MISSION_TIER_ORDER = ['tap_dich', 'ngoai_mon', 'noi_mon', 'truong_lao'];
+  const MISSION_TIER_CONFIGS = {
+    tap_dich: {
+      key: 'tap_dich',
+      label: 'Nhiệm Vụ Tạp Dịch',
+      shortLabel: 'Tạp Dịch',
+      minRoleName: 'Ký Danh Đệ Tử',
+      minRealmIndex: 0,
+      color: 0xeab308,
+      description: 'Bảng nền tảng cho Ký Danh/Tạp Dịch: việc nhẹ, rủi ro thấp, thưởng ít.',
+    },
+    ngoai_mon: {
+      key: 'ngoai_mon',
+      label: 'Nhiệm Vụ Ngoại Môn',
+      shortLabel: 'Ngoại Môn',
+      minRoleName: 'Ngoại Môn Đệ Tử',
+      minRealmIndex: 1,
+      color: 0x22c55e,
+      description: 'Bảng thực chiến cho Ngoại Môn: Git, frontend, backend, database, deploy cấp vừa.',
+    },
+    noi_mon: {
+      key: 'noi_mon',
+      label: 'Nhiệm Vụ Nội Môn',
+      shortLabel: 'Nội Môn',
+      minRoleName: 'Nội Môn Đệ Tử',
+      minRealmIndex: 3,
+      color: 0x3b82f6,
+      description: 'Bảng khó cho Nội Môn: kiến trúc, bảo mật, CI/CD, deadlock, legacy và production risk.',
+    },
+    truong_lao: {
+      key: 'truong_lao',
+      label: 'Nhiệm Vụ Trưởng Lão',
+      shortLabel: 'Trưởng Lão',
+      minRoleName: 'Trưởng Lão',
+      minRealmIndex: 5,
+      color: 0xa855f7,
+      description: 'Bảng cấp cao cho Trưởng Lão: đại kiếp hệ thống, kiểm pháp, giữ đạo thống và xử production.',
+    },
+  };
+  const MISSION_TIER_REWARD_MULTIPLIERS = {
+    tap_dich: 0.55,
+    ngoai_mon: 1.0,
+    noi_mon: 1.85,
+    truong_lao: 3.0,
+  };
+  const MISSION_TIER_TUVI_MULTIPLIERS = {
+    tap_dich: 0.7,
+    ngoai_mon: 1.0,
+    noi_mon: 1.6,
+    truong_lao: 2.4,
+  };
+
+  // ===== Power Scale lõi thống nhất cho toàn hệ thống =====
+  const UNIFIED_CONTENT_TIERS = [
+    { key: 'tap_dich', label: 'Tạp Dịch', missionTier: 'tap_dich', minRealmIndex: 0, identity: 'Ký Danh Đệ Tử', powerMult: 0.65, rewardMult: 0.55 },
+    { key: 'hoang', label: 'Hoàng Giai', missionTier: 'ngoai_mon', minRealmIndex: 1, identity: 'Ngoại Môn Đệ Tử', powerMult: 0.9, rewardMult: 0.85 },
+    { key: 'huyen', label: 'Huyền Giai', missionTier: 'ngoai_mon', minRealmIndex: 2, identity: 'Ngoại Môn Đệ Tử', powerMult: 1.12, rewardMult: 1.05 },
+    { key: 'dia', label: 'Địa Giai', missionTier: 'noi_mon', minRealmIndex: 3, identity: 'Nội Môn Đệ Tử', powerMult: 1.45, rewardMult: 1.45 },
+    { key: 'thien', label: 'Thiên Giai', missionTier: 'noi_mon', minRealmIndex: 6, identity: 'Chân Truyền Đệ Tử', powerMult: 1.9, rewardMult: 2.0 },
+    { key: 'dao', label: 'Đạo Giai', missionTier: 'truong_lao', minRealmIndex: 10, identity: 'Trưởng Lão+', powerMult: 2.55, rewardMult: 3.2 },
+  ];
+
+  const UNIFIED_SYSTEM_TAGS = [
+    'mission_single', 'mission_board', 'dao_nghe', 'bicanh', 'kyngo', 'bequan',
+    'dotpha', 'monster', 'item', 'sect_event', 'relationship', 'hidden_line',
+  ];
+
+  function getUnifiedContentTier(keyOrMissionTier = 'tap_dich') {
+    const raw = String(keyOrMissionTier || '').trim();
+    return UNIFIED_CONTENT_TIERS.find((entry) => entry.key === raw || entry.missionTier === raw)
+      ?? UNIFIED_CONTENT_TIERS[0];
+  }
+
+  function getUnifiedContentTierForRealm(realmIndex = 0) {
+    const index = Math.max(0, Number(realmIndex) || 0);
+    let tier = UNIFIED_CONTENT_TIERS[0];
+    for (const entry of UNIFIED_CONTENT_TIERS) {
+      if (index >= entry.minRealmIndex) tier = entry;
+    }
+    return tier;
+  }
+
+  function getUnifiedPowerBudget({ tier = 'tap_dich', dangerKey = 'normal', realmIndex = 0, role = 'general' } = {}) {
+    const tierInfo = getUnifiedContentTier(tier);
+    const danger = getMissionDangerConfig(dangerKey);
+    const baseLevel = Math.max(0, Number(realmIndex) || tierInfo.minRealmIndex || 0) * MINOR_REALMS.length;
+    const basePower = getMissionPowerFromLevel(Math.max(0, Math.min(MAX_TU_VI_LEVEL, baseLevel)));
+    const roleMult = role === 'boss' ? 1.28 : role === 'party' ? 1.12 : role === 'support' ? 0.92 : 1;
+    return {
+      tierKey: tierInfo.key,
+      tierLabel: tierInfo.label,
+      identity: tierInfo.identity,
+      power: Math.max(1, Math.floor(basePower * tierInfo.powerMult * (danger?.powerMult || 1) * roleMult)),
+      rewardMult: Number((tierInfo.rewardMult * (role === 'boss' ? 1.35 : 1)).toFixed(3)),
+      dangerLabel: danger?.label || 'Thường',
+    };
+  }
+
+  const DAILY_CHECKIN_BASE_CONG_HIEN = 50;
+  const DAILY_CHECKIN_BASE_TUVI = 40;
+  const DAILY_CHECKIN_MAX_STREAK_BONUS_DAYS = 10;
   const CONG_PHAP_OPTIONS = [
     { key: 'frontend', emoji: '💻', name: 'frontend-huyễn-diện', roleName: '💻 frontend-huyễn-diện' },
     { key: 'backend', emoji: '⚙️', name: 'backend-hậu-đạo', roleName: '⚙️ backend-hậu-đạo' },
@@ -200,6 +1608,669 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     '☁️ Docker Vân Hạ Pháp',
   ];
   const ALL_CONG_PHAP_ROLE_NAMES = [...CONG_PHAP_ROLE_NAMES, ...LEGACY_CONG_PHAP_ROLE_NAMES];
+  const LEGACY_CONG_PHAP_KEY_MAP = {
+    '⚛️ React Huyễn Diện Công': 'frontend',
+    '🟦 TypeScript Chân Kinh': 'system',
+    '🟨 JavaScript Tâm Pháp': 'frontend',
+    '🟩 Node Hậu Đạo Quyết': 'backend',
+    '🗄️ SQL Địa Mạch Kinh': 'database',
+    '🐘 PostgreSQL Địa Mạch Kinh': 'database',
+    '🎨 Figma Huyễn Hình Thuật': 'uiux',
+    '☁️ Docker Vân Hạ Pháp': 'devops',
+  };
+
+
+  const CONG_PHAP_STAGES = [
+    { name: 'Sơ Khuy Môn Kính', exp: 0, unlock: 1, capRealm: 99 },
+    { name: 'Nhập Môn', exp: 80, unlock: 1, passive: '+2% lực chiến khi dùng công pháp', capRealm: 1 },
+    { name: 'Tiểu Thành', exp: 260, unlock: 2, passive: 'Mở chiêu công kích thứ hai', capRealm: 3 },
+    { name: 'Đại Thành', exp: 650, unlock: 2, passive: 'Chiêu công kích có hiệu ứng ổn định hơn', capRealm: 5 },
+    { name: 'Viên Mãn', exp: 1300, unlock: 3, passive: 'Mở chiêu hộ thân/điều tức', capRealm: 7 },
+    { name: 'Xuất Thần Nhập Hóa', exp: 2400, unlock: 3, passive: 'Giảm áp lực khí, skill thủ mạnh hơn', capRealm: 10 },
+    { name: 'Phản Phác Quy Chân', exp: 4200, unlock: 4, passive: 'Mở tuyệt kỹ công pháp', capRealm: 13 },
+    { name: 'Thông Huyền', exp: 7200, unlock: 4, passive: 'Tuyệt kỹ ổn định hơn', capRealm: 20 },
+    { name: 'Hóa Đạo', exp: 12000, unlock: 4, passive: 'Công pháp nhập đạo, nhận nội tại tối thượng', capRealm: 99 },
+  ];
+  const CONG_PHAP_MAX_STAGE = CONG_PHAP_STAGES.length - 1;
+  const CONG_PHAP_BREAKTHROUGH_BASE_CHANCE = 72;
+
+  const DEFAULT_COMBAT_SKILLS = [
+    { key: 'dao_kiem', emoji: '⚔️', name: 'Đạo Kiếm Cơ Bản', power: 0.92, accuracy: 0.96, qiCost: 0, qiGain: 16, effect: 'Đòn thường ổn định.' },
+    { key: 'linh_khi_bao', emoji: '💥', name: 'Linh Khí Bạo Kích', power: 1.22, accuracy: 0.86, qiCost: 18, qiGain: 10, critChance: 0.12, effect: 'Sát thương mạnh, có chí mạng.' },
+    { key: 'ho_the', emoji: '🛡️', name: 'Hộ Thể Chân Khí', power: 0.55, accuracy: 1, qiCost: 12, qiGain: 12, shieldPct: 0.12, defBuff: 0.08, effect: 'Tạo giáp và tăng thủ.' },
+    { key: 'pha_dao', emoji: '🌩️', name: 'Phá Đạo Nhất Kích', power: 1.65, accuracy: 0.78, qiCost: 42, qiGain: 6, critChance: 0.18, effect: 'Tuyệt kỹ sát thương lớn.' },
+  ];
+
+  const MONSTER_COMBAT_SKILLS = [
+    { key: 'bug_can', emoji: '🐛', name: 'Bug Cắn Linh Mạch', power: 0.88, accuracy: 0.94, qiCost: 0, qiGain: 14, effect: 'Đòn quái cơ bản.' },
+    { key: 'stack_trace', emoji: '📜', name: 'Stack Trace Trấn Áp', power: 1.12, accuracy: 0.88, qiCost: 16, qiGain: 10, targetDefDebuff: 0.08, effect: 'Giảm thủ mục tiêu.' },
+    { key: 'memory_leak', emoji: '🩸', name: 'Memory Leak Ăn Mòn', power: 0.74, accuracy: 0.9, qiCost: 20, qiGain: 8, dotPower: 0.09, effect: 'Gây sát thương theo lượt.' },
+    { key: 'production_crash', emoji: '🔥', name: 'Production Crash', power: 1.55, accuracy: 0.76, qiCost: 40, qiGain: 6, stunChance: 0.12, effect: 'Đại chiêu, có thể làm choáng.' },
+  ];
+
+
+
+  const ITEM_COMBAT_PROFILES = {
+    weapon: { label: 'Pháp Khí Công Kích', power: 0.075, critChance: 0.05, qiGain: 2, text: 'Tăng sát thương chiêu công kích và tuyệt kỹ.' },
+    artifact: { label: 'Pháp Bảo Đạo Cơ', power: 0.045, accuracy: 0.025, shieldPct: 0.025, text: 'Ổn định đạo cơ, tăng chính xác và nội lực.' },
+    armor: { label: 'Giáp / Đạo Bào Hộ Thân', power: 0.018, shieldPct: 0.075, defBuff: 0.06, healPct: 0.012, text: 'Tăng giáp, thủ và khả năng sống sót trong bí cảnh.' },
+    tool: { label: 'Pháp Cụ Nghề', accuracy: 0.04, qiGain: 4, priority: 1, text: 'Giúp vận công mượt hơn, hồi khí và mở hiệu quả nghề.' },
+    talisman: { label: 'Phù Lục Hộ Thân', shieldPct: 0.05, defBuff: 0.035, healPct: 0.012, text: 'Tăng phòng hộ, giảm rủi ro bị dồn sát thương.' },
+  };
+
+  const ITEM_FAMILY_COMBAT_BONUSES = {
+    frontend: { accuracy: 0.03, priority: 1, text: 'Frontend: tăng tốc độ xuất chiêu và chính xác.' },
+    backend: { dotPower: 0.025, text: 'Backend: chiêu công kích dễ để lại bug ăn mòn.' },
+    fullstack: { power: 0.025, shieldPct: 0.02, text: 'Fullstack: công thủ cân bằng.' },
+    mobile: { priority: 2, accuracy: 0.02, text: 'Mobile: ưu tiên ra tay trước.' },
+    database: { stunChance: 0.04, defBuff: 0.03, text: 'Database: tăng khống chế và phòng thủ.' },
+    ai: { critChance: 0.06, text: 'AI: tăng chí mạng.' },
+    devops: { healPct: 0.025, shieldPct: 0.025, text: 'DevOps: tự hồi và tạo giáp tốt hơn.' },
+    security: { shieldPct: 0.04, defBuff: 0.05, text: 'Security: tăng thủ và hộ thể.' },
+    game: { critChance: 0.04, power: 0.025, text: 'Game: bùng nổ sát thương.' },
+    uiux: { accuracy: 0.035, shieldPct: 0.02, text: 'UI/UX: ổn định nhịp trận.' },
+    system: { dotPower: 0.02, stunChance: 0.025, text: 'System: đánh lâu càng lợi.' },
+    git: { qiGain: 4, accuracy: 0.02, text: 'Git: hồi khí và nối combo tốt.' },
+    clean: { defBuff: 0.03, healPct: 0.02, text: 'Clean: giảm nhiễu, hồi phục nhẹ.' },
+    bug: { power: 0.035, dotPower: 0.02, text: 'Bug: mạnh nhưng dễ để lại phản phệ.' },
+    syntax: { accuracy: 0.035, priority: 1, text: 'Syntax: tăng Logic, bắt lỗi lệnh và phá dị văn.' },
+    runtime: { priority: 2, qiGain: 3, text: 'Runtime: tăng nhịp lượt, hồi khí và chống crash.' },
+    memory_leak: { dotPower: 0.025, healPct: 0.015, text: 'Memory Leak: bào mòn và hút tài nguyên theo lượt.' },
+    deadlock: { stunChance: 0.04, defBuff: 0.035, text: 'Deadlock: tăng khóa lượt và phòng thủ.' },
+    race_condition: { priority: 2, accuracy: 0.025, text: 'Race Condition: hành động lệch nhịp, ưu tiên lượt.' },
+    dependency: { defBuff: 0.04, shieldPct: 0.025, text: 'Dependency: giáp dày, kéo dài và chịu lỗi tốt.' },
+    legacy: { defBuff: 0.055, shieldPct: 0.025, text: 'Legacy: cực cứng, hợp refactor lâu dài.' },
+    zero_day: { critChance: 0.055, power: 0.025, text: 'Zero-Day: xuyên Integrity, chí mạng cao.' },
+    cache: { accuracy: 0.035, shieldPct: 0.02, text: 'Cache: ảo ảnh, tránh sai lệch hiển thị.' },
+    merge_conflict: { qiGain: 3, power: 0.02, text: 'Merge Conflict: phân nhánh, nối combo và xung đột party.' },
+    rate_limit: { priority: 1, shieldPct: 0.03, text: 'Rate Limit: phạt spam, giữ nhịp combat.' },
+    hallucination: { critChance: 0.045, accuracy: 0.035, text: 'Hallucination: lừa nhận thức, tăng chí mạng khi đọc sai.' },
+    pill: { qiGain: 2, healPct: 0.015, text: 'Đan đạo: hỗ trợ hồi phục sau combat.' },
+    talisman: { shieldPct: 0.035, text: 'Phù đạo: hộ thân trong giao tranh.' },
+  };
+
+
+  const ITEM_SET_DEFINITIONS = {
+    git_menh: { name: 'Set Git Mệnh', families: ['git'], stats2: { congHien: 4, tuVi: 2 }, stats3: { lucChien: 5, dotPha: 2 }, combat3: { qiGain: 3, accuracy: 0.02 }, note: 'Combo commit/review, hồi khí và tăng cống hiến.' },
+    deploy_ho_dao: { name: 'Set Deploy Hộ Đạo', families: ['devops'], stats2: { trongThuongDuration: -4, tamMaRisk: -2 }, stats3: { lucChien: 6, dotPha: 2 }, combat3: { shieldPct: 0.04, healPct: 0.02 }, note: 'Sống sót tốt hơn khi gặp Production/Deploy.' },
+    database_long_mach: { name: 'Set Database Long Mạch', families: ['database'], stats2: { dotPha: 3, lucChien: 3 }, stats3: { tamMaRisk: -3, congHien: 3 }, combat3: { stunChance: 0.05, defBuff: 0.03 }, note: 'Khống chế và ổn định long mạch dữ liệu.' },
+    debug_tram_bug: { name: 'Set Debug Trảm Bug', families: ['bug', 'clean'], stats2: { tamMaRisk: -4, tuVi: 2 }, stats3: { lucChien: 7, trongThuongDuration: -2 }, combat3: { dotPower: 0.04, accuracy: 0.02 }, note: 'Khắc bug, giảm nhiễu và ăn mòn quái lỗi.' },
+    ai_dien_toan: { name: 'Set AI Diễn Toán', families: ['ai'], stats2: { lucChien: 4, dotPha: 2 }, stats3: { tuVi: 3, tamMaRisk: -2 }, combat3: { critChance: 0.055, accuracy: 0.025 }, note: 'Tăng chí mạng, dự đoán và roll kỳ ngộ.' },
+    security_ho_tong: { name: 'Set Security Hộ Tông', families: ['security'], stats2: { trongThuongDuration: -5, tamMaRisk: -3 }, stats3: { lucChien: 4, dotPha: 3 }, combat3: { shieldPct: 0.055, defBuff: 0.05 }, note: 'Phòng thủ, chặn debuff và phản kích tà pháp.' },
+    fullstack_van_tuong: { name: 'Set Fullstack Vạn Tượng', families: ['frontend', 'backend', 'system'], stats2: { tuVi: 2, congHien: 2, lucChien: 2 }, stats3: { dotPha: 2, tamMaRisk: -2 }, combat3: { power: 0.025, shieldPct: 0.025, qiGain: 2 }, note: 'Cân bằng công thủ, hợp build đa hệ.' },
+    commit_chinh_mach: { name: 'Set Commit Chính Mạch', families: ['syntax', 'runtime', 'memory_leak', 'deadlock', 'race_condition', 'dependency', 'legacy', 'zero_day', 'cache', 'merge_conflict', 'rate_limit', 'hallucination'], stats2: { congHien: 5, tamMaRisk: -5, trongThuongDuration: -3 }, stats3: { tuVi: 3, dotPha: 3, lucChien: 4 }, combat3: { shieldPct: 0.035, accuracy: 0.025, qiGain: 2 }, note: 'Commit sạch, tăng Stability/Integrity, giảm nợ kỹ thuật.' },
+    force_push_ma_mach: { name: 'Set Force Push Ma Mạch', families: ['syntax', 'runtime', 'memory_leak', 'deadlock', 'race_condition', 'dependency', 'legacy', 'zero_day', 'cache', 'merge_conflict', 'rate_limit', 'hallucination'], stats2: { lucChien: 9, tamMaRisk: 8, tuViLoss: 4 }, stats3: { tuVi: 6, dotPha: 4, trongThuongDuration: 4 }, combat3: { power: 0.065, critChance: 0.045 }, note: 'Burst rất mạnh nhưng kéo theo hỗn loạn/Nghiệp Lực.' },
+    debug_thien_nhan: { name: 'Set Debug Thiên Nhãn', families: ['syntax', 'cache', 'hallucination'], stats2: { dotPha: 4, tamMaRisk: -3 }, stats3: { congHien: 3, lucChien: 4 }, combat3: { accuracy: 0.055, critChance: 0.025 }, note: 'Soi điểm yếu, chống thông tin giả và Cache/Hallucination.' },
+    patch_rollback: { name: 'Set Patch Rollback', families: ['runtime', 'dependency', 'legacy'], stats2: { trongThuongDuration: -5, tuViLoss: -4 }, stats3: { dotPha: 4, tamMaRisk: -4 }, combat3: { healPct: 0.025, shieldPct: 0.035 }, note: 'Vá phản phệ, giảm fail và cứu trận khi Source lệch.' },
+    source_giap: { name: 'Set Giáp Source', families: ['zero_day', 'legacy', 'deadlock'], stats2: { lucChien: 5, trongThuongDuration: -7 }, stats3: { tamMaRisk: -5, tuViLoss: -5 }, combat3: { shieldPct: 0.065, defBuff: 0.055 }, note: 'Giáp Integrity/Stability, chống Breach và trọng thương.' },
+    runtime_dieu_lenh: { name: 'Set Runtime Điều Lệnh', families: ['runtime', 'race_condition', 'rate_limit'], stats2: { congHien: 3, dotPha: 2 }, stats3: { lucChien: 5, statusDuration: -5 }, combat3: { qiGain: 5, priority: 2, accuracy: 0.02 }, note: 'Điều phối lượt, cooldown, hàng chờ và chống Rate Limit.' },
+    data_migration: { name: 'Set Data Migration', families: ['memory_leak', 'cache', 'dependency'], stats2: { congHien: 6, tuVi: 2 }, stats3: { trongThuongDuration: -4, tamMaRisk: -3 }, combat3: { healPct: 0.02, qiGain: 3, shieldPct: 0.025 }, note: 'Chống leak/cache, tăng hiệu suất nhiệm vụ và phân giải.' },
+    logic_verification: { name: 'Set Logic Verification', families: ['hallucination', 'syntax', 'merge_conflict'], stats2: { dotPha: 5, tamMaRisk: -2 }, stats3: { lucChien: 5, congHien: 3 }, combat3: { accuracy: 0.045, critChance: 0.04 }, note: 'Xác minh thật giả, tăng hoàn mỹ craft và chống Dị Thần.' },
+  };
+
+  const MONSTER_ARCHETYPES = {
+    bugling: {
+      label: 'Bug Linh', emoji: '🐛', powerMult: 0.92, hpMult: 0.92, lootBias: ['pill', 'tool'],
+      text: 'Lỗi nhỏ nhưng dai, hợp cho tân thủ luyện tay.',
+      skills: [
+        { key: 'minor_bug_bite', emoji: '🐛', name: 'Tiểu Bug Cắn Mạch', power: 0.78, accuracy: 0.96, qiCost: 0, qiGain: 16, effect: 'Đòn nhỏ, chính xác cao.' },
+        { key: 'lint_noise', emoji: '🧹', name: 'Lint Nhiễu Tâm', power: 0.9, accuracy: 0.9, qiCost: 14, qiGain: 10, targetDefDebuff: 0.05, effect: 'Làm rối phòng thủ.' },
+        { key: 'warning_swarm', emoji: '⚠️', name: 'Warning Thành Bầy', power: 0.62, accuracy: 0.92, qiCost: 18, qiGain: 8, dotPower: 0.05, effect: 'Ăn mòn nhẹ.' },
+        { key: 'small_crash', emoji: '💢', name: 'Crash Nhỏ', power: 1.28, accuracy: 0.8, qiCost: 38, qiGain: 6, critChance: 0.08, effect: 'Bùng nổ nhỏ.' },
+      ],
+    },
+    runtime: {
+      label: 'Runtime Ma', emoji: '🔥', powerMult: 1.08, hpMult: 1.0, lootBias: ['artifact', 'pill'],
+      text: 'Lỗi phát sinh lúc vận công, sát thương mạnh nhưng không quá trâu.',
+      skills: [
+        { key: 'runtime_slap', emoji: '🔥', name: 'Runtime Quỷ Trảo', power: 0.95, accuracy: 0.92, qiCost: 0, qiGain: 14, effect: 'Đòn cơ bản.' },
+        { key: 'exception_chain', emoji: '📜', name: 'Exception Liên Hoàn', power: 1.16, accuracy: 0.86, qiCost: 18, qiGain: 10, dotPower: 0.07, effect: 'Để lại stack trace ăn mòn.' },
+        { key: 'hot_path_burn', emoji: '♨️', name: 'Hot Path Thiêu Đốt', power: 1.05, accuracy: 0.88, qiCost: 24, qiGain: 8, targetDefDebuff: 0.08, effect: 'Đốt thủ.' },
+        { key: 'fatal_exception', emoji: '💥', name: 'Fatal Exception', power: 1.62, accuracy: 0.76, qiCost: 42, qiGain: 6, critChance: 0.14, effect: 'Tuyệt chiêu sát thương lớn.' },
+      ],
+    },
+    deadlock: {
+      label: 'Deadlock Quỷ', emoji: '⛓️', powerMult: 1.02, hpMult: 1.18, lootBias: ['talisman', 'upgrade_stone'],
+      text: 'Khóa lượt, kéo dài trận, rất khó chịu trong giao chiến theo lượt.',
+      skills: [
+        { key: 'lock_bite', emoji: '⛓️', name: 'Khóa Mạch Cắn', power: 0.82, accuracy: 0.94, qiCost: 0, qiGain: 15, effect: 'Đòn cơ bản.' },
+        { key: 'mutex_chain', emoji: '🔒', name: 'Mutex Thiết Tỏa', power: 0.9, accuracy: 0.86, qiCost: 18, qiGain: 10, stunChance: 0.16, effect: 'Có thể khống chế.' },
+        { key: 'transaction_wall', emoji: '🧱', name: 'Transaction Tường', power: 0.5, accuracy: 1, qiCost: 18, qiGain: 12, shieldPct: 0.16, defBuff: 0.08, effect: 'Tạo giáp.' },
+        { key: 'deadlock_domain', emoji: '🕸️', name: 'Deadlock Đạo Vực', power: 1.34, accuracy: 0.78, qiCost: 42, qiGain: 6, stunChance: 0.26, effect: 'Tuyệt kỹ khống chế.' },
+      ],
+    },
+    leak: {
+      label: 'Memory Leak Huyết Ảnh', emoji: '🩸', powerMult: 0.98, hpMult: 1.28, lootBias: ['pill', 'talisman'],
+      text: 'Không sốc sát thương, nhưng ăn mòn dai dẳng.',
+      skills: [
+        { key: 'leak_touch', emoji: '🩸', name: 'Leak Huyết Chỉ', power: 0.75, accuracy: 0.95, qiCost: 0, qiGain: 16, dotPower: 0.045, effect: 'Ăn mòn nhẹ.' },
+        { key: 'heap_drain', emoji: '🕳️', name: 'Heap Drain', power: 0.86, accuracy: 0.9, qiCost: 18, qiGain: 10, dotPower: 0.09, effect: 'Ăn mòn mạnh.' },
+        { key: 'gc_fog', emoji: '🌫️', name: 'GC Mê Vụ', power: 0.5, accuracy: 1, qiCost: 20, qiGain: 12, defBuff: 0.1, healPct: 0.04, effect: 'Hồi phục và tăng thủ.' },
+        { key: 'out_of_memory', emoji: '☠️', name: 'Out Of Memory Kiếp', power: 1.42, accuracy: 0.78, qiCost: 42, qiGain: 6, dotPower: 0.12, effect: 'Tuyệt kỹ ăn mòn.' },
+      ],
+    },
+    injection: {
+      label: 'Injection Tà Linh', emoji: '🧪', powerMult: 1.12, hpMult: 0.96, lootBias: ['talisman', 'artifact'],
+      text: 'Xuyên thủ, gây tâm ma và rất nguy hiểm nếu thiếu pháp bảo hộ thân.',
+      skills: [
+        { key: 'inject_sting', emoji: '🧪', name: 'Injection Độc Châm', power: 0.92, accuracy: 0.94, qiCost: 0, qiGain: 14, targetDefDebuff: 0.04, effect: 'Xuyên phòng nhẹ.' },
+        { key: 'payload_curse', emoji: '🧬', name: 'Payload Chú', power: 1.12, accuracy: 0.86, qiCost: 20, qiGain: 10, targetDefDebuff: 0.12, effect: 'Giảm phòng.' },
+        { key: 'sanitize_break', emoji: '🧨', name: 'Sanitize Phá Giới', power: 0.98, accuracy: 0.86, qiCost: 24, qiGain: 8, critChance: 0.14, effect: 'Bùng nổ nếu xuyên được thủ.' },
+        { key: 'root_payload', emoji: '☠️', name: 'Root Payload Cấm Thuật', power: 1.72, accuracy: 0.72, qiCost: 44, qiGain: 6, critChance: 0.18, stunChance: 0.08, effect: 'Tuyệt kỹ nguy hiểm.' },
+      ],
+    },
+    deploy: {
+      label: 'Production Kiếp', emoji: '🚨', powerMult: 1.22, hpMult: 1.1, lootBias: ['weapon', 'armor', 'artifact', 'upgrade_stone'],
+      text: 'Boss/elite kiểu production incident, thưởng cao nhưng phạt nặng.',
+      skills: [
+        { key: 'incident_slap', emoji: '🚨', name: 'Incident Chấn Sơn', power: 0.98, accuracy: 0.9, qiCost: 0, qiGain: 14, effect: 'Đòn boss cơ bản.' },
+        { key: 'rollback_cut', emoji: '↩️', name: 'Rollback Trảm', power: 1.18, accuracy: 0.86, qiCost: 20, qiGain: 10, targetDefDebuff: 0.08, effect: 'Chém ngược đạo cơ.' },
+        { key: 'outage_pressure', emoji: '📉', name: 'Outage Áp Đỉnh', power: 1.02, accuracy: 0.84, qiCost: 26, qiGain: 8, stunChance: 0.14, dotPower: 0.07, effect: 'Choáng và ăn mòn.' },
+        { key: 'production_crash_domain', emoji: '🔥', name: 'Production Crash Đạo Kiếp', power: 1.88, accuracy: 0.72, qiCost: 48, qiGain: 5, critChance: 0.18, stunChance: 0.12, effect: 'Đại kiếp production.' },
+      ],
+    },
+  };
+
+  const CONG_PHAP_SKILL_THEMES = {
+    frontend: { emoji: '💻', basic: 'DOM Huyễn Kiếm', attack: 'CSS Ảo Ảnh Trận', guard: 'State Chuyển Niệm', ultimate: 'Hydration Bạo Lưu', mode: 'fast' },
+    backend: { emoji: '⚙️', basic: 'API Chưởng', attack: 'Middleware Khóa Mạch', guard: 'Cache Hộ Thể', ultimate: 'Queue Thiên Phạt', mode: 'dot' },
+    fullstack: { emoji: '🌐', basic: 'Song Đạo Request', attack: 'Front-Back Liên Kích', guard: 'Session Hộ Thần', ultimate: 'Monorepo Vạn Pháp', mode: 'balanced' },
+    mobile: { emoji: '📱', basic: 'Touch Linh Bộ', attack: 'Gesture Trảm', guard: 'Battery Saver Hộ Mạch', ultimate: 'App Store Thiên Kiếp', mode: 'speed' },
+    database: { emoji: '🗄️', basic: 'SELECT Kiếm', attack: 'Index Xuyên Tâm', guard: 'Transaction Hộ Mệnh', ultimate: 'Deadlock Phong Ấn', mode: 'stun' },
+    ai: { emoji: '🧠', basic: 'Prompt Chỉ', attack: 'Embedding Vạn Tượng', guard: 'Fine-tune Đạo Tâm', ultimate: 'Model Singularity', mode: 'crit' },
+    devops: { emoji: '☁️', basic: 'Docker Quyền', attack: 'Pipeline Liên Hoàn', guard: 'Rollback Phù', ultimate: 'Kubernetes Thiên Trận', mode: 'survive' },
+    security: { emoji: '🛡️', basic: 'Firewall Chỉ', attack: 'XSS Trảm Tà', guard: 'Zero Trust Hộ Thể', ultimate: 'Root Exploit Cấm Thuật', mode: 'guard' },
+    game: { emoji: '🎮', basic: 'Hitbox Kiếm', attack: 'Combo Frame Cancel', guard: 'I-frame Thân Pháp', ultimate: 'Boss Phase Break', mode: 'crit' },
+    uiux: { emoji: '🎨', basic: 'Wireframe Chỉ', attack: 'Contrast Phá Ảnh', guard: 'Prototype Lưu Chuyển', ultimate: 'Design System Thiên Cảnh', mode: 'balanced' },
+    system: { emoji: '🏗️', basic: 'Syscall Kiếm', attack: 'Thread Trảm', guard: 'Kernel Guard', ultimate: 'Distributed Heaven', mode: 'dot' },
+  };
+
+
+
+  const DAO_NGHE_DEFINITIONS = [
+    {
+      key: 'debug_dao_su', emoji: '🪲', name: 'Debug Đạo Sư', roleName: 'Debug Đạo Sư',
+      motto: 'Đọc stack trace nhân quả, trảm bug trong đạo tâm.',
+      families: ['bug', 'clean'], materialName: 'Trace Hồn Tinh', craftVerb: 'debug đạo văn',
+      itemPrefix: 'Debug', color: 0x22c55e,
+      stats: { tuVi: 1, congHien: 2, lucChien: 1, dotPha: 1, tamMaRisk: -4, trongThuongDuration: -1 },
+      combat: { accuracy: 0.02, dotPower: 0.015, defBuff: 0.02 },
+      craftItems: [
+        { suffix: 'Thiên Nhãn', type: 'tool', family: 'clean', effect: 'Dò lỗi trong bí cảnh, giảm tâm ma và tăng chính xác.' },
+        { suffix: 'Trảm Bug Kiếm', type: 'weapon', family: 'bug', effect: 'Vũ khí chuyên trảm Bug Ma, tăng sát thương ăn mòn.' },
+        { suffix: 'Refactor Ấn', type: 'talisman', family: 'clean', effect: 'Ấn lệnh làm sạch đạo văn, giảm rủi ro phản phệ.' },
+      ],
+    },
+    {
+      key: 'core_forge_su', emoji: '⚙️', name: 'Core Forge Sư', roleName: 'Core Forge Sư',
+      motto: 'Luyện source cổ thành lõi đạo khí.',
+      families: ['system', 'backend'], materialName: 'Core Nguyên Thiết', craftVerb: 'rèn core đạo khí',
+      itemPrefix: 'Core', color: 0xf59e0b,
+      stats: { tuVi: 1, congHien: 1, lucChien: 5, dotPha: 1, tamMaRisk: 1, trongThuongDuration: -1 },
+      combat: { power: 0.035, qiGain: 1 },
+      craftItems: [
+        { suffix: 'Compiler Kiếm', type: 'weapon', family: 'system', effect: 'Biên dịch linh văn thành sát phạt, tăng lực chiến.' },
+        { suffix: 'Kernel Giáp', type: 'artifact', family: 'system', effect: 'Ổn định đạo cơ, tăng thủ và lực chiến lâu dài.' },
+        { suffix: 'Module Chùy', type: 'tool', family: 'backend', effect: 'Dụng cụ rèn module, tăng cống hiến nghề.' },
+      ],
+    },
+    {
+      key: 'runtime_tran_su', emoji: '🕸️', name: 'Runtime Trận Sư', roleName: 'Runtime Trận Sư',
+      motto: 'Bày trận trong lúc vạn pháp đang chạy.',
+      families: ['devops', 'system'], materialName: 'Runtime Linh Văn', craftVerb: 'bày runtime trận',
+      itemPrefix: 'Runtime', color: 0x38bdf8,
+      stats: { tuVi: 1, congHien: 2, lucChien: 2, dotPha: 2, tamMaRisk: -1, trongThuongDuration: -3 },
+      combat: { shieldPct: 0.025, defBuff: 0.025, priority: 1 },
+      craftItems: [
+        { suffix: 'Async Trận Bàn', type: 'artifact', family: 'system', effect: 'Tăng nhịp ra tay và phòng hộ trong party.' },
+        { suffix: 'Load Balance Kỳ', type: 'talisman', family: 'devops', effect: 'Chia tải sát thương, hợp khi đi bí cảnh tổ đội.' },
+        { suffix: 'Event Loop Chuông', type: 'tool', family: 'devops', effect: 'Ổn định lượt hành động và hồi khí.' },
+      ],
+    },
+    {
+      key: 'patch_lenh_su', emoji: '🩹', name: 'Patch Lệnh Sư', roleName: 'Patch Lệnh Sư',
+      motto: 'Một lệnh hotfix cứu cả đạo trường khỏi nổ tung.',
+      families: ['git', 'clean'], materialName: 'Patch Linh Chỉ', craftVerb: 'khắc patch lệnh',
+      itemPrefix: 'Patch', color: 0xa855f7,
+      stats: { tuVi: 1, congHien: 3, lucChien: 1, dotPha: 1, tamMaRisk: -2, trongThuongDuration: -4 },
+      combat: { healPct: 0.02, shieldPct: 0.02, qiGain: 1 },
+      craftItems: [
+        { suffix: 'Hotfix Phù', type: 'talisman', family: 'git', effect: 'Cứu nguy trong giao tranh, tăng hồi phục và giáp.' },
+        { suffix: 'Rollback Lệnh', type: 'talisman', family: 'clean', effect: 'Giảm phạt khi thất bại hoặc nâng phẩm lỗi.' },
+        { suffix: 'Emergency Đan', type: 'pill', family: 'clean', effect: '+180 tu vi, giảm nhẹ tâm ma sau khi dùng.', tuViGain: 180 },
+      ],
+    },
+    {
+      key: 'data_mach_su', emoji: '🧬', name: 'Data Mạch Sư', roleName: 'Data Mạch Sư',
+      motto: 'Khai schema địa mạch, gom dữ liệu thành linh tinh.',
+      families: ['database'], materialName: 'Schema Ngọc Tủy', craftVerb: 'khai data mạch',
+      itemPrefix: 'Data', color: 0x84cc16,
+      stats: { tuVi: 2, congHien: 2, lucChien: 1, dotPha: 2, tamMaRisk: -1, trongThuongDuration: -1 },
+      combat: { stunChance: 0.025, defBuff: 0.025 },
+      craftItems: [
+        { suffix: 'Schema Ngọc', type: 'artifact', family: 'database', effect: 'Ổn định long mạch dữ liệu, tăng khống chế.' },
+        { suffix: 'Index Kim Châm', type: 'weapon', family: 'database', effect: 'Đâm thẳng điểm yếu query, tăng chí mạng nhẹ.' },
+        { suffix: 'Cache Linh Dịch', type: 'pill', family: 'database', effect: '+120 tu vi và +40 cống hiến.', tuViGain: 120, congHienGain: 40 },
+      ],
+    },
+    {
+      key: 'cloud_phap_su', emoji: '☁️', name: 'Cloud Pháp Sư', roleName: 'Cloud Pháp Sư',
+      motto: 'Triệu mây server, lấy container làm pháp đàn.',
+      families: ['devops'], materialName: 'Cloud Linh Vụ', craftVerb: 'triệu cloud pháp đàn',
+      itemPrefix: 'Cloud', color: 0x0ea5e9,
+      stats: { tuVi: 1, congHien: 2, lucChien: 2, dotPha: 2, tamMaRisk: 0, trongThuongDuration: -4 },
+      combat: { healPct: 0.018, shieldPct: 0.03, priority: 1 },
+      craftItems: [
+        { suffix: 'Docker Hồ Lô', type: 'artifact', family: 'devops', effect: 'Thu container ma khí, tăng giáp và hồi phục.' },
+        { suffix: 'Kubernetes Ấn', type: 'tool', family: 'devops', effect: 'Điều phối party, tăng hồi khí và phòng hộ.' },
+        { suffix: 'Deploy Thiên Xa', type: 'weapon', family: 'devops', effect: 'Đạo khí tốc hành, ưu tiên ra tay trước.' },
+      ],
+    },
+    {
+      key: 'security_ho_dao_su', emoji: '🛡️', name: 'Security Hộ Đạo Sư', roleName: 'Security Hộ Đạo Sư',
+      motto: 'Lấy firewall làm hộ sơn đại trận.',
+      families: ['security'], materialName: 'Firewall Tinh Kim', craftVerb: 'dựng firewall kết giới',
+      itemPrefix: 'Security', color: 0xef4444,
+      stats: { tuVi: 0, congHien: 2, lucChien: 3, dotPha: 3, tamMaRisk: -2, trongThuongDuration: -6 },
+      combat: { shieldPct: 0.045, defBuff: 0.045, stunChance: 0.015 },
+      craftItems: [
+        { suffix: 'Firewall Kết Giới', type: 'talisman', family: 'security', effect: 'Tăng thủ, giảm trọng thương khi boss dồn sát thương.' },
+        { suffix: 'Zero Trust Kim Tỏa', type: 'artifact', family: 'security', effect: 'Khóa tà pháp injection, tăng khống chế.' },
+        { suffix: 'Hash Hộ Tâm Phù', type: 'tool', family: 'security', effect: 'Giữ đạo tâm ổn định, giảm tâm ma.' },
+      ],
+    },
+    {
+      key: 'ai_dien_toan_su', emoji: '🧠', name: 'AI Diễn Toán Sư', roleName: 'AI Diễn Toán Sư',
+      motto: 'Diễn toán thiên cơ, dùng prompt làm bùa gọi pháp.',
+      families: ['ai'], materialName: 'Vector Hồn Tinh', craftVerb: 'diễn toán thiên cơ',
+      itemPrefix: 'AI', color: 0xec4899,
+      stats: { tuVi: 2, congHien: 1, lucChien: 3, dotPha: 1, tamMaRisk: 3, trongThuongDuration: 0 },
+      combat: { critChance: 0.055, accuracy: 0.015 },
+      craftItems: [
+        { suffix: 'Prompt Hồn Châu', type: 'artifact', family: 'ai', effect: 'Tăng chí mạng và độ chính xác skill.' },
+        { suffix: 'Vector Phi Kiếm', type: 'weapon', family: 'ai', effect: 'Tuyệt kỹ dễ chí mạng hơn.' },
+        { suffix: 'Inference Hương', type: 'pill', family: 'ai', effect: '+160 tu vi nhưng tăng nhẹ tâm ma.', tuViGain: 160 },
+      ],
+    },
+    {
+      key: 'frontend_huyen_dien_su', emoji: '🎨', name: 'Frontend Huyễn Diện Sư', roleName: 'Frontend Huyễn Diện Sư',
+      motto: 'Dệt giao diện thành ảo cảnh, lấy DOM làm trận môn.',
+      families: ['frontend', 'uiux'], materialName: 'DOM Linh Sa', craftVerb: 'dệt huyễn diện',
+      itemPrefix: 'Frontend', color: 0x60a5fa,
+      stats: { tuVi: 1, congHien: 2, lucChien: 1, dotPha: 1, tamMaRisk: -1, trongThuongDuration: -2 },
+      combat: { accuracy: 0.04, priority: 1, shieldPct: 0.015 },
+      craftItems: [
+        { suffix: 'DOM Huyễn Kính', type: 'artifact', family: 'frontend', effect: 'Tăng chính xác, giảm miss trong giao tranh.' },
+        { suffix: 'CSS Vân Y', type: 'tool', family: 'uiux', effect: 'Ổn định nhịp trận và giảm nhiễu.' },
+        { suffix: 'Component Linh Ấn', type: 'talisman', family: 'frontend', effect: 'Tạo giáp nhẹ và tăng tốc ra chiêu.' },
+      ],
+    },
+    {
+      key: 'git_menh_su', emoji: '🌿', name: 'Git Mệnh Sư', roleName: 'Git Mệnh Sư',
+      motto: 'Chưởng branch nhân quả, một merge đổi vận mệnh.',
+      families: ['git'], materialName: 'Branch Nhân Quả', craftVerb: 'khắc git mệnh ấn',
+      itemPrefix: 'Git', color: 0x10b981,
+      stats: { tuVi: 2, congHien: 4, lucChien: 1, dotPha: 1, tamMaRisk: -1, trongThuongDuration: -1 },
+      combat: { qiGain: 4, accuracy: 0.02, critChance: 0.015 },
+      craftItems: [
+        { suffix: 'Branch Mệnh Ấn', type: 'artifact', family: 'git', effect: 'Hồi khí tốt hơn, nối combo ổn định.' },
+        { suffix: 'Merge Quy Nguyên Phù', type: 'talisman', family: 'git', effect: 'Tăng cống hiến, giảm lỗi khi nâng phẩm.' },
+        { suffix: 'Commit Linh Bút', type: 'tool', family: 'git', effect: 'Tăng thưởng nghề và cống hiến khi làm việc.' },
+      ],
+    },
+  ];
+
+  const DAO_NGHE_RANKS = [
+    { name: 'Tập Sự Mã Đạo', exp: 0 },
+    { name: 'Nhập Môn Source', exp: 120 },
+    { name: 'Khai Mạch Logic', exp: 360 },
+    { name: 'Kết Ấn Runtime', exp: 800 },
+    { name: 'Đại Thành Module', exp: 1500 },
+    { name: 'Tông Sư Compiler', exp: 2600 },
+    { name: 'Thánh Thủ Kernel', exp: 4200 },
+    { name: 'Chưởng Khống Protocol', exp: 6500 },
+    { name: 'Quy Nguyên Main Đạo', exp: 9800 },
+  ];
+
+  const DAO_NGHE_ROLE_NAMES = DAO_NGHE_DEFINITIONS.map((entry) => entry.roleName);
+
+
+  const SOURCE_DEFECT_FAMILIES = [
+    { key: 'syntax', name: 'Syntax Dị Văn', short: 'Syntax', professionKey: 'debug_dao_su', targetStat: 'Logic', risk: 'invalid_command', materialCore: 'Syntax Mảnh', description: 'Lỗi cú pháp pháp tắc, khóa lệnh và phá công pháp đang vận hành.' },
+    { key: 'runtime', name: 'Runtime Hung Linh', short: 'Runtime', professionKey: 'runtime_tran_su', targetStat: 'Runtime', risk: 'runtime_crash', materialCore: 'Runtime Huyết Ấn', description: 'Lỗi vận hành thực tại, làm lệch cooldown, lượt và buff.' },
+    { key: 'memory_leak', name: 'Memory Leak Âm Hồn', short: 'Leak', professionKey: 'data_mach_su', targetStat: 'Throughput', risk: 'leak_drain', materialCore: 'Leak Hồn Tinh', description: 'Rò tài nguyên/Source Khí qua timeline cũ, bào mòn theo lượt.' },
+    { key: 'deadlock', name: 'Deadlock Thi Tướng', short: 'Deadlock', professionKey: 'data_mach_su', targetStat: 'Action Queue', risk: 'self_lock', materialCore: 'Lock Token', description: 'Nhánh nhân quả chờ nhau vô hạn, khóa skill và lượt.' },
+    { key: 'race_condition', name: 'Race Condition Song Ảnh', short: 'Race', professionKey: 'runtime_tran_su', targetStat: 'Runtime', risk: 'out_of_order', materialCore: 'Race Thread', description: 'Thứ tự hành động bị tranh quyền, tạo bóng nhiễu và ưu tiên lượt sai.' },
+    { key: 'dependency', name: 'Dependency Cửu Đầu Xà', short: 'Dependency', professionKey: 'patch_lenh_su', targetStat: 'Stability', risk: 'deprecated_chain', materialCore: 'Lockfile Kim Phiến', description: 'Phụ thuộc mục nát kéo theo version lỗi, sinh thêm đầu nếu xử lý sai.' },
+    { key: 'legacy', name: 'Legacy Thạch Khôi', short: 'Legacy', professionKey: 'core_forge_su', targetStat: 'Stability', risk: 'monolith_crack', materialCore: 'Legacy Stone', description: 'Module cổ không chịu chết, giáp cao, cần refactor/migration.' },
+    { key: 'zero_day', name: 'Zero-Day Ma Ảnh', short: 'Zero-Day', professionKey: 'security_ho_dao_su', targetStat: 'Integrity', risk: 'breach', materialCore: 'Zero-Day Mảnh Vỡ', description: 'Lỗ hổng chưa vá, bỏ qua giáp thường và đánh vào Integrity.' },
+    { key: 'cache', name: 'Cache Huyễn Ảnh', short: 'Cache', professionKey: 'frontend_huyen_dien_su', targetStat: 'Truth', risk: 'stale_state', materialCore: 'Cache Linh Tinh', description: 'Trạng thái cũ chưa invalidate, hiện máu/buff/loot giả.' },
+    { key: 'merge_conflict', name: 'Merge Conflict Oán Linh', short: 'Conflict', professionKey: 'git_menh_su', targetStat: 'Party Sync', risk: 'branch_split', materialCore: 'Merge Shard', description: 'Hai timeline tranh quyền thành lịch sử chính, phá phối hợp party.' },
+    { key: 'rate_limit', name: 'Rate Limit Thiên Long', short: 'RateLimit', professionKey: 'cloud_phap_su', targetStat: 'Runtime', risk: 'retry_after', materialCore: 'Retry-After Ngọc', description: 'Pháp tắc chống spam, trừng phạt hành động quá dồn.' },
+    { key: 'hallucination', name: 'Hallucination Dị Thần', short: 'Hallucination', professionKey: 'ai_dien_toan_su', targetStat: 'Logic', risk: 'false_truth', materialCore: 'Prompt Dị Thư', description: 'Dự đoán sai hóa thần, tạo thông tin, điểm yếu và loot giả.' },
+  ];
+
+  const SOURCE_DEFECT_VISUALS = {
+    syntax: { emoji: '🔣', iconKey: 'syntax', thumbnailUrl: null, imageUrl: null },
+    runtime: { emoji: '🔥', iconKey: 'runtime', thumbnailUrl: null, imageUrl: null },
+    memory_leak: { emoji: '🩸', iconKey: 'memory_leak', thumbnailUrl: null, imageUrl: null },
+    deadlock: { emoji: '⛓️', iconKey: 'deadlock', thumbnailUrl: null, imageUrl: null },
+    race_condition: { emoji: '👥', iconKey: 'race_condition', thumbnailUrl: null, imageUrl: null },
+    dependency: { emoji: '🐍', iconKey: 'dependency', thumbnailUrl: null, imageUrl: null },
+    legacy: { emoji: '🗿', iconKey: 'legacy', thumbnailUrl: null, imageUrl: null },
+    zero_day: { emoji: '🕶️', iconKey: 'zero_day', thumbnailUrl: null, imageUrl: null },
+    cache: { emoji: '🪞', iconKey: 'cache', thumbnailUrl: null, imageUrl: null },
+    merge_conflict: { emoji: '🔀', iconKey: 'merge_conflict', thumbnailUrl: null, imageUrl: null },
+    rate_limit: { emoji: '🐉', iconKey: 'rate_limit', thumbnailUrl: null, imageUrl: null },
+    hallucination: { emoji: '👁️', iconKey: 'hallucination', thumbnailUrl: null, imageUrl: null },
+  };
+
+  function getSourceDefectVisual(familyKey) {
+    const key = String(familyKey || '').trim();
+    return SOURCE_DEFECT_VISUALS[key] || { emoji: '👾', iconKey: key || 'unknown', thumbnailUrl: null, imageUrl: null };
+  }
+
+  function getMonsterThumbnailUrl(monster = null) {
+    const candidate = monster?.thumbnailUrl || monster?.iconUrl || getSourceDefectVisual(monster?.family).thumbnailUrl;
+    if (typeof candidate !== 'string') return null;
+    return /^https?:\/\//i.test(candidate) ? candidate : null;
+  }
+
+  const SOURCE_ITEM_GROUP_DEFINITIONS = [
+    { key: 'commit', name: 'Công Cụ Commit', itemRole: 'commit', route: 'chinh_dao', types: ['artifact', 'tool', 'talisman'], prefixes: ['Signed Commit', 'Main Branch', 'Clean Log', 'Review', 'Merge Chính'], forms: ['Đạo Ấn', 'Linh Bút', 'Hộ Phù', 'Ngọc Giản', 'Đạo Kính'], setKey: 'commit_chinh_mach', focus: { stability: 4, integrity: 3, throughput: 2 }, risk: { technicalDebt: -2, entropy: -1 }, effectVerb: 'ghi sạch nhân quả vào Đại Source' },
+    { key: 'force_push', name: 'Cấm Cụ Force Push', itemRole: 'force_push', route: 'ta_dao', types: ['weapon', 'artifact', 'talisman', 'pill'], prefixes: ['Force Push', 'Detached HEAD', 'History Rewrite', 'Rebase Hắc', 'Rollback Cấm'], forms: ['Ma Ấn', 'Huyết Phù', 'Hắc Đao', 'Cấm Ngọc', 'Tà Lệnh'], setKey: 'force_push_ma_mach', focus: { sourcePower: 5, logic: 2 }, risk: { technicalDebt: 4, entropy: 4, nghiepLuc: 5 }, effectVerb: 'cưỡng ép timeline nhận kết quả mới' },
+    { key: 'debug', name: 'Pháp Cụ Debug', itemRole: 'debug', route: 'neutral', types: ['tool', 'artifact', 'talisman'], prefixes: ['Stack Trace', 'Breakpoint', 'Log Truth', 'Lint', 'Traceback'], forms: ['Thiên Nhãn', 'Linh Châm', 'Đạo Kính', 'Phù Văn', 'Soi Lỗi Ấn'], setKey: 'debug_thien_nhan', focus: { logic: 5, stability: 2, throughput: 1 }, risk: { technicalDebt: -1 }, effectVerb: 'soi điểm yếu và bóc thông tin giả' },
+    { key: 'patch', name: 'Pháp Cụ Patch / Rollback', itemRole: 'patch', route: 'neutral', types: ['talisman', 'tool', 'pill'], prefixes: ['Hotfix', 'Rollback', 'Regression Guard', 'Safe Deploy', 'Patch'], forms: ['Lệnh', 'Phù', 'Ngọc', 'Đạo Chỉ', 'Tâm Đan'], setKey: 'patch_rollback', focus: { stability: 4, integrity: 2, runtime: 1 }, risk: { technicalDebt: 1, entropy: -1 }, effectVerb: 'giảm phạt fail và vá phản phệ' },
+    { key: 'armor', name: 'Đạo Bào / Giáp Source', itemRole: 'source_armor', route: 'neutral', types: ['armor'], prefixes: ['Firewall', 'Kernel', 'Cloud Failover', 'Zero Trust', 'Refactor'], forms: ['Đạo Bào', 'Huyền Giáp', 'Source Y', 'Hộ Thể Giáp', 'Thiên Y'], setKey: 'source_giap', focus: { integrity: 5, stability: 3 }, risk: { technicalDebt: -1 }, effectVerb: 'chống Breach, Crash và trọng thương' },
+    { key: 'runtime', name: 'Module Runtime', itemRole: 'runtime_module', route: 'neutral', types: ['artifact', 'tool', 'talisman'], prefixes: ['Event Loop', 'Async', 'Queue', 'Cooldown', 'Scheduler'], forms: ['Trận Bàn', 'Hồn Sa', 'Token', 'Tinh Thạch', 'Chuông'], setKey: 'runtime_dieu_lenh', focus: { runtime: 5, throughput: 2, logic: 1 }, risk: { entropy: 1 }, effectVerb: 'điều phối lượt, cooldown và nhịp combat' },
+    { key: 'data', name: 'Data / Cache / Memory Cụ', itemRole: 'data_memory', route: 'neutral', types: ['artifact', 'tool', 'upgrade_stone'], prefixes: ['Garbage Core', 'Cache', 'Heap', 'Data Migration', 'Lockfile'], forms: ['Hồn Bình', 'Linh Tinh', 'Đạo Ấn', 'Kim Phiến', 'Mạch Hạch'], setKey: 'data_migration', focus: { throughput: 5, stability: 2, logic: 1 }, risk: { technicalDebt: -1 }, effectVerb: 'tăng hiệu suất nhiệm vụ, phân giải và kho nguyên liệu' },
+    { key: 'logic_ai', name: 'AI / Logic / Verification Cụ', itemRole: 'verification', route: 'neutral', types: ['artifact', 'tool', 'pill', 'talisman'], prefixes: ['Truth Token', 'Prompt', 'Inference', 'Verification', 'Black Box'], forms: ['Ngọc', 'Dị Thư', 'Hạch', 'Đạo Kính', 'Tâm Đan'], setKey: 'logic_verification', focus: { logic: 5, sourcePower: 1, stability: 1 }, risk: { entropy: 1 }, effectVerb: 'xác minh thông tin, chống ảo giác và tăng hoàn mỹ craft' },
+  ];
+
+  const SOURCE_ITEM_CLASS_DEFINITIONS = [
+    { key: 'pham_khi', name: 'Phàm Khí', multiplier: 1.00, unlockText: 'Đồ nền, ít cơ chế.' },
+    { key: 'linh_khi', name: 'Linh Khí', multiplier: 1.16, unlockText: 'Có Source Khí nhẹ.' },
+    { key: 'bao_khi', name: 'Bảo Khí', multiplier: 1.34, unlockText: 'Có dòng phụ rõ.' },
+    { key: 'phap_bao', name: 'Pháp Bảo', multiplier: 1.58, unlockText: 'Có passive riêng.' },
+    { key: 'dao_khi', name: 'Đạo Khí', multiplier: 1.88, unlockText: 'Có proc/combat hook.' },
+    { key: 'tien_khi', name: 'Tiên Khí', multiplier: 2.22, unlockText: 'Có active/cooldown riêng.' },
+    { key: 'source_khi', name: 'Source Khí', multiplier: 2.70, unlockText: 'Can thiệp 6 trục power.' },
+    { key: 'cam_khi', name: 'Cấm Khí', multiplier: 2.95, unlockText: 'Mạnh, nhưng tăng rủi ro/hỗn loạn.' },
+  ];
+
+  const SOURCE_ITEM_RARITY_DEFINITIONS = [
+    { key: 'thuong', name: 'Thường', multiplier: 1.00 },
+    { key: 'tinh_anh', name: 'Tinh Anh', multiplier: 1.08 },
+    { key: 'hiem', name: 'Hiếm', multiplier: 1.18 },
+    { key: 'co_ban', name: 'Cổ Bản', multiplier: 1.32 },
+    { key: 'di_ban', name: 'Dị Bản', multiplier: 1.48 },
+    { key: 'thanh_ban', name: 'Thánh Bản', multiplier: 1.68 },
+    { key: 'doc_ban', name: 'Độc Bản', multiplier: 1.95 },
+  ];
+
+  const DAO_NGHE_ITEM_TYPE_TEXT = 'Đạo nghiệp';
+
+  function getDaoNgheDefinition(key) {
+    return DAO_NGHE_DEFINITIONS.find((entry) => entry.key === key || entry.name === key || entry.roleName === key) ?? null;
+  }
+
+  function getDaoNgheRankIndex(exp) {
+    const value = Math.max(0, Number(exp) || 0);
+    let index = 0;
+    for (let i = 0; i < DAO_NGHE_RANKS.length; i += 1) {
+      if (value >= DAO_NGHE_RANKS[i].exp) index = i;
+    }
+    return index;
+  }
+
+  function getDaoNgheRank(exp) {
+    return DAO_NGHE_RANKS[getDaoNgheRankIndex(exp)] ?? DAO_NGHE_RANKS[0];
+  }
+
+  function getNextDaoNgheRank(exp) {
+    const index = getDaoNgheRankIndex(exp);
+    return DAO_NGHE_RANKS[Math.min(DAO_NGHE_RANKS.length - 1, index + 1)] ?? DAO_NGHE_RANKS[DAO_NGHE_RANKS.length - 1];
+  }
+
+  function normalizeDaoNgheData(userData) {
+    if (!userData || typeof userData !== 'object') return null;
+    const current = userData.daoNghe && typeof userData.daoNghe === 'object' ? userData.daoNghe : {};
+    const def = getDaoNgheDefinition(current.key);
+    const materials = current.materials && typeof current.materials === 'object' ? current.materials : {};
+    userData.daoNghe = {
+      key: def?.key ?? null,
+      exp: Math.max(0, Number(current.exp) || 0),
+      lastWorkDate: typeof current.lastWorkDate === 'string' ? current.lastWorkDate : null,
+      lastCraftDate: typeof current.lastCraftDate === 'string' ? current.lastCraftDate : null,
+      lastCraftAt: Number(current.lastCraftAt) || 0,
+      materials: Object.fromEntries(Object.entries(materials).map(([key, value]) => [key, Math.max(0, Number(value) || 0)])),
+      knownBlueprints: Array.isArray(current.knownBlueprints) ? current.knownBlueprints.map(String).slice(0, 5000) : [],
+      craftingSpec: typeof current.craftingSpec === 'string' ? current.craftingSpec : 'on_dinh',
+      craftedCount: Math.max(0, Number(current.craftedCount) || 0),
+      craftSuccessCount: Math.max(0, Number(current.craftSuccessCount) || 0),
+      craftFailCount: Math.max(0, Number(current.craftFailCount) || 0),
+      decomposeCount: Math.max(0, Number(current.decomposeCount) || 0),
+    };
+    return userData.daoNghe;
+  }
+
+  function getUserDaoNgheDefinition(userData) {
+    normalizeDaoNgheData(userData);
+    return getDaoNgheDefinition(userData?.daoNghe?.key);
+  }
+
+  function getSourceDefectFamily(family) {
+    const value = String(family || '').toLowerCase();
+    return SOURCE_DEFECT_FAMILIES.find((entry) => entry.key === value || entry.name.toLowerCase() === value || entry.short.toLowerCase() === value) ?? null;
+  }
+
+  function getSourceItemGroup(groupKey) {
+    const value = String(groupKey || '').toLowerCase();
+    return SOURCE_ITEM_GROUP_DEFINITIONS.find((entry) => entry.key === value || entry.name.toLowerCase() === value) ?? null;
+  }
+
+  function getSourceItemClass(itemClass) {
+    const value = String(itemClass || '').toLowerCase();
+    return SOURCE_ITEM_CLASS_DEFINITIONS.find((entry) => entry.key === value || entry.name.toLowerCase() === value) ?? SOURCE_ITEM_CLASS_DEFINITIONS[0];
+  }
+
+  function getSourceItemRarity(itemRarity) {
+    const value = String(itemRarity || '').toLowerCase();
+    return SOURCE_ITEM_RARITY_DEFINITIONS.find((entry) => entry.key === value || entry.name.toLowerCase() === value) ?? SOURCE_ITEM_RARITY_DEFINITIONS[0];
+  }
+
+  function getProfessionKeyForFamily(family) {
+    const value = String(family || '').toLowerCase();
+    const sourceFamily = getSourceDefectFamily(value);
+    if (sourceFamily?.professionKey) return sourceFamily.professionKey;
+    const found = DAO_NGHE_DEFINITIONS.find((entry) => entry.families.includes(value));
+    return found?.key ?? 'debug_dao_su';
+  }
+
+  function getProfessionForItem(item = null) {
+    return getDaoNgheDefinition(item?.professionKey) || getDaoNgheDefinition(getProfessionKeyForFamily(item?.family || item?.type));
+  }
+
+  function getItemProfessionText(item = null) {
+    const profession = getProfessionForItem(item);
+    return profession ? `${profession.emoji} ${profession.name}` : 'Không chuyên nghề';
+  }
+
+  function getDaoNgheDirectStats(userData) {
+    const daoNghe = normalizeDaoNgheData(userData);
+    const def = getDaoNgheDefinition(daoNghe?.key);
+    if (!def) return createEmptyDirectStats();
+    const rankIndex = getDaoNgheRankIndex(daoNghe.exp);
+    const scale = 1 + rankIndex * 0.22;
+    const stats = createEmptyDirectStats();
+    for (const key of DIRECT_STAT_KEYS) {
+      stats[key] = Math.round((Number(def.stats?.[key]) || 0) * scale);
+    }
+    return normalizeDirectStats(stats);
+  }
+
+  function formatDaoNgheProgress(userData) {
+    const daoNghe = normalizeDaoNgheData(userData);
+    const def = getDaoNgheDefinition(daoNghe.key);
+    if (!def) return 'Chưa chọn Đạo Nghiệp. Dùng `/nghenghiep hanhdong:chon` để nhập nghề.';
+    const rank = getDaoNgheRank(daoNghe.exp);
+    const nextRank = getNextDaoNgheRank(daoNghe.exp);
+    const currentFloor = rank.exp;
+    const nextFloor = nextRank.exp === rank.exp ? Math.max(rank.exp, daoNghe.exp) : nextRank.exp;
+    const bar = uiBar(daoNghe.exp - currentFloor, Math.max(1, nextFloor - currentFloor), 10);
+    return [
+      `${def.emoji} **${def.name} · ${rank.name}**`,
+      `Tinh thông: ${bar}`,
+      `Đạo tài: **${def.materialName} x${daoNghe.materials[def.key] || 0}**`,
+      `Vai trò: ${def.motto}`,
+    ].join('\n');
+  }
+
+  function addDaoNgheExp(userData, amount) {
+    const daoNghe = normalizeDaoNgheData(userData);
+    daoNghe.exp = Math.max(0, daoNghe.exp + Math.max(0, Number(amount) || 0));
+    return daoNghe.exp;
+  }
+
+  function addDaoNgheMaterial(userData, professionKey, amount) {
+    const daoNghe = normalizeDaoNgheData(userData);
+    const key = getDaoNgheDefinition(professionKey)?.key || professionKey;
+    daoNghe.materials[key] = Math.max(0, (Number(daoNghe.materials[key]) || 0) + Math.max(0, Number(amount) || 0));
+    return daoNghe.materials[key];
+  }
+
+  function spendDaoNgheMaterial(userData, professionKey, amount) {
+    const daoNghe = normalizeDaoNgheData(userData);
+    const key = getDaoNgheDefinition(professionKey)?.key || professionKey;
+    const current = Math.max(0, Number(daoNghe.materials[key]) || 0);
+    const cost = Math.max(0, Number(amount) || 0);
+    if (current < cost) return false;
+    daoNghe.materials[key] = current - cost;
+    return true;
+  }
+
+  function createDaoNgheItemCatalog() {
+    const items = [];
+    const typeTier = ['tap_dich', 'ngoai_mon', 'noi_mon', 'truong_lao', 'truong_lao'];
+    const typePower = { weapon: 0.11, armor: 0.055, artifact: 0.075, tool: 0.045, talisman: 0.04, pill: 0 };
+    const signatureByProfession = {
+      debug_dao_su: [
+        { suffix: 'Stack Trace Thiên Nhãn', type: 'tool', family: 'clean', itemRole: 'nhiem_vu', itemSet: 'debug_tram_bug', activeEffect: 'Soi điểm yếu quái/boss hiện tại, tăng chính xác lượt kế.', procEffect: 'Khi gặp Bug/Legacy có tỉ lệ tăng dotPower.', effect: 'Soi lỗi, giảm Tâm Ma và tăng chính xác khi diệt Bug.' },
+        { suffix: 'Bug Hồn Trảm Kiếm', type: 'weapon', family: 'bug', itemRole: 'combat', itemSet: 'debug_tram_bug', procEffect: 'Đòn công kích có thêm ăn mòn khi mục tiêu thuộc hệ bug/runtime.', effect: 'Vũ khí chuyên trảm Bug Ma, sát thương ăn mòn rõ rệt.' },
+        { suffix: 'Refactor Hộ Tâm Phù', type: 'talisman', family: 'clean', itemRole: 'dot_pha', itemSet: 'debug_tram_bug', passiveEffect: 'Giảm Tâm Ma khi nhiệm vụ fail.', effect: 'Ấn lệnh làm sạch đạo văn, giảm phản phệ.' },
+        { suffix: 'Lint Vân Giáp', type: 'armor', family: 'clean', itemRole: 'combat', itemSet: 'debug_tram_bug', passiveEffect: 'Giảm trọng thương khi thua quái bug.', effect: 'Giáp nhẹ quét nhiễu, tăng thủ và hồi phục.' },
+        { suffix: 'Breakpoint Tỉnh Thần Đan', type: 'pill', family: 'pill', itemRole: 'tu_luyen', effect: '+360 tu vi, giảm nhẹ Tâm Ma nếu đang Debug Đạo Sư.', tuViGain: 360 },
+      ],
+      core_forge_su: [
+        { suffix: 'Compiler Đạo Kiếm', type: 'weapon', family: 'system', itemRole: 'combat', itemSet: 'fullstack_van_tuong', procEffect: 'Tuyệt kỹ tăng sát thương khi đã có giáp hoặc artifact cùng set.', effect: 'Biên dịch linh văn thành sát phạt.' },
+        { suffix: 'Kernel Huyền Giáp', type: 'armor', family: 'system', itemRole: 'combat', itemSet: 'fullstack_van_tuong', passiveEffect: 'Tăng shieldPct khi máu thấp.', effect: 'Giáp lõi hệ thống, thủ cao và ổn định.' },
+        { suffix: 'Module Rèn Lò', type: 'tool', family: 'backend', itemRole: 'nghe', itemSet: 'fullstack_van_tuong', passiveEffect: 'Chế tạo nghề có tỉ lệ phẩm chất cao hơn về sau.', effect: 'Dụng cụ rèn module, tăng cống hiến nghề.' },
+        { suffix: 'Core Định Đạo Ấn', type: 'artifact', family: 'system', itemRole: 'dot_pha', itemSet: 'fullstack_van_tuong', passiveEffect: 'Tăng điểm đột phá, giảm đạo cơ rạn.', effect: 'Ổn định lõi đạo khí.' },
+        { suffix: 'Hỏa Lò Nguyên Đan', type: 'pill', family: 'pill', itemRole: 'tu_luyen', effect: '+420 tu vi, hợp luyện khí/nâng phẩm.', tuViGain: 420 },
+      ],
+      runtime_tran_su: [
+        { suffix: 'Async Đại Trận', type: 'artifact', family: 'system', itemRole: 'nhiem_vu', itemSet: 'fullstack_van_tuong', passiveEffect: 'Party nhận thêm hồi khí khi kéo dài combat.', effect: 'Bày trận runtime, tăng nhịp ra tay.' },
+        { suffix: 'Load Balance Hộ Giáp', type: 'armor', family: 'devops', itemRole: 'combat', itemSet: 'deploy_ho_dao', passiveEffect: 'Chia tải sát thương, giảm spike damage.', effect: 'Giáp chia tải, hợp party/boss.' },
+        { suffix: 'Event Loop Chuông', type: 'tool', family: 'devops', itemRole: 'nhiem_vu', itemSet: 'deploy_ho_dao', activeEffect: 'Ổn định lượt, giảm timeout penalty.', effect: 'Tăng hồi khí và ưu tiên lượt.' },
+        { suffix: 'Promise Hộ Phù', type: 'talisman', family: 'devops', itemRole: 'tien_ich', itemSet: 'deploy_ho_dao', passiveEffect: 'Giảm phạt khi combat timeout.', effect: 'Phù giữ promise không vỡ.' },
+        { suffix: 'Microtask Linh Dịch', type: 'pill', family: 'pill', itemRole: 'combat', effect: '+300 tu vi, hồi nhẹ khí thế trong nhiệm vụ.', tuViGain: 300 },
+      ],
+      patch_lenh_su: [
+        { suffix: 'Hotfix Cứu Mệnh Phù', type: 'talisman', family: 'git', itemRole: 'tien_ich', itemSet: 'git_menh', activeEffect: 'Một lần giảm phạt fail nhiệm vụ lớn.', effect: 'Cứu nguy, tăng hồi phục và giáp.' },
+        { suffix: 'Rollback Thiên Lệnh', type: 'tool', family: 'clean', itemRole: 'tien_ich', itemSet: 'debug_tram_bug', activeEffect: 'Giảm nguyền khi nâng phẩm thất bại.', effect: 'Dụng cụ rollback, chống phản phệ.' },
+        { suffix: 'Patch Đạo Bào', type: 'armor', family: 'clean', itemRole: 'combat', itemSet: 'debug_tram_bug', passiveEffect: 'Giảm trọng thương và Tâm Ma sau hotfix.', effect: 'Đạo bào vá lỗi, phòng thủ ổn định.' },
+        { suffix: 'Emergency Merge Kiếm', type: 'weapon', family: 'git', itemRole: 'combat', itemSet: 'git_menh', procEffect: 'Khi khí thấp có tỉ lệ hồi thêm qiGain.', effect: 'Kiếm hotfix, đánh nhanh khi nguy cấp.' },
+        { suffix: 'Bình Tâm Emergency Đan', type: 'pill', family: 'pill', itemRole: 'dot_pha', effect: '+320 tu vi và giảm tâm ma nhẹ.', tuViGain: 320, directStats: { tamMaRisk: -3 } },
+      ],
+      data_mach_su: [
+        { suffix: 'Schema Long Mạch Ấn', type: 'artifact', family: 'database', itemRole: 'dot_pha', itemSet: 'database_long_mach', passiveEffect: 'Đột phá ổn định hơn khi dùng dữ liệu làm đạo cơ.', effect: 'Ổn định schema long mạch.' },
+        { suffix: 'Index Kim Châm', type: 'weapon', family: 'database', itemRole: 'combat', itemSet: 'database_long_mach', procEffect: 'Đòn đánh có tỉ lệ khóa nhịp mục tiêu.', effect: 'Đâm điểm yếu query, tăng khống chế.' },
+        { suffix: 'Transaction Huyền Giáp', type: 'armor', family: 'database', itemRole: 'combat', itemSet: 'database_long_mach', passiveEffect: 'Giảm sát thương khi bị khống chế.', effect: 'Giáp transaction, thủ và chống deadlock.' },
+        { suffix: 'Cache Linh Kính', type: 'tool', family: 'database', itemRole: 'nhiem_vu', itemSet: 'database_long_mach', activeEffect: 'Tăng thưởng nhiệm vụ database.', effect: 'Dò cache linh mạch, tăng cống hiến nghề.' },
+        { suffix: 'Query Tủy Dịch', type: 'pill', family: 'pill', itemRole: 'tu_luyen', effect: '+360 tu vi và +60 cống hiến.', tuViGain: 360, congHienGain: 60 },
+      ],
+      cloud_phap_su: [
+        { suffix: 'Docker Hồ Lô', type: 'artifact', family: 'devops', itemRole: 'combat', itemSet: 'deploy_ho_dao', passiveEffect: 'Hồi nhẹ sau mỗi combat nếu sống sót.', effect: 'Thu container ma khí, tăng giáp và hồi phục.' },
+        { suffix: 'Kubernetes Điều Phối Kỳ', type: 'tool', family: 'devops', itemRole: 'party', itemSet: 'deploy_ho_dao', activeEffect: 'Tăng hồi khí party khi đánh boss.', effect: 'Điều phối party, tăng hồi khí và phòng hộ.' },
+        { suffix: 'Blue Green Hộ Giáp', type: 'armor', family: 'devops', itemRole: 'combat', itemSet: 'deploy_ho_dao', passiveEffect: 'Giảm nguy cơ production crash.', effect: 'Giáp deploy xanh lam, chống sốc sát thương.' },
+        { suffix: 'Deploy Thiên Xa', type: 'weapon', family: 'devops', itemRole: 'combat', itemSet: 'deploy_ho_dao', procEffect: 'Ưu tiên lượt khi mở combat.', effect: 'Đạo khí tốc hành, tăng priority.' },
+        { suffix: 'Cloud Linh Vụ Đan', type: 'pill', family: 'pill', itemRole: 'combat', effect: '+340 tu vi, giảm tĩnh dưỡng.', tuViGain: 340, directStats: { trongThuongDuration: -3 } },
+      ],
+      security_ho_dao_su: [
+        { suffix: 'Firewall Kết Giới', type: 'talisman', family: 'security', itemRole: 'combat', itemSet: 'security_ho_tong', passiveEffect: 'Có tỉ lệ chặn Tâm Ma từ injection/deploy.', effect: 'Kết giới phòng thủ, giảm debuff.' },
+        { suffix: 'Zero Trust Huyền Giáp', type: 'armor', family: 'security', itemRole: 'combat', itemSet: 'security_ho_tong', passiveEffect: 'Khi bị crit, tăng defBuff lượt sau.', effect: 'Giáp không tin ai, thủ rất cao.' },
+        { suffix: 'Hash Hộ Tâm Phù', type: 'tool', family: 'security', itemRole: 'dot_pha', itemSet: 'security_ho_tong', passiveEffect: 'Giảm tâm ma khi thất bại.', effect: 'Giữ đạo tâm ổn định.' },
+        { suffix: 'JWT Trảm Tà Kiếm', type: 'weapon', family: 'security', itemRole: 'combat', itemSet: 'security_ho_tong', procEffect: 'Tăng sát thương lên Injection/OAuth tà linh.', effect: 'Kiếm trảm tà pháp auth.' },
+        { suffix: 'Tịnh Hóa Linh Dịch', type: 'pill', family: 'pill', itemRole: 'dot_pha', effect: '+280 tu vi, giảm Tâm Ma mạnh.', tuViGain: 280, directStats: { tamMaRisk: -6 } },
+      ],
+      ai_dien_toan_su: [
+        { suffix: 'Prompt Hồn Châu', type: 'artifact', family: 'ai', itemRole: 'combat', itemSet: 'ai_dien_toan', passiveEffect: 'Tăng crit khi dùng tuyệt kỹ.', effect: 'Tăng chí mạng và độ chính xác skill.' },
+        { suffix: 'Vector Phi Kiếm', type: 'weapon', family: 'ai', itemRole: 'combat', itemSet: 'ai_dien_toan', procEffect: 'Tuyệt kỹ dễ chí mạng hơn.', effect: 'Phi kiếm vector, sát thương bùng nổ.' },
+        { suffix: 'Context Hộ Giáp', type: 'armor', family: 'ai', itemRole: 'combat', itemSet: 'ai_dien_toan', passiveEffect: 'Giảm miss do nhiễu trạng thái.', effect: 'Giáp ngữ cảnh, né nhiễu và giữ chính xác.' },
+        { suffix: 'Agent Toolchain', type: 'tool', family: 'ai', itemRole: 'nhiem_vu', itemSet: 'ai_dien_toan', activeEffect: 'Soi lựa chọn nhiệm vụ có thưởng tốt hơn.', effect: 'Điều phối agent, tăng kỳ ngộ.' },
+        { suffix: 'Inference Khai Ngộ Đan', type: 'pill', family: 'pill', itemRole: 'tu_luyen', effect: '+420 tu vi, tăng nhẹ đột phá.', tuViGain: 420, directStats: { dotPha: 2 } },
+      ],
+      frontend_huyen_dien_su: [
+        { suffix: 'DOM Huyễn Kính', type: 'artifact', family: 'frontend', itemRole: 'combat', itemSet: 'fullstack_van_tuong', passiveEffect: 'Tăng chính xác skill công kích.', effect: 'Tăng chính xác, giảm miss.' },
+        { suffix: 'CSS Vân Y Giáp', type: 'armor', family: 'frontend', itemRole: 'combat', itemSet: 'fullstack_van_tuong', passiveEffect: 'Né burst và giữ priority.', effect: 'Giáp mây CSS, nhẹ nhưng nhanh.' },
+        { suffix: 'Component Linh Ấn', type: 'talisman', family: 'frontend', itemRole: 'combat', itemSet: 'fullstack_van_tuong', procEffect: 'Tạo giáp nhẹ khi dùng chiêu thủ.', effect: 'Tạo giáp nhẹ và tăng tốc ra chiêu.' },
+        { suffix: 'Accessibility Thiên Nhãn', type: 'tool', family: 'uiux', itemRole: 'nhiem_vu', itemSet: 'fullstack_van_tuong', activeEffect: 'Giảm fail nhiệm vụ UI/UX.', effect: 'Soi giao diện mù mờ, tăng thưởng nhiệm vụ.' },
+        { suffix: 'Pixel Linh Dịch', type: 'pill', family: 'pill', itemRole: 'tu_luyen', effect: '+300 tu vi, tăng chính xác nhẹ.', tuViGain: 300, combatEffect: { accuracy: 0.015 } },
+      ],
+      git_menh_su: [
+        { suffix: 'Branch Mệnh Ấn', type: 'artifact', family: 'git', itemRole: 'nhiem_vu', itemSet: 'git_menh', passiveEffect: 'Mỗi mốc Git có thêm cống hiến.', effect: 'Hồi khí tốt hơn, nối combo ổn định.' },
+        { suffix: 'Merge Quy Nguyên Phù', type: 'talisman', family: 'git', itemRole: 'dot_pha', itemSet: 'git_menh', passiveEffect: 'Giảm lỗi khi nâng phẩm.', effect: 'Tăng cống hiến, giảm lỗi nâng phẩm.' },
+        { suffix: 'Commit Linh Bút', type: 'tool', family: 'git', itemRole: 'nghe', itemSet: 'git_menh', activeEffect: 'Tăng thưởng nghề và cống hiến khi làm việc.', effect: 'Tăng thưởng nghề và cống hiến.' },
+        { suffix: 'Pull Request Hộ Giáp', type: 'armor', family: 'git', itemRole: 'combat', itemSet: 'git_menh', passiveEffect: 'Khi được party hỗ trợ, tăng giáp.', effect: 'Giáp review, chống fail bất ngờ.' },
+        { suffix: 'Rebase Nghịch Mệnh Đan', type: 'pill', family: 'pill', itemRole: 'tu_luyen', cursedByDefault: true, effect: '+620 tu vi, cấm đan có nguyền.', tuViGain: 620 },
+      ],
+    };
+
+    for (const profession of DAO_NGHE_DEFINITIONS) {
+      const signatures = signatureByProfession[profession.key] || profession.craftItems.map((craft) => ({ ...craft, itemRole: craft.type === 'pill' ? 'tu_luyen' : 'nghe' }));
+      signatures.forEach((craft, index) => {
+        const tier = typeTier[Math.min(index, typeTier.length - 1)];
+        const tierIndex = Math.max(0, getShopTierIndex(tier));
+        const basePower = Number(typePower[craft.type] || 0);
+        const powerBonus = craft.type === 'weapon' || craft.type === 'artifact' || craft.type === 'armor'
+          ? Number((basePower + tierIndex * 0.045 + index * 0.008).toFixed(3))
+          : 0;
+        const directBonus = {
+          weapon: { lucChien: 8 + tierIndex * 6, tuVi: 1 + tierIndex, congHien: profession.key === 'git_menh_su' ? 3 : 0 },
+          armor: { lucChien: 4 + tierIndex * 4, trongThuongDuration: -4 - tierIndex * 2, tamMaRisk: -2 - tierIndex },
+          artifact: { tuVi: 2 + tierIndex, lucChien: 4 + tierIndex * 4, dotPha: 1 + tierIndex },
+          tool: { congHien: 3 + tierIndex * 2, tuVi: 1 + tierIndex, tamMaRisk: -2 - tierIndex },
+          talisman: { dotPha: 3 + tierIndex, tamMaRisk: -4 - tierIndex, trongThuongDuration: -2 - tierIndex },
+          pill: { tuVi: 1 + tierIndex, tamMaRisk: -1 },
+        }[craft.type] || {};
+        items.push({
+          key: `dao_nghe_${profession.key}_${index + 1}_${slugifyKey(craft.suffix)}`,
+          name: `${profession.itemPrefix} ${craft.suffix}`,
+          type: craft.type,
+          family: craft.family,
+          itemRole: craft.itemRole || 'nghe',
+          itemSet: craft.itemSet || null,
+          rarity: tierIndex >= 3 ? 'thanh_khi' : tierIndex === 2 ? 'co_bao' : tierIndex === 1 ? 'hiem' : 'tinh_anh',
+          professionKey: profession.key,
+          minShopTier: tier,
+          weaponTier: tier,
+          weaponGrade: getShopTierLabel(tier),
+          price: Math.round((360 + index * 520 + tierIndex * 1050) * (craft.type === 'armor' ? 1.15 : 1)),
+          powerBonus,
+          tuViGain: craft.tuViGain,
+          congHienGain: craft.congHienGain,
+          directStats: mergeItemStats(profession.stats, mergeItemStats(directBonus, craft.directStats || {})),
+          combatEffect: { profile: craft.type, family: craft.family, ...(profession.combat || {}), ...(craft.combatEffect || {}) },
+          activeEffect: craft.activeEffect,
+          passiveEffect: craft.passiveEffect,
+          procEffect: craft.procEffect,
+          effect: `${craft.effect} Nghề hợp: ${profession.name}. ${craft.passiveEffect ? `Nội tại: ${craft.passiveEffect}` : ''}${craft.activeEffect ? ` Kích hoạt: ${craft.activeEffect}` : ''}${craft.itemSet ? ` Thuộc ${ITEM_SET_DEFINITIONS[craft.itemSet]?.name || craft.itemSet}.` : ''}`.trim(),
+        });
+      });
+    }
+    return items;
+  }
+
 
   const SHOP_ITEMS = [
     {
@@ -321,6 +2392,38 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       capacity: 80,
       grade: 5,
     },
+    {
+      key: 'tay_tuy_dan',
+      name: 'Tẩy Tủy Đan',
+      type: 'pill',
+      price: 300,
+      effect: '+50 điểm tẩy tủy linh căn.',
+      linhCanPurifyGain: 50,
+    },
+    {
+      key: 'linh_can_tinh_hoa',
+      name: 'Linh Căn Tinh Hoa',
+      type: 'pill',
+      price: 800,
+      effect: '+150 điểm tẩy tủy linh căn.',
+      linhCanPurifyGain: 150,
+    },
+    {
+      key: 'ngu_hanh_linh_dich',
+      name: 'Ngũ Hành Linh Dịch',
+      type: 'pill',
+      price: 1200,
+      effect: '+250 điểm tẩy tủy linh căn.',
+      linhCanPurifyGain: 250,
+    },
+    {
+      key: 'dao_nguyen_tuy',
+      name: 'Đạo Nguyên Tủy',
+      type: 'pill',
+      price: 2500,
+      effect: '+500 điểm tẩy tủy linh căn, dùng để đột phá các phẩm chất cao.',
+      linhCanPurifyGain: 500,
+    },
   ];
 
   const ITEM_QUALITIES = [
@@ -331,9 +2434,10 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     { key: 'cuc_pham', name: 'Cực Phẩm', multiplier: 1.9, color: 0xf97316 },
     { key: 'thien_pham', name: 'Thiên Phẩm', multiplier: 2.5, color: 0xef4444 },
     { key: 'dao_pham', name: 'Đạo Phẩm', multiplier: 3.5, color: 0xffd700 },
+    { key: 'source_pham', name: 'Source Phẩm', multiplier: 4.4, color: 0x67e8f9 },
   ];
   const DEFAULT_ITEM_QUALITY = 'pham_pham';
-  const MAX_ITEM_QUALITY = 'dao_pham';
+  const MAX_ITEM_QUALITY = 'source_pham';
 
   const CURSE_DEFINITIONS = [
     { key: 'merge_conflict', name: 'Merge Conflict', bonusText: '+ sức mạnh lớn nhưng dễ sinh Tâm Ma khi dùng.', sideEffectText: '10% nhận Tâm Ma Dao Động.' },
@@ -351,6 +2455,7 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     thuong_pham: { next: 'cuc_pham', stone: 'dai_refactor_linh_thach', cost: 1500, successRate: 0.50, curseRate: 0.10 },
     cuc_pham: { next: 'thien_pham', stone: 'thien_refactor_linh_thach', cost: 4000, successRate: 0.30, curseRate: 0.15 },
     thien_pham: { next: 'dao_pham', stone: 'dao_refactor_linh_thach', cost: 10000, successRate: 0.12, curseRate: 0.25 },
+    dao_pham: { next: 'source_pham', stone: 'source_refactor_linh_thach', cost: 30000, successRate: 0.045, curseRate: 0.35 },
   };
 
   SHOP_ITEMS.push(
@@ -359,6 +2464,7 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     { key: 'dai_refactor_linh_thach', name: 'Đại Refactor Linh Thạch', type: 'upgrade_stone', price: 1800, effect: 'Vật phẩm đặc biệt dùng nâng phẩm: Thượng → Cực.', upgradeTier: 3 },
     { key: 'thien_refactor_linh_thach', name: 'Thiên Refactor Linh Thạch', type: 'upgrade_stone', price: 5200, effect: 'Vật phẩm đặc biệt dùng nâng phẩm: Cực → Thiên.', upgradeTier: 4 },
     { key: 'dao_refactor_linh_thach', name: 'Đạo Refactor Linh Thạch', type: 'upgrade_stone', price: 15000, effect: 'Vật phẩm đặc biệt cực hiếm dùng nâng phẩm: Thiên → Đạo.', upgradeTier: 5 },
+    { key: 'source_refactor_linh_thach', name: 'Source Refactor Linh Thạch', type: 'upgrade_stone', price: 40000, effect: 'Vật phẩm gần như cấm vật dùng nâng phẩm: Đạo → Source. Fail dễ sinh nguyền/nợ kỹ thuật.', upgradeTier: 6, sourceItemGroup: 'data', itemClass: 'source_khi', itemRarity: 'thanh_ban', stability: 72 },
     { key: 'rollback_phu', name: 'Rollback Phù', type: 'talisman', price: 900, effect: 'Giảm rủi ro bị nguyền khi nâng phẩm thất bại.' },
     { key: 'safe_deploy_phu', name: 'Safe Deploy Phù', type: 'talisman', price: 1200, effect: '+10% tỉ lệ nâng phẩm thành công ở lần nâng kế tiếp.' },
   );
@@ -449,17 +2555,111 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     ]),
   );
 
+  SHOP_ITEMS.push(...createWeaponCatalog());
+
   const DEFAULT_STORAGE_BAG = 'tui_tho';
   const BE_QUAN_OPTIONS = {
-    '1h': { label: '1 giờ', durationMs: 60 * 60 * 1000, reward: 30 },
-    '2h': { label: '2 giờ', durationMs: 2 * 60 * 60 * 1000, reward: 70 },
-    '4h': { label: '4 giờ', durationMs: 4 * 60 * 60 * 1000, reward: 160 },
-    '8h': { label: '8 giờ', durationMs: 8 * 60 * 60 * 1000, reward: 360 },
+    // Thưởng chỉ nhận khi bế quan đủ thời gian. Không còn trò vào 1 giây rồi xuất quan ăn buff, cảm ơn đời.
+    '1h': { label: '1 giờ', durationMs: 60 * 60 * 1000, reward: 40 },
+    '2h': { label: '2 giờ', durationMs: 2 * 60 * 60 * 1000, reward: 90 },
+    '4h': { label: '4 giờ', durationMs: 4 * 60 * 60 * 1000, reward: 210 },
+    '8h': { label: '8 giờ', durationMs: 8 * 60 * 60 * 1000, reward: 480 },
   };
 
+  const BE_QUAN_BUG_OMENS = [
+    'Syntax Ma', 'Runtime Quỷ', 'Memory Leak Huyết Ảnh', 'Merge Conflict Hồn', 'Docker Layer Quỷ',
+    'Deadlock Âm Khóa', 'SQL Injection Tà Linh', 'Prompt Injection Tâm Ma', 'Production Crash Kiếp', 'Cache Ảo Ảnh',
+    'Dependency Oán Linh', 'Token Rò Rỉ', 'Port Âm Phong', 'Env Sai Lệch', 'CI/CD Lôi Kiếp',
+    'Nginx Huyền Môn Lệch', 'JWT Tạp Niệm', 'CSS Huyễn Ảnh', 'Hydration Nghịch Lưu', 'Schema Nứt Vỡ',
+    'Index Lạc Đạo', 'Queue Tắc Nghẽn', 'Rollback Nghịch Niệm', 'Rebase Ma Văn', 'Hotfix Hỏa Độc',
+    'Zero Day Hắc Ảnh', 'Model Drift Mê Vụ', 'Context Overflow', 'Tool Call Loạn Tâm', 'Kernel Panic Đạo Chấn',
+  ];
+
+  const BE_QUAN_INSIGHT_PATHS = [
+    { name: 'Thiền Định Debug', stat: { congHien: 4, tamMaRisk: -3 }, text: 'ngồi bất động nhìn log chạy qua như tinh hà' },
+    { name: 'Ngộ Đạo Source', stat: { tuVi: 5, dotPha: 2 }, text: 'đọc được source cổ khắc trên vách động' },
+    { name: 'Kiếm Ý Refactor', stat: { lucChien: 5 }, text: 'chém bỏ nhánh tạp niệm trong đạo cơ' },
+    { name: 'Định Tâm Test', stat: { tamMaRisk: -6, dotPha: 1 }, text: 'dựng test tâm pháp để khóa tâm ma' },
+    { name: 'Nhất Niệm Rollback', stat: { trongThuongDuration: -6, tamMaRisk: -2 }, text: 'rollback một ý niệm sai trước khi thành nghiệp bug' },
+    { name: 'Chứng Đạo Kernel', stat: { lucChien: 4, tuVi: 3 }, text: 'chạm tới tầng kernel của code đạo' },
+    { name: 'Tẩy Tủy Runtime', stat: { tuVi: 6, trongThuongDuration: -3 }, text: 'rửa runtime nghịch lưu qua kinh mạch' },
+    { name: 'Khai Mạch Compiler', stat: { dotPha: 4, lucChien: 2 }, text: 'biên dịch lại đạo cơ thành pháp văn sáng rõ' },
+    { name: 'Vạn Pháp API', stat: { congHien: 5, tuVi: 2 }, text: 'thông suốt API giữa nội tức và thiên đạo' },
+    { name: 'Hộ Tâm Security', stat: { tamMaRisk: -7, trongThuongDuration: -3 }, text: 'dựng tường lửa hộ tâm trước bug ma' },
+    { name: 'Địa Mạch Database', stat: { tuVi: 4, lucChien: 3 }, text: 'sắp lại schema linh mạch trong đan điền' },
+    { name: 'Cloud Phi Thăng Ý', stat: { dotPha: 3, congHien: 3 }, text: 'mượn mây cloud nâng một luồng đạo niệm' },
+  ];
+
+  const BE_QUAN_OUTCOME_TYPES = [
+    { key: 'stable', name: 'Bình Ổn', rarity: 'Thường', weight: 48, tuViMultiplier: 1.00, extra: { tuVi: 2 }, color: GOLD },
+    { key: 'debug', name: 'Ngộ Ra Bug', rarity: 'Thường', weight: 24, tuViMultiplier: 1.08, extra: { tuVi: 3, congHien: 2 }, color: GOLD },
+    { key: 'refactor', name: 'Refactor Đạo Cơ', rarity: 'Hiếm', weight: 16, tuViMultiplier: 1.22, extra: { tuVi: 5, lucChien: 3, trongThuongDuration: -3 }, color: 0x22c55e },
+    { key: 'mutation', name: 'Dị Biến Bug Đạo', rarity: 'Hiếm', weight: 8, tuViMultiplier: 1.35, extra: { lucChien: 6, dotPha: 3, tamMaRisk: 3 }, color: 0xa855f7 },
+    { key: 'backfire', name: 'Phản Phệ', rarity: 'Hung', weight: 7, tuViMultiplier: 0.55, extra: { tuVi: -3, lucChien: -2, tamMaRisk: 10, trongThuongDuration: 6 }, status: 'Tâm Ma Quấn Thân', color: 0xef4444 },
+    { key: 'great', name: 'Đại Ngộ', rarity: 'Truyền thuyết', weight: 3, tuViMultiplier: 1.65, extra: { tuVi: 10, congHien: 6, lucChien: 7, dotPha: 5, tamMaRisk: -8, trongThuongDuration: -6 }, color: 0xf59e0b },
+  ];
+
+  const BE_QUAN_SCENARIO_TOTAL = 1440;
+
+  function pickWeightedBeQuanOutcome() {
+    const totalWeight = BE_QUAN_OUTCOME_TYPES.reduce((sum, item) => sum + Math.max(0, Number(item.weight) || 0), 0);
+    let roll = Math.random() * Math.max(1, totalWeight);
+
+    for (const outcome of BE_QUAN_OUTCOME_TYPES) {
+      roll -= Math.max(0, Number(outcome.weight) || 0);
+      if (roll <= 0) return outcome;
+    }
+
+    return BE_QUAN_OUTCOME_TYPES[0];
+  }
+
+  function buildBeQuanScenario() {
+    const total = BE_QUAN_SCENARIO_TOTAL;
+    const index = Math.floor(Math.random() * total) + 1;
+    const path = BE_QUAN_INSIGHT_PATHS[(index - 1) % BE_QUAN_INSIGHT_PATHS.length] || BE_QUAN_INSIGHT_PATHS[0];
+    const outcome = pickWeightedBeQuanOutcome();
+    const omenSeed = deterministicScoreForKey(`${index}:${path.name}:${outcome.key}`, 'be-quan-omen-v2');
+    const omen = BE_QUAN_BUG_OMENS[omenSeed % BE_QUAN_BUG_OMENS.length] || 'Dị Lỗi Vô Danh';
+    const twistTexts = [
+      `dấu hiệu **${omen}** xuất hiện rồi tự tan, để lại một mạch khí ổn định hơn`,
+      `bóng **${omen}** va vào đạo tâm, buộc đạo hữu phải chọn giữa tiến nhanh và giữ ổn định`,
+      `vết nứt **${omen}** hiện trên pháp trận, nhưng được khóa lại trước khi lan rộng`,
+      `một luồng **${omen}** bị đọc ra nguyên nhân, không còn chỉ là thứ tên nghe đáng sợ cho vui`,
+    ];
+    const twist = twistTexts[deterministicScoreForKey(`${outcome.key}:${index}`, 'be-quan-twist-v2') % twistTexts.length];
+    const directStats = addDirectStats(path.stat, outcome.extra);
+
+    const resultTextByKey = {
+      stable: 'Bế quan hoàn tất ổn định. Thưởng không bùng nổ nhưng ít rủi ro, rất hợp với người không thích biến đạo cơ thành pháo hoa.',
+      debug: 'Đạo hữu nhận ra một lỗi trong cách vận khí. Sửa được lỗi này nên tu vi nhận thêm cao hơn bình thường.',
+      refactor: 'Đạo cơ được sắp lại gọn hơn. Khả năng giao chiến và hồi phục sau trọng thương được cải thiện.',
+      mutation: 'Đạo cơ sinh dị biến. Lợi ích cao hơn, nhưng Tâm Ma cũng dễ tìm cửa len vào.',
+      backfire: 'Bế quan phản phệ. Vẫn có kết quả, nhưng phải trả giá bằng Tâm Ma và thời gian tĩnh dưỡng.',
+      great: 'Đại ngộ xuất hiện. Tu vi, lực chiến và cơ hội đột phá đều tăng mạnh trong thời gian ngắn.',
+    };
+
+    return {
+      index,
+      total,
+      name: `${outcome.name} · ${path.name}`,
+      rarity: outcome.rarity,
+      status: outcome.status || (outcome.key === 'great' ? 'Đại Ngộ Xuất Quan' : outcome.key === 'refactor' ? 'Đạo Cơ Sáng Rõ' : 'Kỳ Ngộ Gia Thân'),
+      color: outcome.color || GOLD,
+      tuViMultiplier: outcome.tuViMultiplier || 1,
+      directStats,
+      text: `Trong lúc bế quan, đạo hữu ${path.text}. ${twist}. ${resultTextByKey[outcome.key] || 'Bế quan kết thúc, hệ thống ghi nhận biến chuyển đạo cơ.'}`,
+    };
+  }
+
+  // Tương thích với bản đã deploy từng gọi nhầm DeQuan. Vâng, một chữ cái cũng đủ làm server khóc.
+  function buildDeQuanScenario() {
+    return buildBeQuanScenario();
+  }
+
+
   const MISSION_DEFAULT_OPEN_LIMIT = 5;
-  const MISSION_MIN_OPEN_LIMIT = 3;
-  const MISSION_MAX_OPEN_LIMIT = 15;
+  const MISSION_MIN_OPEN_LIMIT = 5;
+  const MISSION_MAX_OPEN_LIMIT = 5;
   const MISSION_MAX_PARTY_SIZE = 3;
   const MISSION_STATUS_OPEN = 'open';
   const MISSION_STATUS_REVEALED = 'revealed';
@@ -474,6 +2674,33 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     'Khí tức áp đảo',
     'Không thể dò xét',
   ];
+
+  // Combat/powerscaling chung cho PvE, bí cảnh và đấu pháp.
+  // Mục tiêu: cảnh giới là nền lực chiến, tiểu cảnh tạo chênh lệch vừa phải, buff lực chiến có soft-cap.
+  const REALM_POWER_GROWTH = 2.1;
+  const MINOR_POWER_MULTIPLIERS = [1, 1.18, 1.4, 1.65];
+  const COMBAT_LUC_CHIEN_SOFT_CAP = 80;
+  const COMBAT_LUC_CHIEN_SOFT_RATE = 0.35;
+  const MISSION_DANGER_CONFIGS = {
+    safe: { label: 'An toàn', levelDeltaMax: 0, powerMult: 0.65, injuryMin: 0.01, injuryMax: 0.05, restMinMs: 30 * 60 * 1000, restMaxMs: 2 * 60 * 60 * 1000 },
+    easy: { label: 'Dễ', levelDeltaMax: 0, powerMult: 0.85, injuryMin: 0.02, injuryMax: 0.08, restMinMs: 60 * 60 * 1000, restMaxMs: 3 * 60 * 60 * 1000 },
+    normal: { label: 'Thường', levelDeltaMax: 1, powerMult: 1.05, injuryMin: 0.03, injuryMax: 0.12, restMinMs: MISSION_REST_LIGHT_MS, restMaxMs: 6 * 60 * 60 * 1000 },
+    hard: { label: 'Khó', levelDeltaMax: 2, powerMult: 1.35, injuryMin: 0.04, injuryMax: 0.18, restMinMs: MISSION_REST_LIGHT_MS, restMaxMs: MISSION_REST_HEAVY_MS },
+    elite: { label: 'Tinh anh', levelDeltaMax: 3, powerMult: 1.7, injuryMin: 0.06, injuryMax: 0.22, restMinMs: 3 * 60 * 60 * 1000, restMaxMs: 10 * 60 * 60 * 1000 },
+    boss: { label: 'Boss', levelDeltaMax: 4, powerMult: 2.15, injuryMin: 0.08, injuryMax: 0.28, restMinMs: 4 * 60 * 60 * 1000, restMaxMs: 12 * 60 * 60 * 1000 },
+  };
+  const MISSION_TIER_DANGER = {
+    tap_dich: { clean: 'safe', hunt: 'easy' },
+    ngoai_mon: { clean: 'easy', hunt: 'normal' },
+    noi_mon: { clean: 'normal', hunt: 'hard' },
+    truong_lao: { clean: 'hard', hunt: 'elite' },
+  };
+  const BICANH_PARTY_POWER_MULTIPLIERS = {
+    tap_dich: 0.95,
+    ngoai_mon: 1.12,
+    noi_mon: 1.32,
+    truong_lao: 1.58,
+  };
 
   const MISSION_TEMPLATES = [
     ...createMissionGroup('hunt', 0, [
@@ -519,7 +2746,7 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     ...createMissionGroup('hunt', 8, [
       'Diệt Thế Yêu Hoàng', 'Thiên Đạo Production Crash', 'Vạn Pháp Runtime Hoàng', 'Đại Đạo Deadlock Đế', 'Cửu Thiên Security Kiếp',
       'Hỗn Nguyên Database Tà Long', 'Vô Tận Memory Leak Ma', 'Bất Diệt Legacy Ma Tôn', 'Thiên Ngoại Zero Day', 'Hư Không System Collapse',
-      'Luân Hồi Merge Conflict', 'Vạn Kiếp Build Fail', 'Đại La Bug Tổ', 'Tịch Diệt Deploy Kiếp', 'Hắc Ám Permission Đế',
+      'Luân Hồi Merge Conflict', 'Vạn Kiếp Build Fail', 'Quy Khư Bug Tổ', 'Tịch Diệt Deploy Kiếp', 'Hắc Ám Permission Đế',
     ]),
 
     ...createMissionGroup('clean', 0, [
@@ -554,6 +2781,66 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       'Đại Dọn Tông Môn', 'Thanh Tẩy Uế Khí Sơn Môn', 'Dọn Tàng Kinh Loạn Các', 'Sửa Pháp Trận Onboarding', 'Khai Quang Nhập Môn Điện',
       'Tổng Dọn Luyện Mã Đường', 'Tẩy Trần Chấp Pháp Đường', 'Gom Tinh Hoa Công Pháp', 'Sắp Xếp Đạo Trường', 'Tông Môn Đại Thanh Tẩy',
     ]),
+    // Bổ sung pool nhiệm vụ theo thân phận để mỗi bảng luôn có đủ nhiệm vụ riêng.
+    // Tạp Dịch: yêu cầu thấp, thưởng thấp. Ngoại Môn -> Nội Môn -> Trưởng Lão tăng dần cả độ khó và phần thưởng.
+    ...createTierMissionGroup('tap_dich', 'clean', 0, [
+      'Quét Log Rơi Sơn Môn', 'Gom Backup Note Sơ Cấp', 'Sửa Typo Phù Văn', 'Dọn README Tạp Kinh', 'Lau Console Đan Lô',
+      'Sắp Xếp Link Công Pháp', 'Dọn Branch Khô Mộc', 'Gom Issue Tân Đồ', 'Vá Comment Rách', 'Thanh Lọc Todo Tiểu Ảnh',
+    ]),
+    ...createTierMissionGroup('tap_dich', 'hunt', 0, [
+      'Bắt Tiểu Bug CSS', 'Trảm Warning Tiểu Quái', 'Diệt Syntax Yêu Nhỏ', 'Đuổi Spam Ma Sơn Môn', 'Bình Null Tiểu Hồn',
+      'Dọn Runtime Lỗi Vặt', 'Trấn Console Oán Linh', 'Sửa Semicolon Ma Ảnh', 'Bắt Typo Hồ Ly', 'Hạ Todo Quỷ Nhỏ',
+    ]),
+
+    ...createTierMissionGroup('ngoai_mon', 'clean', 1, [
+      'Refactor Component Huyền Y', 'Sửa Responsive Huyễn Cảnh', 'Gom Issue Ngoại Sơn', 'Khai Git Workflow Pháp', 'Dọn API Tài Liệu',
+      'Sắp Xếp Endpoint Trận Đồ', 'Chỉnh Theme Hộ Sơn', 'Dọn Docker Compose Nhập Môn', 'Tối Ưu Layout Ngoại Các', 'Tẩy Config Lệch Nhánh',
+    ]),
+    ...createTierMissionGroup('ngoai_mon', 'hunt', 1, [
+      'Merge Conflict Phi Kiếm', 'Trấn API Tà Linh', 'Dựng Docker Hộ Trận', 'Tối Ưu Query Địa Mạch', 'Canh CI/CD Lôi Đài',
+      'Bắt Auth Quỷ Ảnh', 'Diệt Branch Loạn Ảnh', 'Trảm Deploy Yêu Tướng', 'Phong Env Missing Ma', 'Hạ Pull Request Oán Linh',
+    ]),
+
+    ...createTierMissionGroup('noi_mon', 'clean', 3, [
+      'Tái Lập Database Long Mạch', 'Thiết Kế Architecture Pháp Trận', 'Bình Định Queue Tắc Nghẽn', 'Sửa Session Hồn Ấn', 'Chuẩn Hoá Policy Hộ Pháp',
+      'Sắp Xếp Migration Bí Điển', 'Dọn Legacy Huyết Thư', 'Thanh Tẩy Audit Log', 'Khai Quang Monitoring Trận', 'Trùng Tu Module Nội Các',
+    ]),
+    ...createTierMissionGroup('noi_mon', 'hunt', 3, [
+      'Phá Deadlock Hắc Trận', 'Phong Ấn Memory Leak', 'Cứu Production Tiểu Kiếp', 'Trảm XSS Huyết Phù', 'Độ Hoá Legacy Ma Code',
+      'Trấn Pipeline Lôi Kiếp', 'Diệt SQL Injection Độc Ma', 'Chém Rate Limit Huyết Quỷ', 'Phong JWT Hắc Phù', 'Phá Transaction Ma Nhãn',
+    ]),
+
+    ...createTierMissionGroup('truong_lao', 'clean', 5, [
+      'Định Chuẩn Architecture Đạo Tạng', 'Khai Thiên Migration Đại Trận', 'Hộ Pháp Security Cấm Điện', 'Luận Đạo CI/CD Vạn Kiếp', 'Tái Tạo Monolith Hỗn Độn',
+      'Cứu Sơn Môn Khỏi Data Loss', 'Lập Đại Pháp Monitoring', 'Đúc Quy Chuẩn Review Đạo', 'Sắp Xếp Tông Môn Runtime', 'Tái Thiết DevOps Lôi Cung',
+    ]),
+    ...createTierMissionGroup('truong_lao', 'hunt', 5, [
+      'Thiên Đạo Production Đại Kiếp', 'Phong Thần Zero Day Ma Chủ', 'Trấn Áp System Collapse', 'Chém Nợ Kỹ Thuật Nghiệp Lực', 'Diệt Hỗn Độn Data Corruption',
+      'Đại Chiến Dependency Quỷ Vương', 'Phong Ấn Prompt Injection Ma Đế', 'Trảm Fullstack Hỗn Độn Thú', 'Diệt Hắc Ám Permission Đế', 'Bình Thiên Kiếp Build Fail',
+    ]),
+  ];
+
+  const DUNGEON_TEMPLATES = [
+    // Tuyến nhập môn: ít đánh, nhiều khai phá, phù hợp Phàm Nhân/Luyện Khí.
+    createDungeonTemplate('son_mon_thanh_tay', 'Sơn Môn Thanh Tẩy', 'clean', 0, 'clean', 'Uế Khí Sơn Môn', 'Bí cảnh nhập môn: quét uế khí kênh, rule, onboarding và trật tự tông môn.', 3, 0.9, 0),
+    createDungeonTemplate('tang_kinh_so_cac', 'Tàng Kinh Sơ Các', 'clean', 0, 'docs', 'Tàng Kinh Mục Lục Quỷ', 'Nơi guide, README và đạo văn sơ cấp bị bụi code che phủ; rủi ro thấp, hợp farm công pháp.', 3, 0.95, 0),
+    createDungeonTemplate('bug_yeu_son', 'Bug Yêu Sơn', 'hunt', 1, 'bug', 'Bug Vương Ẩn Trong Stack Trace', 'Dãy núi phủ đầy lỗi cũ, nơi Bug Yêu tụ lại thành bầy; cửa chiến đấu đầu tiên cho Ngoại Môn.', 3, 1.15, 1),
+
+    // Tuyến Trúc Cơ/Kim Đan: chia theo hệ công pháp để người chơi chọn build.
+    createDungeonTemplate('merge_hon_coc', 'Merge Hồn Cốc', 'hunt', 1, 'git', 'Merge Conflict Quỷ Tướng', 'Thung lũng nơi các nhánh Git chồng chéo thành ma trận; hợp người có đồ Git/Review.', 3, 1.2, 1),
+    createDungeonTemplate('huyen_dien_lau', 'Huyễn Diện Lâu', 'hunt', 2, 'frontend', 'UI Huyễn Yêu Vương', 'Lầu ảo ảnh khiến layout vỡ, state loạn và pixel lệch; hợp Frontend/UIUX.', 4, 1.3, 1),
+    createDungeonTemplate('dia_mach_sql_dong', 'Địa Mạch SQL Động', 'hunt', 2, 'database', 'Database Độc Long', 'Hang sâu nơi query chậm, migration lỗi và deadlock kết thành độc khí; hợp Database/System.', 4, 1.35, 1),
+    createDungeonTemplate('deploy_ma_vuc', 'Deploy Ma Vực', 'hunt', 2, 'devops', 'Tà Ma Deploy Chủ', 'Ma vực của build fail, port lỗi và pipeline đứt đoạn; hợp DevOps/Backend.', 4, 1.38, 1),
+
+    // Tuyến Nguyên Anh/Hóa Thần: bắt đầu có khống chế, tâm ma và trọng thương rõ hơn.
+    createDungeonTemplate('hau_dao_am_dien', 'Hậu Đạo Ám Điện', 'hunt', 3, 'backend', 'API Tà Linh Chủ', 'Ám điện của auth, middleware, queue và server 500; hợp Backend/Fullstack.', 4, 1.55, 2),
+    createDungeonTemplate('ho_phap_cam_dia', 'Hộ Pháp Cấm Địa', 'hunt', 4, 'security', 'Zero Day Ma Chủ', 'Cấm địa bảo mật, mỗi bước đều có nguy cơ lộ token, vỡ quyền và sinh tâm ma.', 5, 1.7, 2),
+    createDungeonTemplate('ai_co_tri_me_cung', 'AI Cơ Trí Mê Cung', 'hunt', 5, 'ai', 'Prompt Injection Quỷ Vương', 'Mê cung nơi hallucination, context lost và agent loop quấn lấy đạo tâm; hợp AI/Security.', 5, 1.75, 2),
+
+    // Tuyến Luyện Hư trở lên: bí cảnh dài hơi, thưởng tốt, rủi ro cao.
+    createDungeonTemplate('legacy_huyet_thap', 'Legacy Huyết Tháp', 'hunt', 6, 'system', 'Nợ Kỹ Thuật Ma Quân', 'Huyết tháp xây bằng code cũ, dependency mục nát và kiến trúc dị biến; hợp System/Fullstack.', 5, 1.9, 2),
+    createDungeonTemplate('thien_kiep_production_dai', 'Thiên Kiếp Production Đài', 'hunt', 8, 'devops', 'Production Crash Kiếp Chủ', 'Đài kiếp vận hành thật: outage, rollback, data loss và incident cùng giáng xuống.', 6, 2.05, 3),
+    createDungeonTemplate('van_phap_quy_khu', 'Vạn Pháp Quy Khư', 'hunt', 9, 'system', 'Hỗn Độn Đại Bug Hoàng', 'Bí cảnh cuối tuyến trước Phi Thăng, nơi nhiều hệ code trộn thành quy khư đại kiếp.', 6, 2.2, 3),
   ];
 
   const HUNT_REWARD_TOTAL_BY_REALM = [150, 300, 750, 1500, 3000, 5400, 9000, 12000, 16000, 22000, 30000];
@@ -563,26 +2850,259 @@ const AUTO_DISCIPLE_THRESHOLDS = [
 
 
 
+
+  
+  function dedupeButtonsByCustomId(buttons) {
+    const seen = new Set();
+    const safe = [];
+
+    for (const button of buttons) {
+      const data = button?.data ?? {};
+      const customId = data.custom_id;
+      if (customId && seen.has(customId)) continue;
+      if (customId) seen.add(customId);
+      safe.push(button);
+    }
+
+    return safe;
+  }
+
+function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previousLabel = '◀ Trước', nextLabel = 'Sau ▶' }) {
+    if (previousPage === nextPage) {
+      return [
+        new ButtonBuilder()
+          .setCustomId(`${prefix}${userId}:${nextPage}`)
+          .setLabel(`Trang khác ${Number(nextPage) + 1}`)
+          .setStyle(ButtonStyle.Primary),
+      ];
+    }
+
+    return [
+      new ButtonBuilder()
+        .setCustomId(`${prefix}${userId}:${previousPage}`)
+        .setLabel(previousLabel)
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(`${prefix}${userId}:${nextPage}`)
+        .setLabel(nextLabel)
+        .setStyle(ButtonStyle.Primary),
+    ];
+  }
+
+  function buildSafeTypedPageButtons({ userId, prefix, type, previousPage, nextPage, previousLabel = '◀ Trước', nextLabel = 'Sau ▶' }) {
+    if (previousPage === nextPage) {
+      return [
+        new ButtonBuilder()
+          .setCustomId(`${prefix}${userId}:${type}:${nextPage}`)
+          .setLabel(`Trang khác ${Number(nextPage) + 1}`)
+          .setStyle(ButtonStyle.Primary),
+      ];
+    }
+
+    return [
+      new ButtonBuilder()
+        .setCustomId(`${prefix}${userId}:${type}:${previousPage}`)
+        .setLabel(previousLabel)
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(`${prefix}${userId}:${type}:${nextPage}`)
+        .setLabel(nextLabel)
+        .setStyle(ButtonStyle.Primary),
+    ];
+  }
+
+
   function createCatalogItems(type, family, entries) {
     return entries.map(([key, name, effect, extra = {}]) => ({
       key,
       name,
       type,
       family,
+      professionKey: extra.professionKey ?? getProfessionKeyForFamily(family),
       price: extra.price ?? getDefaultItemPrice(type, extra),
       effect,
       ...extra,
     }));
   }
 
+  function createWeaponCatalog() {
+    const tierConfigs = [
+      { tier: 'tap_dich', label: 'Tạp Dịch', grade: 'Hoàng Giai', basePrice: 120, powerBase: 0.04, prefixes: ['Mộc', 'Trúc', 'Thiết', 'Thanh Đồng', 'Console', 'HTML', 'CSS', 'JSON', 'Git', 'Lint'] },
+      { tier: 'ngoai_mon', label: 'Ngoại Môn', grade: 'Huyền Giai', basePrice: 680, powerBase: 0.105, prefixes: ['Huyền Thiết', 'Linh Cương', 'React', 'API', 'Docker', 'SQL', 'Branch', 'Middleware', 'TypeScript', 'Node'] },
+      { tier: 'noi_mon', label: 'Nội Môn', grade: 'Địa Giai', basePrice: 1650, powerBase: 0.18, prefixes: ['Long Cốt', 'Địa Mạch', 'Kubernetes', 'Security', 'Database', 'CI/CD', 'Architecture', 'Redis', 'OAuth', 'PostgreSQL'] },
+      { tier: 'truong_lao', label: 'Trưởng Lão', grade: 'Thiên Giai', basePrice: 4200, powerBase: 0.30, prefixes: ['Thiên Đạo', 'Đạo Nguyên', 'Hỗn Độn', 'Production', 'Zero Day', 'System', 'DevOps', 'Vạn Pháp', 'Rollback'] },
+    ];
+    const forms = ['Kiếm', 'Đao', 'Thương', 'Kích', 'Ấn', 'Kính', 'Phi Luân', 'Phù Nhận', 'Trận Bàn'];
+    const suffixes = ['Trảm Bug', 'Định Code', 'Phá Merge', 'Hộ Deploy', 'Khai Query', 'Diệt Runtime', 'Tịnh Legacy', 'Đoạn Memory', 'Bình Production'];
+    const families = ['frontend', 'backend', 'database', 'devops', 'security', 'git', 'system', 'clean', 'ai'];
+    const weapons = [];
+
+    for (const config of tierConfigs) {
+      let serial = 1;
+      for (const prefix of config.prefixes) {
+        for (const form of forms) {
+          const suffix = suffixes[(serial - 1) % suffixes.length];
+          const family = families[(serial - 1) % families.length];
+          const name = `${prefix} ${form} ${suffix}`;
+          const powerBonus = Number((config.powerBase + ((serial % 9) * 0.006)).toFixed(3));
+          const price = Math.floor((config.basePrice + serial * config.basePrice * 0.018) / 10) * 10;
+          weapons.push({
+            key: `vk_${config.tier}_${String(serial).padStart(2, '0')}_${slugifyKey(name)}`,
+            name,
+            type: 'weapon',
+            family,
+            professionKey: getProfessionKeyForFamily(family),
+            minShopTier: config.tier,
+            weaponTier: config.tier,
+            weaponGrade: config.grade,
+            powerBonus,
+            price,
+            directStats: {
+              lucChien: Math.round(powerBonus * 100),
+              tuVi: family === 'git' || family === 'clean' ? 1 : 0,
+              congHien: family === 'git' ? 2 : 0,
+              dotPha: family === 'security' || family === 'system' ? 1 : 0,
+              tamMaRisk: family === 'clean' ? -1 : 0,
+              trongThuongDuration: family === 'security' || family === 'devops' ? -2 : 0,
+            },
+            combatEffect: { profile: 'weapon', family, power: powerBonus, qiGain: family === 'git' ? 2 : 0 },
+            effect: `${config.grade} / ${config.label}. Turn-based +${Math.round(powerBonus * 100)}% lực chiến, mở hiệu ứng skill hệ ${family}.`,
+          });
+          serial += 1;
+        }
+      }
+    }
+
+    return weapons;
+  }
+
+  function getShopTierIndex(tier) {
+    return MISSION_TIER_ORDER.indexOf(normalizeMissionTier(tier));
+  }
+
+  function getShopTierLabel(tier) {
+    return getMissionTierConfig(normalizeMissionTier(tier)).shortLabel;
+  }
+
+  function getShopTierForMember(member) {
+    return normalizeMissionTier(getMissionTierForMember(member) || 'tap_dich');
+  }
+
+  function isShopItemUnlockedForMember(item, member) {
+    if (!item || item.shopHidden) return false;
+    if (!item.minShopTier || !member) return true;
+    return getShopTierIndex(getShopTierForMember(member)) >= getShopTierIndex(item.minShopTier);
+  }
+
+  function getShopItemLockedText(item, member) {
+    if (item?.shopHidden) {
+      return 'Vật phẩm này thuộc bảo khố cũ và đã rút khỏi shop. Nếu đang sở hữu thì vẫn dùng được, nhưng không bán mới.';
+    }
+    const ownTier = member ? getShopTierForMember(member) : 'tap_dich';
+    if (item?.minShopTier && getShopTierIndex(ownTier) < getShopTierIndex(item.minShopTier)) {
+      return `Vật phẩm này yêu cầu shop cấp **${getShopTierLabel(item.minShopTier)}**. Thân phận hiện tại mở shop **${getShopTierLabel(ownTier)}**.`;
+    }
+    if (!isDailyShopItemAvailable(item, member)) {
+      return `Vật phẩm này hôm nay chưa được bày bán. Shop mỗi ngày chỉ mở **${DAILY_SHOP_LIMIT} món** theo thân phận.`;
+    }
+    return null;
+  }
+
+  function getShopItemPrice(item, member = null) {
+    const basePrice = Math.max(0, Number(item?.price) || 0);
+    const tier = member ? getShopTierForMember(member) : null;
+    const itemTier = item?.minShopTier ? normalizeMissionTier(item.minShopTier) : null;
+
+    // Shop Ký Danh/Tạp Dịch dùng giá linh động nhưng món thấp nhất là 100 cống hiến.
+    if (tier === 'tap_dich' && ['artifact', 'weapon', 'armor', 'tool', 'talisman'].includes(item?.type) && (!itemTier || itemTier === 'tap_dich')) {
+      const spread = deterministicScoreForKey(item.key || item.name || 'phap-bao', 'tap-dich-price') % 7;
+      return Math.max(120, Math.min(300, 120 + spread * 30));
+    }
+
+    return basePrice;
+  }
+
+  function rollWeaponQualityKeyForTier(tier) {
+    const tableByTier = {
+      tap_dich: [
+        ['pham_pham', 55], ['ha_pham', 28], ['trung_pham', 12], ['thuong_pham', 4], ['cuc_pham', 1],
+      ],
+      ngoai_mon: [
+        ['ha_pham', 40], ['trung_pham', 32], ['thuong_pham', 18], ['cuc_pham', 8], ['thien_pham', 2],
+      ],
+      noi_mon: [
+        ['trung_pham', 32], ['thuong_pham', 34], ['cuc_pham', 22], ['thien_pham', 10], ['dao_pham', 2],
+      ],
+      truong_lao: [
+        ['thuong_pham', 28], ['cuc_pham', 34], ['thien_pham', 25], ['dao_pham', 13],
+      ],
+    };
+    const table = tableByTier[normalizeMissionTier(tier)] ?? tableByTier.tap_dich;
+    const total = table.reduce((sum, [, weight]) => sum + weight, 0);
+    let roll = Math.random() * total;
+    for (const [quality, weight] of table) {
+      roll -= weight;
+      if (roll <= 0) return quality;
+    }
+    return table[0][0];
+  }
+
+  function isPhapBaoItem(item) {
+    return ['artifact', 'weapon', 'armor'].includes(item?.type);
+  }
+
+  function getPhapBaoTierForItem(item) {
+    return normalizeMissionTier(item?.minShopTier || item?.weaponTier || 'tap_dich');
+  }
+
+  function getPhapBaoQualityRollText(item) {
+    const tier = getPhapBaoTierForItem(item);
+    return {
+      tap_dich: 'Random Phàm/Hạ/Trung, hiếm Thượng/Cực',
+      ngoai_mon: 'Random Hạ/Trung/Thượng, hiếm Cực/Thiên',
+      noi_mon: 'Random Trung/Thượng/Cực, hiếm Thiên/Đạo',
+      truong_lao: 'Random Thượng/Cực/Thiên, có tỉ lệ Đạo Phẩm',
+    }[tier] ?? 'Random phẩm chất pháp bảo';
+  }
+
+  function getPurchaseInventoryOptions(item) {
+    if (isPhapBaoItem(item) || ['tool', 'talisman'].includes(item?.type)) {
+      return { quality: rollWeaponQualityKeyForTier(getPhapBaoTierForItem(item)) };
+    }
+    return {};
+  }
+
+  function getPhapBaoSellValue(item, entry, member = null) {
+    if (!isPhapBaoItem(item)) return 0;
+    const quality = getInventoryItemQuality(entry);
+    const baseValue = getShopItemPrice(item, member);
+    return Math.max(1, Math.floor(baseValue * (quality?.multiplier ?? 1) * 0.7));
+  }
+
+  function getSellableInventoryIndex(userData, key) {
+    normalizeInventoryData(userData);
+    const candidates = userData.inventory
+      .map((entry, index) => ({ entry, index }))
+      .filter(({ entry }) => getInventoryItemKey(entry) === key)
+      .sort((a, b) => getQualityIndex(getInventoryItemQuality(a.entry).key) - getQualityIndex(getInventoryItemQuality(b.entry).key));
+
+    return candidates.length > 0 ? candidates[0].index : -1;
+  }
+
   function getDefaultItemPrice(type, extra = {}) {
-    if (type === 'artifact') return 700;
-    if (type === 'tool') return 450;
-    if (type === 'pill') return extra.cursedByDefault ? 900 : 260;
-    if (type === 'talisman') return 320;
-    if (type === 'bag') return 1200;
-    if (type === 'upgrade_stone') return 500;
-    return 300;
+    const tier = normalizeMissionTier(extra.minShopTier || extra.weaponTier || 'tap_dich');
+    const tierIndex = Math.max(0, getShopTierIndex(tier));
+    const tierMult = [1, 2.2, 4.8, 9.5][tierIndex] || 1;
+
+    if (type === 'artifact') return Math.round(300 * tierMult);
+    if (type === 'armor') return Math.round(340 * tierMult);
+    if (type === 'weapon') return extra.price ?? Math.round(320 * tierMult);
+    if (type === 'tool') return Math.round(180 * tierMult);
+    if (type === 'pill') return extra.cursedByDefault ? Math.round(620 * tierMult) : Math.round(140 * tierMult);
+    if (type === 'talisman') return Math.round(220 * tierMult);
+    if (type === 'bag') return Math.round(260 * tierMult);
+    if (type === 'upgrade_stone') return Math.round(240 * tierMult);
+    return Math.round(180 * tierMult);
   }
 
   function createMissionGroup(type, minRealmIndex, names) {
@@ -593,6 +3113,1411 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       minRealmIndex,
       family: inferMissionFamily(name, type),
     }));
+  }
+
+
+  function createTierMissionGroup(tier, type, minRealmIndex, names) {
+    const normalizedTier = normalizeMissionTier(tier);
+    return names.map((name) => ({
+      key: `${normalizedTier}_${type}_${slugifyKey(name)}`,
+      type,
+      tier: normalizedTier,
+      name,
+      minRealmIndex,
+      family: inferMissionFamily(name, type),
+      rewardMultiplier: MISSION_TIER_REWARD_MULTIPLIERS[normalizedTier] ?? 1,
+      tuViMultiplier: MISSION_TIER_TUVI_MULTIPLIERS[normalizedTier] ?? 1,
+    }));
+  }
+
+  function createDungeonTemplate(key, name, type, minRealmIndex, family, bossName, description, floors = 3, rewardMultiplier = 1.25, hiddenLevelBonus = 1) {
+    return {
+      key: `dungeon_${key}`,
+      type,
+      name,
+      minRealmIndex,
+      family,
+      bossName,
+      description,
+      floors,
+      rewardMultiplier,
+      hiddenLevelBonus,
+      aura: type === 'clean' ? 'Cấm chế phủ bụi, uế khí ẩn sâu' : 'Sát khí bị phong ấn, không thể dò xét toàn phần',
+    };
+  }
+
+
+  const DAILY_SHOP_LIMIT = 18;
+  const CONTENT_SYSTEM_TARGET_COUNT = 1440;
+  const ROLE_MISSION_TARGET_COUNT = CONTENT_SYSTEM_TARGET_COUNT;
+  const MONSTER_CATALOG_TARGET_COUNT = CONTENT_SYSTEM_TARGET_COUNT;
+  const KY_NGO_CATALOG_TARGET_COUNT = CONTENT_SYSTEM_TARGET_COUNT;
+  const THIEN_TUONG_TARGET_COUNT = CONTENT_SYSTEM_TARGET_COUNT;
+  const EXTRA_ITEM_TARGET_COUNT = CONTENT_SYSTEM_TARGET_COUNT;
+
+  function createCodeTuMonsterCatalog(count = MONSTER_CATALOG_TARGET_COUNT) {
+    const variantByFamily = {
+      syntax: ['Dị Văn', 'Lint Oán Phù', 'Parser Ma Tự', 'Compiler Huyết Ấn', 'Invalid Command Linh'],
+      runtime: ['Hung Linh', 'Crash Quỷ', 'Event Loop Hồn', 'Fatal Exception Ma', 'Runtime Kiếp Chủ'],
+      memory_leak: ['Âm Hồn', 'Heap Oán Linh', 'Garbage U Ảnh', 'Leak Hồn Tướng', 'Out Of Memory Ma'],
+      deadlock: ['Thi Tướng', 'Mutex Quỷ', 'Lock Token Oán Thú', 'Transaction Hắc Tướng', 'Deadlock Đạo Vực Chủ'],
+      race_condition: ['Song Ảnh', 'Async Huyễn Thú', 'Priority Hồn', 'Thread Dị Ảnh', 'Race Kiếp Linh'],
+      dependency: ['Cửu Đầu Xà', 'Deprecated Xà', 'Package Dị Trùng', 'Lockfile Oán Long', 'Supply Chain Xà Vương'],
+      legacy: ['Thạch Khôi', 'Monolith Cổ Khôi', 'Refactor Oán Thạch', 'Legacy Ma Tượng', 'Cổ Module Trấn Sơn'],
+      zero_day: ['Ma Ảnh', 'Exploit Hắc Linh', 'Breach Sát Thủ', 'Firewall Phá Giả', 'Root Access Tà Chủ'],
+      cache: ['Huyễn Ảnh', 'Stale Ma Đồng', 'Mirror Sai Lệch', 'CDN Hồn Ảnh', 'Cache Collapse Dị Chủ'],
+      merge_conflict: ['Oán Linh', 'Branch Cốt Quỷ', 'Conflict Hồn Ấn', 'Forked Timeline Ma', 'Merge Judge Dị Linh'],
+      rate_limit: ['Thiên Long', 'Retry-After Long Tử', 'Queue Hắc Long', 'Throttle Oán Long', 'Rate Limit Đạo Long'],
+      hallucination: ['Dị Thần', 'Prompt Ma Nhãn', 'Inference Oán Thần', 'False Truth Linh', 'Black Box Tà Thần'],
+    };
+    const ranks = ['Tiểu', 'Hạ', 'Trung', 'Thượng', 'Đại', 'Huyền', 'Địa', 'Thiên', 'Hỗn Độn', 'Đạo Nguyên'];
+    const tiers = ['mầm lỗi', 'dị biến', 'tinh anh', 'boss phụ', 'incident boss'];
+    const archetypeCycle = ['bugling', 'runtime', 'deadlock', 'leak', 'injection', 'deploy'];
+    const result = [];
+    for (let i = 0; i < count; i += 1) {
+      const family = SOURCE_DEFECT_FAMILIES[i % SOURCE_DEFECT_FAMILIES.length];
+      const variants = variantByFamily[family.key] || [family.name];
+      const local = Math.floor(i / SOURCE_DEFECT_FAMILIES.length);
+      const rank = ranks[local % ranks.length];
+      const variant = variants[local % variants.length];
+      const tierLabel = tiers[Math.floor(local / variants.length) % tiers.length];
+      const archetypeKey = archetypeCycle[(local + family.key.length) % archetypeCycle.length];
+      const archetype = MONSTER_ARCHETYPES[archetypeKey] || MONSTER_ARCHETYPES.bugling;
+      const levelBand = Math.floor(local / 12);
+      const visual = getSourceDefectVisual(family.key);
+      const isBoss = /boss|incident/i.test(tierLabel);
+      const powerMultiplier = Number(((archetype.powerMult || 1) + levelBand * 0.05 + (isBoss ? 0.12 : 0) + ((local % 5) * 0.014)).toFixed(3));
+      const hpMultiplier = Number(((archetype.hpMult || 1) + (local % 4) * 0.03 + (isBoss ? 0.15 : 0)).toFixed(3));
+      const weaknessPool = SOURCE_DEFECT_FAMILIES.filter((entry) => entry.key !== family.key);
+      const weakness = weaknessPool[(local * 5 + i) % weaknessPool.length]?.key || 'debug';
+      const resist = family.key;
+      const lootBias = Array.from(new Set([family.key, family.materialCore, family.professionKey, ...(archetype.lootBias || []), 'source_material']));
+      const name = `${rank} ${variant}`;
+      result.push({
+        key: `quai_${String(i + 1).padStart(4, '0')}_${family.key}_${slugifyKey(variant)}`,
+        name,
+        family: family.key,
+        sourceFamilyName: family.name,
+        defectFamily: family.key,
+        archetype: archetypeKey,
+        archetypeName: archetype.label,
+        powerMultiplier,
+        hpMultiplier,
+        lootBias,
+        weakness,
+        resist,
+        targetStat: family.targetStat,
+        incidentType: `${family.short} Incident`,
+        materialCore: family.materialCore,
+        emoji: visual.emoji,
+        iconKey: visual.iconKey,
+        iconUrl: visual.iconUrl || null,
+        thumbnailUrl: visual.thumbnailUrl || null,
+        imageUrl: visual.imageUrl || null,
+        text: `${visual.emoji} ${name} thuộc hệ **${family.name}** (${tierLabel}), nhắm vào **${family.targetStat}**. ${family.description}`,
+      });
+    }
+    return result;
+  }
+
+  function createCodeTuKyNgoCatalog(count = KY_NGO_CATALOG_TARGET_COUNT) {
+    const groups = ['Kỳ ngộ cát', 'Kỳ ngộ hung', 'Kỳ ngộ dị biến', 'Kỳ ngộ code-tu'];
+    const domains = ['frontend', 'backend', 'database', 'devops', 'security', 'git', 'ai', 'system', 'clean', 'bug'];
+    const relics = ['Đạo Văn', 'Trace Log', 'Bug Core', 'Commit Cổ', 'Schema Ngọc', 'Docker Phù', 'API Ngọc Giản', 'Cache Linh Tinh', 'Prompt Dị Thư', 'Runtime Huyền Ấn'];
+    const places = ['Tàng Kinh Các', 'Server Room', 'Đan Phòng', 'Bí Cảnh', 'Động Phủ', 'Linh Mạch', 'Git Cốc', 'Database Địa Mạch', 'Deploy Ma Vực', 'Hư Không Sandbox'];
+    const verbs = ['nhặt được', 'ngộ ra', 'khai mở', 'debug thấy', 'trấn áp được', 'rollback được', 'tối ưu được', 'đồng bộ được', 'tẩy sạch', 'ghi lại'];
+    const result = [];
+    for (let i = 0; i < count; i += 1) {
+      const domain = domains[i % domains.length];
+      const group = groups[i % groups.length];
+      const relic = relics[(i * 5) % relics.length];
+      const place = places[(i * 3) % places.length];
+      const tuVi = 25 + ((i * 13) % 180);
+      const congHien = 8 + ((i * 7) % 60);
+      const tuLinhExp = 5 + ((i * 11) % 45);
+      const isHung = group.includes('hung') && i % 3 === 0;
+      result.push({
+        key: `ky_ngo_${String(i + 1).padStart(3, '0')}_${slugifyKey(domain)}_${slugifyKey(relic)}`,
+        name: `${relic} ${place}`,
+        group,
+        text: `Trong ${place}, đạo hữu ${verbs[i % verbs.length]} một ${relic} hệ ${domain}; linh khí và code khí quấn vào nhau thành một đoạn kỳ ngộ mới.`,
+        directStats: isHung
+          ? { tuVi: -2 - (i % 3), lucChien: -1 - (i % 4), dotPha: -1 - (i % 3), tamMaRisk: 8 + (i % 8), trongThuongDuration: 3 + (i % 5) }
+          : {
+              tuVi: 2 + (i % 4),
+              congHien: domain === 'git' || domain === 'clean' ? 3 + (i % 3) : 0,
+              lucChien: domain === 'bug' || domain === 'security' ? 3 + (i % 4) : 1 + (i % 2),
+              dotPha: domain === 'system' || domain === 'ai' ? 2 + (i % 3) : 0,
+              tamMaRisk: domain === 'clean' || domain === 'security' ? -3 - (i % 4) : -1,
+              trongThuongDuration: domain === 'devops' || domain === 'database' ? -2 - (i % 4) : 0,
+            },
+        status: isHung ? { name: 'Tâm Ma Quấn Thân', hours: 2 + (i % 3), dotPhaPenalty: true } : null,
+      });
+    }
+    return result;
+  }
+
+  function createCodeTuThienTuongCatalog(count = THIEN_TUONG_TARGET_COUNT) {
+    const elements = ['Kim', 'Mộc', 'Thủy', 'Hỏa', 'Thổ'];
+    const skies = ['Linh Vũ', 'Bug Triều', 'Đạo Quang', 'Hắc Vân', 'Thiên Lôi', 'Cache Vân', 'Deploy Nhật', 'Schema Nguyệt', 'Prompt Tinh', 'Runtime Hà'];
+    const states = ['Bạo Phát', 'Nhiễu Loạn', 'Gia Hộ', 'Áp Đỉnh', 'Tĩnh Dạ', 'Luyện Tâm', 'Khai Mạch', 'Phản Phệ', 'Trấn Sơn', 'Sáng Đạo'];
+    const effects = ['tu luyện', 'bí cảnh', 'đấu pháp', 'tẩy tủy', 'nâng phẩm pháp bảo', 'nhiệm vụ tông môn', 'kỳ ngộ', 'tụ linh trận', 'mở sự kiện', 'hóa giải tâm ma'];
+    const result = [];
+    for (let i = 0; i < count; i += 1) {
+      const sky = skies[i % skies.length];
+      const state = states[Math.floor(i / skies.length) % states.length];
+      const element = elements[(i * 2 + 1) % elements.length];
+      const focus = effects[(i * 7) % effects.length];
+      result.push({
+        key: `thien_tuong_${String(i + 1).padStart(3, '0')}_${slugifyKey(sky)}_${slugifyKey(state)}`,
+        name: `${sky} ${state}`,
+        element,
+        omen: `${sky} phủ xuống tông môn, ${state.toLowerCase()} giữa linh khí và code khí, khiến ${focus} xuất hiện biến số.`,
+        effect: `Hợp ${focus}; ai biết tận dụng sẽ được lợi, ai spam vô độ dễ sinh tâm ma debug.`,
+      });
+    }
+    return result;
+  }
+
+  function createSourceStatsFocus(focus = {}, tierIndex = 0, serial = 0, classMultiplier = 1, rarityMultiplier = 1) {
+    const stats = { sourcePower: 0, runtime: 0, integrity: 0, logic: 0, throughput: 0, stability: 0 };
+    const scale = (1 + tierIndex * 0.45 + (serial % 5) * 0.045) * classMultiplier * rarityMultiplier;
+    for (const key of Object.keys(stats)) {
+      stats[key] = Math.max(0, Math.round((Number(focus[key]) || 0) * scale));
+    }
+    return stats;
+  }
+
+  function createSourceRiskStats(risk = {}, tierIndex = 0, serial = 0) {
+    const scale = 1 + tierIndex * 0.35 + (serial % 3) * 0.1;
+    return {
+      technicalDebt: Math.round((Number(risk.technicalDebt) || 0) * scale),
+      entropy: Math.round((Number(risk.entropy) || 0) * scale),
+      nghiepLuc: Math.round((Number(risk.nghiepLuc) || 0) * scale),
+    };
+  }
+
+  function sourceStatsToDirectStats(sourceStats = {}, riskStats = {}, type = 'artifact', stability = 80) {
+    const direct = createEmptyDirectStats();
+    const sourcePower = Number(sourceStats.sourcePower) || 0;
+    const runtime = Number(sourceStats.runtime) || 0;
+    const integrity = Number(sourceStats.integrity) || 0;
+    const logic = Number(sourceStats.logic) || 0;
+    const throughput = Number(sourceStats.throughput) || 0;
+    const stable = Number(sourceStats.stability) || 0;
+    const debt = Number(riskStats.technicalDebt) || 0;
+    const entropy = Number(riskStats.entropy) || 0;
+    const nghiepLuc = Number(riskStats.nghiepLuc) || 0;
+
+    direct.lucChien += sourcePower * 3 + runtime + Math.ceil(logic * 0.8);
+    direct.tuVi += Math.ceil(sourcePower * 0.8) + Math.ceil(throughput * 0.7);
+    direct.congHien += throughput * 2 + Math.ceil(runtime * 0.5);
+    direct.dotPha += logic + Math.ceil(stable * 0.5);
+    direct.tamMaRisk -= integrity * 2 + stable;
+    direct.trongThuongDuration -= integrity * 3 + stable * 2;
+    direct.tuViLoss -= integrity * 2 + stable;
+    direct.statusDuration -= stable * 2;
+
+    if (type === 'weapon') direct.lucChien += 8 + sourcePower * 2;
+    if (type === 'armor') {
+      direct.lucChien += 6 + integrity * 2;
+      direct.trongThuongDuration -= 8;
+      direct.tuViLoss -= 4;
+    }
+    if (type === 'tool') {
+      direct.congHien += 4 + throughput;
+      direct.dotPha += Math.ceil(logic * 0.5);
+    }
+    if (type === 'talisman') {
+      direct.tamMaRisk -= 4;
+      direct.statusDuration -= 3;
+    }
+    if (type === 'pill') {
+      direct.tuVi += 3 + sourcePower;
+      direct.dotPha += Math.ceil(logic * 0.5);
+    }
+
+    direct.tamMaRisk += Math.max(0, debt + entropy + nghiepLuc);
+    direct.statusDuration += Math.max(0, Math.ceil(entropy * 0.8));
+    direct.tuViLoss += Math.max(0, Math.ceil(debt * 0.8));
+    if (stability >= 88) {
+      direct.tamMaRisk -= 3;
+      direct.trongThuongDuration -= 3;
+    } else if (stability < 45) {
+      direct.lucChien += 8;
+      direct.tamMaRisk += 6;
+      direct.tuViLoss += 4;
+    }
+    return normalizeDirectStats(direct);
+  }
+
+  function getSourceTierForGeneratedIndex(localIndex, group = null) {
+    const tierConfigs = [
+      { tier: 'tap_dich', label: 'Ký Danh', basePrice: 140, power: 0.055 },
+      { tier: 'ngoai_mon', label: 'Ngoại Môn', basePrice: 700, power: 0.095 },
+      { tier: 'noi_mon', label: 'Nội Môn', basePrice: 1800, power: 0.145 },
+      { tier: 'truong_lao', label: 'Trưởng Lão', basePrice: 4800, power: 0.215 },
+    ];
+    const index = Math.min(tierConfigs.length - 1, Math.floor(localIndex / 4));
+    const tier = tierConfigs[index] || tierConfigs[0];
+    const risky = group?.route === 'ta_dao';
+    return { ...tier, tierIndex: index, power: Number((tier.power * (risky ? 1.15 : 1)).toFixed(3)) };
+  }
+
+  function createCodeTuItemCatalog(count = EXTRA_ITEM_TARGET_COUNT) {
+    const result = [];
+    const classKeys = SOURCE_ITEM_CLASS_DEFINITIONS.map((entry) => entry.key);
+    const rarityKeys = SOURCE_ITEM_RARITY_DEFINITIONS.map((entry) => entry.key);
+
+    for (const family of SOURCE_DEFECT_FAMILIES) {
+      for (const group of SOURCE_ITEM_GROUP_DEFINITIONS) {
+        for (let i = 0; i < 15; i += 1) {
+          const serial = result.length + 1;
+          const tier = getSourceTierForGeneratedIndex(i, group);
+          const itemClassKey = group.route === 'ta_dao'
+            ? (i >= 10 ? 'cam_khi' : classKeys[Math.min(classKeys.length - 2, Math.floor(i / 2) + 1)])
+            : classKeys[Math.min(classKeys.length - 2, Math.floor(i / 2))];
+          const itemClass = getSourceItemClass(itemClassKey);
+          const rarity = getSourceItemRarity(rarityKeys[Math.min(rarityKeys.length - 1, Math.floor((i + tier.tierIndex) / 3))]);
+          const type = group.types[i % group.types.length];
+          const prefix = group.prefixes[i % group.prefixes.length];
+          const form = group.forms[(i * 2 + tier.tierIndex) % group.forms.length];
+          const name = `${prefix} ${family.short} ${form}`;
+          const classMult = Number(itemClass.multiplier) || 1;
+          const rarityMult = Number(rarity.multiplier) || 1;
+          const stability = Math.max(18, Math.min(98,
+            78 + (group.focus.stability || 0) * 2 + (group.focus.integrity || 0) - (group.route === 'ta_dao' ? 34 : 0) + (i % 5) * 2 - tier.tierIndex * 3,
+          ));
+          const sourceStats = createSourceStatsFocus(group.focus, tier.tierIndex, serial, classMult, rarityMult);
+          const riskStats = createSourceRiskStats(group.risk, tier.tierIndex, serial);
+          const directStats = sourceStatsToDirectStats(sourceStats, riskStats, type, stability);
+          const powerBonus = Number((tier.power * classMult * rarityMult).toFixed(3));
+          const price = Math.max(120, Math.round((tier.basePrice * classMult * rarityMult * (group.route === 'ta_dao' ? 1.18 : 1) + i * 35) / 10) * 10);
+          const cursed = group.route === 'ta_dao' || itemClassKey === 'cam_khi';
+          const activeEffect = ['patch', 'runtime', 'logic_ai', 'force_push'].includes(group.key)
+            ? `${group.name}: có thể kích hoạt để ${group.effectVerb}; tỉ lệ phản phệ phụ thuộc Stability.`
+            : null;
+          const passiveEffect = ['commit', 'armor', 'debug', 'data'].includes(group.key)
+            ? `${group.name}: nội tại giúp ${group.effectVerb}; hiệu quả rõ khi gặp ${family.name}.`
+            : null;
+          const procEffect = ['force_push', 'runtime', 'debug', 'logic_ai'].includes(group.key)
+            ? `Khi combat với ${family.name}, có tỉ lệ sinh hiệu ứng phụ theo ${family.targetStat}.`
+            : null;
+
+          result.push({
+            key: `vp_${String(serial).padStart(4, '0')}_${slugifyKey(name)}`,
+            name,
+            type,
+            family: family.key,
+            sourceFamily: family.key,
+            sourceFamilyName: family.name,
+            sourceItemGroup: group.key,
+            sourceItemGroupName: group.name,
+            itemClass: itemClass.key,
+            itemClassName: itemClass.name,
+            itemRarity: rarity.key,
+            itemRarityName: rarity.name,
+            itemRole: group.itemRole,
+            route: group.route,
+            stability,
+            sourceStats,
+            riskStats,
+            sourceRisk: family.risk,
+            targetStat: family.targetStat,
+            professionKey: family.professionKey,
+            itemSet: group.setKey,
+            minShopTier: tier.tier,
+            weaponTier: tier.tier,
+            weaponGrade: `${tier.label} · ${itemClass.name}`,
+            price,
+            powerBonus,
+            directStats,
+            cursedByDefault: cursed && type !== 'upgrade_stone',
+            sourceTag: group.route === 'ta_dao' ? 'force_push_cursed' : type === 'upgrade_stone' ? 'craft_material' : 'source_item',
+            combatEffect: {
+              profile: type,
+              family: family.key,
+              power: type === 'weapon' ? powerBonus : Number((powerBonus * 0.55).toFixed(3)),
+              shieldPct: type === 'armor' || type === 'talisman' ? Number((0.035 + tier.tierIndex * 0.018 + (sourceStats.integrity || 0) * 0.002).toFixed(3)) : 0,
+              defBuff: type === 'armor' ? Number((0.035 + tier.tierIndex * 0.02).toFixed(3)) : 0,
+              accuracy: ['tool', 'artifact'].includes(type) ? Number((0.018 + (sourceStats.logic || 0) * 0.004).toFixed(3)) : 0,
+              qiGain: Math.max(0, Math.round((sourceStats.runtime || 0) * 0.45 + (sourceStats.throughput || 0) * 0.3)),
+              critChance: group.key === 'force_push' || group.key === 'logic_ai' ? Number((0.025 + tier.tierIndex * 0.012).toFixed(3)) : 0,
+            },
+            passiveEffect,
+            activeEffect,
+            procEffect,
+            effect: `${itemClass.name} · ${rarity.name} · ${group.name} hệ ${family.name}. Dùng để ${group.effectVerb}. Độ ổn định ${stability}/100${cursed ? ', mạnh nhưng kéo theo Nghiệp Lực/nợ kỹ thuật' : ''}.`,
+          });
+        }
+      }
+    }
+
+    return result.slice(0, count);
+  }
+
+
+  function createCodeTuMissionCatalog(count = ROLE_MISSION_TARGET_COUNT) {
+    const incidentByFamily = {
+      syntax: ['Debug Dị Văn', 'Lint Pháp Tắc', 'Compiler Trấn Ấn'],
+      runtime: ['Patch Runtime', 'Ổn Định Event Loop', 'Chặn Crash Thực Tại'],
+      memory_leak: ['Data Migration', 'Dọn Heap Linh Mạch', 'Thu Leak Hồn Tinh'],
+      deadlock: ['Mở Khóa Deadlock', 'Giải Transaction Oán', 'Phá Mutex Đạo Vực'],
+      race_condition: ['Định Thứ Tự Nhân Quả', 'Bắt Async Song Ảnh', 'Ổn Định Priority'],
+      dependency: ['Pin Dependency', 'Khóa Version Độc', 'Cắt Supply Chain'],
+      legacy: ['Refactor Cổ Thành', 'Migrate Monolith', 'Phá Legacy Thạch Khôi'],
+      zero_day: ['Security Breach', 'Trấn Zero-Day', 'Vá Root Access'],
+      cache: ['Invalidate Cache', 'Phá Stale Mirror', 'Dọn CDN Huyễn Sa'],
+      merge_conflict: ['Merge Rite', 'Hợp Branch Nhân Quả', 'Giải Conflict Oán Linh'],
+      rate_limit: ['Điều Phối Queue', 'Qua Retry-After Kiếp', 'Ổn Định Rate Limit'],
+      hallucination: ['Verify Dị Thần', 'Giải Prompt Ảo', 'Xác Minh Truth Token'],
+    };
+    const tiers = [
+      { key: 'tap_dich', realm: 0, label: 'Nhập môn', type: 'clean' },
+      { key: 'ngoai_mon', realm: 1, label: 'Ngoại sơn', type: 'hunt' },
+      { key: 'noi_mon', realm: 3, label: 'Nội cảnh', type: 'hunt' },
+      { key: 'truong_lao', realm: 5, label: 'Trấn tông', type: 'clean' },
+    ];
+    const result = [];
+    for (let i = 0; i < count; i += 1) {
+      const family = SOURCE_DEFECT_FAMILIES[i % SOURCE_DEFECT_FAMILIES.length];
+      const tier = tiers[Math.floor(i / SOURCE_DEFECT_FAMILIES.length) % tiers.length];
+      const names = incidentByFamily[family.key] || [family.name];
+      const actionName = names[Math.floor(i / (SOURCE_DEFECT_FAMILIES.length * tiers.length)) % names.length];
+      const serial = String(i + 1).padStart(4, '0');
+      const name = `${actionName} · ${tier.label} ${family.short} ${serial}`;
+      const tierInfo = getUnifiedContentTierForRealm(tier.realm);
+      const type = tier.type === 'clean' && i % 3 !== 1 ? 'clean' : 'hunt';
+      const dangerKey = getMissionDangerKey({ type, tier: tier.key }, tier.key);
+      result.push({
+        key: `${tier.key}_${type}_${family.key}_${serial}`,
+        type,
+        tier: tier.key,
+        name,
+        minRealmIndex: tier.realm,
+        family: family.key,
+        sourceFamilyName: family.name,
+        defectFamily: family.key,
+        contentTier: tierInfo.key,
+        missionKind: i % 2 === 0 ? 'don' : 'bang',
+        recommendedProfessions: [family.professionKey].filter(Boolean),
+        powerScale: getUnifiedPowerBudget({ tier: tierInfo.key, dangerKey, realmIndex: tier.realm, role: type === 'hunt' ? 'combat' : 'support' }),
+        rewardScale: tierInfo.rewardMult,
+        dangerKey,
+        targetStat: family.targetStat,
+        materialCore: family.materialCore,
+        tags: [tier.key, type, family.key, family.professionKey, i % 2 === 0 ? 'solo' : 'party'],
+        description: `${family.description} Nhiệm vụ yêu cầu xử lý ${family.name}, rủi ro chính: ${family.risk}.`,
+      });
+    }
+    return result;
+  }
+
+  const NOI_TONG_ACTION_TYPES_12 = [
+    { key: 'kinh_luoc', name: 'Kinh Lược Tông Vụ', type: 'clean', verb: 'sắp đặt', focus: ['Sổ Công Đức', 'Nhiệm Vụ Bảng', 'Lệnh Bài', 'Tàng Kinh Các', 'Ngoại Viện', 'Chấp Sự Đường'], objective: 'sắp xếp hồ sơ, phân quyền và việc tồn đọng trong tông môn', successText: 'hồ sơ được quy chuẩn, đệ tử không còn mò menu như mò kim dưới đáy database', failText: 'quy trình lệch nhịp, cần tĩnh dưỡng để tránh rối Đạo Tâm' },
+    { key: 'tu_luyen', name: 'Tĩnh Tu Đạo Cơ', type: 'clean', verb: 'ổn định', focus: ['Đạo Cơ', 'Công Pháp Chủ Tu', 'Tụ Linh Trận', 'Runtime Nội Tức', 'Đạo Tâm', 'Source Kinh'], objective: 'ổn định tu luyện, chỉnh nhịp linh khí và ghi chú công pháp', successText: 'đạo cơ ổn định, tu vi tăng sạch và ít sinh Tâm Ma', failText: 'khí cơ nghịch mạch, phải nghỉ nhẹ trước khi làm tiếp' },
+    { key: 'khao_cuu', name: 'Khảo Cứu Dị Văn', type: 'clean', verb: 'khảo cứu', focus: ['Dị Văn', 'Log Cổ', 'README Cũ', 'Mộng Cảnh Source', 'Bản Đồ Lỗi', 'Chú Giải Công Pháp'], objective: 'đọc log, đối chiếu ghi chép và phân loại nguồn nhiễu', successText: 'dị văn được giải nghĩa, tông môn có thêm tri thức xử lý lâu dài', failText: 'thông tin nhiễu làm lệch phán đoán, cần tĩnh tâm lại' },
+    { key: 'ho_tong', name: 'Hộ Tống Đồng Môn', type: 'clean', verb: 'hộ tống', focus: ['Đan Sư', 'Khí Sư', 'Tân Đồ', 'Chấp Sự', 'Đội Tuần Tra', 'Linh Xa Tài Nguyên'], objective: 'đưa người và tài nguyên qua vùng nhiễu mà không mở giao chiến vô nghĩa', successText: 'đoàn hộ tống qua an toàn, uy tín tông môn tăng rõ', failText: 'đường đi rối tuyến, đội phải lui về chỉnh lại trận đồ' },
+    { key: 'cuu_ho', name: 'Cứu Hộ Sự Cố', type: 'clean', verb: 'cứu hộ', focus: ['Linh Mạch', 'Kho Tài Nguyên', 'Đan Phòng', 'Tàng Kinh Các', 'Kết Giới', 'Kênh Tông Môn'], objective: 'cứu người, cô lập vùng lỗi và khôi phục vận hành', successText: 'sự cố được cứu hộ gọn, không ai phải giả vờ thích combat', failText: 'cứu hộ quá tải, Source phản chấn gây mệt mỏi' },
+    { key: 'chung_tich', name: 'Thu Thập Chứng Tích', type: 'clean', verb: 'thu thập', focus: ['Vật Chứng', 'Trace Log', 'Bản Sao Commit', 'Dấu Vết Cache', 'Lời Khai Đồng Môn', 'Mảnh Source'], objective: 'gom chứng tích để đổi cống hiến hoặc mở tuyến điều tra sau', successText: 'chứng tích đủ sạch để nộp Chấp Sự Đường', failText: 'chứng tích lẫn tạp nhiễu, cần lọc lại sau khi nghỉ' },
+    { key: 'phuc_nguyen', name: 'Phục Nguyên Linh Mạch', type: 'clean', verb: 'phục nguyên', focus: ['Linh Mạch', 'Backup Trận', 'Dòng Tu Vi', 'Kho Nguyên Liệu', 'Trận Bàn Runtime', 'Dòng Công Đức'], objective: 'khôi phục luồng tài nguyên, backup và mạch vận hành', successText: 'linh mạch thông suốt, phần thưởng thiên về ổn định và tích lũy', failText: 'mạch phục hồi chưa kín, phản chấn nhẹ lên tu vi' },
+    { key: 'dieu_giai', name: 'Điều Giải Công Án', type: 'clean', verb: 'điều giải', focus: ['Tranh Chấp Nhiệm Vụ', 'Chia Thưởng', 'Quy Tắc Kênh', 'Lịch Trực Nhật', 'Vai Trò Đệ Tử', 'Công Đức Cũ'], objective: 'phân xử công án, giảm xung đột và chốt quy tắc hiển thị rõ ràng', successText: 'công án khép lại, người dùng bớt có lý do bấm lung tung', failText: 'lời khai vòng vo làm đội xử lý kiệt sức' },
+    { key: 'phong_an', name: 'Phong Ấn Dị Điểm', type: 'clean', verb: 'phong ấn', focus: ['Vết Nứt Nhỏ', 'Dị Điểm Cache', 'Khe Source', 'Log Nhiễu', 'Ảo Tầng', 'Tàn Ảnh Runtime'], objective: 'đóng dị điểm bằng trận pháp, ưu tiên an toàn hơn sát thương', successText: 'dị điểm bị khóa, nguyên liệu sạch được thu hồi', failText: 'phong ấn lệch nét, đội bị nhiễu khí phản hồi' },
+    { key: 'tuan_tra', name: 'Tuần Tra Kết Giới', type: 'clean', verb: 'tuần tra', focus: ['Sơn Môn', 'Ngoại Viện', 'Kết Giới', 'Linh Điền', 'Đan Phòng', 'Tàng Kinh Các'], objective: 'tuần tra, đánh dấu điểm bất thường và báo cáo trước khi lỗi lớn nổ ra', successText: 'kết giới được đánh dấu sạch, giảm rủi ro cho các đội sau', failText: 'điểm bất thường lan nhanh, đội phải rút về tránh nhiễu' },
+    { key: 'tran_ap', name: 'Trấn Áp Hung Nhiễu', type: 'hunt', verb: 'trấn áp', focus: ['Hung Nhiễu', 'Dị Lỗi', 'Tà Khí Source', 'Bóng Runtime', 'Mảnh Zero-Day', 'Tàn Ảnh Legacy'], objective: 'đối đầu trực tiếp khi nhiễu đã thành thực thể', successText: 'hung nhiễu bị trấn xuống, đội trưởng chọn cách xử lý tàn tích', failText: 'hung nhiễu phản kích, đội bị trọng thương' },
+    { key: 'doi_dau', name: 'Đối Đầu Dị Lỗi', type: 'hunt', verb: 'đối đầu', focus: ['Tinh Anh Dị Lỗi', 'Ảnh Ma Source', 'Hộ Pháp Lỗi', 'Dị Thần Cache', 'Ma Ảnh Dependency', 'Thi Tướng Deadlock'], objective: 'giao chiến với dị lỗi cấp cao, chỉ dành cho người thật sự muốn bấm nút đánh', successText: 'dị lỗi bị đánh bại, tàn tích chờ chọn Hấp Tu Vi / Phong Ấn / Trảm Sát', failText: 'dị lỗi thắng kèo, đội cần tĩnh dưỡng' },
+  ];
+
+  const NOI_TONG_RANKS_10 = [
+    { rank: 1, label: 'Nhập Môn', tier: 'tap_dich', realm: 0, reward: 0.55 },
+    { rank: 2, label: 'Tạp Dịch', tier: 'tap_dich', realm: 0, reward: 0.68 },
+    { rank: 3, label: 'Ngoại Viện', tier: 'ngoai_mon', realm: 1, reward: 0.85 },
+    { rank: 4, label: 'Ngoại Môn', tier: 'ngoai_mon', realm: 1, reward: 1.0 },
+    { rank: 5, label: 'Nội Môn', tier: 'noi_mon', realm: 3, reward: 1.25 },
+    { rank: 6, label: 'Chân Truyền', tier: 'noi_mon', realm: 4, reward: 1.45 },
+    { rank: 7, label: 'Thân Truyền', tier: 'noi_mon', realm: 5, reward: 1.7 },
+    { rank: 8, label: 'Thánh Tử', tier: 'truong_lao', realm: 5, reward: 2.0 },
+    { rank: 9, label: 'Chấp Sự', tier: 'truong_lao', realm: 6, reward: 2.35 },
+    { rank: 10, label: 'Trưởng Lão', tier: 'truong_lao', realm: 7, reward: 2.8 },
+  ];
+
+  function createNoiTongMissionCatalog(count = 1440) {
+    const result = [];
+    let index = 0;
+    for (const family of SOURCE_DEFECT_FAMILIES) {
+      for (const rank of NOI_TONG_RANKS_10) {
+        for (const action of NOI_TONG_ACTION_TYPES_12) {
+          const focus = action.focus[(rank.rank + index) % action.focus.length];
+          const serial = String(index + 1).padStart(4, '0');
+          const dangerKey = getMissionDangerKey({ type: action.type, tier: rank.tier }, rank.tier);
+          result.push({
+            key: `noi_tong_${serial}_${action.key}_r${rank.rank}_${family.key}`,
+            type: action.type,
+            tier: rank.tier,
+            name: `${action.name} · ${rank.label} · ${family.short}`,
+            minRealmIndex: rank.realm,
+            family: family.key,
+            lootFamily: family.key,
+            sourceFamilyName: family.name,
+            defectFamily: family.key,
+            contentTier: getUnifiedContentTierForRealm(rank.realm).key,
+            missionKind: index % 2 === 0 ? 'don' : 'bang',
+            recommendedProfessions: action.type === 'hunt' ? [family.professionKey].filter(Boolean) : [],
+            rewardMultiplier: rank.reward,
+            rewardScale: rank.reward,
+            dangerKey,
+            missionCategory: action.key,
+            actionName: action.name,
+            targetStat: family.targetStat,
+            materialCore: family.materialCore,
+            tags: ['noi_tong', action.key, action.type, family.key, rank.tier, `rank_${rank.rank}`],
+            description: `Nội tông: ${action.verb} ${focus}. Mục tiêu là ${action.objective}; hệ nhiễu chính ${family.name} (${family.targetStat}). ${action.type === 'hunt' ? 'Có combat thật.' : 'Không ép combat, xử lý bằng kiểm tra độ khó và thưởng ổn định.'}`,
+            successText: action.successText,
+            failText: action.failText,
+          });
+          index += 1;
+          if (result.length >= count) return result;
+        }
+      }
+    }
+    return result;
+  }
+
+  const XUAT_SON_ACTION_TYPES_12 = [
+    { key: 'dieutra', name: 'Điều Tra Dị Tượng' },
+    { key: 'hotong', name: 'Hộ Tống Qua Vùng Lỗi' },
+    { key: 'tranap', name: 'Trấn Áp Dị Lỗi' },
+    { key: 'thuhoi', name: 'Thu Hồi Đạo Mã' },
+    { key: 'cuunguoi', name: 'Cứu Người Bị Nhiễu Source' },
+    { key: 'vaphaptac', name: 'Vá Pháp Tắc Cục Bộ' },
+    { key: 'phongan', name: 'Phong Ấn Vết Nứt' },
+    { key: 'theodoi', name: 'Theo Dõi Tà Tu Force Push' },
+    { key: 'chungtich', name: 'Thu Thập Chứng Tích' },
+    { key: 'phaaotang', name: 'Phá Ảo Tầng Cache' },
+    { key: 'tinh_anh', name: 'Đối Đầu Tinh Anh Dị Lỗi' },
+    { key: 'ketan', name: 'Kết Án Công Án' },
+  ];
+
+  const XUAT_SON_RANKS_10 = [
+    { rank: 1, label: 'Sơn Môn Lệnh', minRole: 'Ký Danh Đệ Tử', realm: 0, tier: 'tap_dich', risk: 'Thấp', base: 1.0 },
+    { rank: 2, label: 'Ngoại Viện Lệnh', minRole: 'Tạp Dịch Đệ Tử', realm: 0, tier: 'tap_dich', risk: 'Thấp', base: 1.15 },
+    { rank: 3, label: 'Ngoại Môn Lệnh', minRole: 'Ngoại Môn Đệ Tử', realm: 1, tier: 'ngoai_mon', risk: 'Vừa', base: 1.35 },
+    { rank: 4, label: 'Nội Môn Lệnh', minRole: 'Nội Môn Đệ Tử', realm: 2, tier: 'ngoai_mon', risk: 'Vừa', base: 1.6 },
+    { rank: 5, label: 'Chân Truyền Lệnh', minRole: 'Chân Truyền Đệ Tử', realm: 3, tier: 'noi_mon', risk: 'Cao', base: 1.9 },
+    { rank: 6, label: 'Thân Truyền Lệnh', minRole: 'Thân Truyền Đệ Tử', realm: 4, tier: 'noi_mon', risk: 'Cao', base: 2.2 },
+    { rank: 7, label: 'Thánh Tử Lệnh', minRole: 'Thánh Tử', realm: 5, tier: 'noi_mon', risk: 'Rất cao', base: 2.6 },
+    { rank: 8, label: 'Chấp Sự Lệnh', minRole: 'Chấp Sự', realm: 6, tier: 'truong_lao', risk: 'Rất cao', base: 3.0 },
+    { rank: 9, label: 'Trưởng Lão Lệnh', minRole: 'Trưởng Lão', realm: 7, tier: 'truong_lao', risk: 'Cực cao', base: 3.5 },
+    { rank: 10, label: 'Thiên Đạo Công Án', minRole: 'Trưởng Lão', realm: 8, tier: 'truong_lao', risk: 'Đại dị biến', base: 4.2 },
+  ];
+
+  function createXuatSonCatalog(count = 1440) {
+    const result = [];
+    let index = 0;
+    for (const family of SOURCE_DEFECT_FAMILIES) {
+      for (const rank of XUAT_SON_RANKS_10) {
+        for (const action of XUAT_SON_ACTION_TYPES_12) {
+          const serial = String(index + 1).padStart(4, '0');
+          result.push({
+            id: `xs_${serial}_${family.key}_r${String(rank.rank).padStart(2, '0')}_${action.key}`,
+            name: `${action.name} · ${rank.label} · ${family.short}`,
+            family: family.key,
+            familyName: family.name,
+            rank: rank.rank,
+            rankLabel: rank.label,
+            minRole: rank.minRole,
+            tier: rank.tier,
+            minRealmIndex: rank.realm,
+            risk: rank.risk,
+            base: rank.base,
+            actionType: action.key,
+            actionName: action.name,
+            materialCore: family.materialCore,
+            professionKey: family.professionKey,
+            lore: `${action.name} ngoài tông môn, xử lý ${family.name}. Có thể chọn Commit, Force Push hoặc Vá tạm khi can thiệp.`,
+          });
+          index += 1;
+          if (result.length >= count) return result;
+        }
+      }
+    }
+    return result;
+  }
+
+  const CODE_TU_MONSTERS_360 = createCodeTuMonsterCatalog(CONTENT_SYSTEM_TARGET_COUNT);
+  const BI_CANH_SITUATIONS_360 = createCodeTuKyNgoCatalog(CONTENT_SYSTEM_TARGET_COUNT).map((entry, index) => ({
+    ...entry,
+    key: `bicanh_${entry.key}`,
+    type: index % 2 === 0 ? 'monster' : 'kyngo',
+    monsterKey: CODE_TU_MONSTERS_360[index % CODE_TU_MONSTERS_360.length].key,
+  }));
+  // Audit marker cũ giữ cho content-system-check: createCodeTuMissionCatalog(CONTENT_SYSTEM_TARGET_COUNT)
+  MISSION_TEMPLATES.length = 0;
+  MISSION_TEMPLATES.push(...createNoiTongMissionCatalog(CONTENT_SYSTEM_TARGET_COUNT));
+  const XUAT_SON_CATALOG = createXuatSonCatalog(CONTENT_SYSTEM_TARGET_COUNT);
+  KY_NGO_EVENTS.push(...createCodeTuKyNgoCatalog(CONTENT_SYSTEM_TARGET_COUNT));
+  THIEN_TUONG_ARCHETYPES.push(...createCodeTuThienTuongCatalog(CONTENT_SYSTEM_TARGET_COUNT));
+
+  SHOP_ITEMS.push(...createDaoNgheItemCatalog());
+  SHOP_ITEMS.push(...createCodeTuItemCatalog(CONTENT_SYSTEM_TARGET_COUNT));
+
+  const SOURCE_SHOP_CORE_OVERRIDES = {
+    hoi_nguyen_dan: { name: 'Source Hồi Nguyên Đan', effect: '+90 tu vi. Đan nền giúp Đạo Cơ nạp lại Source Khí.', tuViGain: 90, sourceItemGroup: 'data', sourceTag: 'shop_core_source', itemClass: 'linh_khi', itemRarity: 'thuong', stability: 92, directStats: { tuVi: 4, tamMaRisk: -1 } },
+    linh_khi_dan: { name: 'Nguyên Mã Linh Đan', effect: '+180 tu vi. Đan Source nhập môn, ổn định hơn linh đan cũ.', tuViGain: 180, sourceItemGroup: 'data', sourceTag: 'shop_core_source', itemClass: 'bao_khi', itemRarity: 'hiem', stability: 90, directStats: { tuVi: 7, dotPha: 1 } },
+    tinh_tam_dan: { name: 'Integrity Tĩnh Tâm Đan', effect: 'Thanh tâm, giảm nhiễu Source và xóa Tâm Ma nếu có.', clearTamMa: true, sourceItemGroup: 'commit', sourceTag: 'shop_core_source', itemClass: 'linh_khi', itemRarity: 'hiem', stability: 96, directStats: { tamMaRisk: -8, statusDuration: -3 } },
+    cong_hien_dan: { name: 'Công Đức Commit Đan', effect: '+80 cống hiến khả dụng và tổng cống hiến. Dùng để tích lũy đường thăng thân phận.', congHienGain: 80, sourceItemGroup: 'commit', sourceTag: 'shop_core_source', itemClass: 'bao_khi', itemRarity: 'hiem', stability: 93, directStats: { congHien: 8 } },
+    tay_tuy_dan: { name: 'Source Tẩy Tủy Đan', effect: '+60 điểm tẩy tủy linh căn. Làm sạch nhiễu legacy trong Đạo Cơ.', linhCanPurifyGain: 60, sourceItemGroup: 'patch', sourceTag: 'shop_core_source', itemClass: 'linh_khi', itemRarity: 'thuong', stability: 91, directStats: { dotPha: 1, tamMaRisk: -2 } },
+    linh_can_tinh_hoa: { name: 'Mã Căn Tinh Hoa', effect: '+180 điểm tẩy tủy linh căn. Tinh hoa dùng để nâng tương thích Source.', linhCanPurifyGain: 180, sourceItemGroup: 'patch', sourceTag: 'shop_core_source', itemClass: 'phap_bao', itemRarity: 'co_ban', stability: 88, directStats: { dotPha: 3, tamMaRisk: -3 } },
+    ngu_hanh_linh_dich: { name: 'Ngũ Hành Source Dịch', effect: '+320 điểm tẩy tủy linh căn. Dung dịch cân bằng năm dòng Source Khí.', linhCanPurifyGain: 320, sourceItemGroup: 'data', sourceTag: 'shop_core_source', itemClass: 'dao_khi', itemRarity: 'di_ban', stability: 84, directStats: { dotPha: 5, tamMaRisk: -4 } },
+    dao_nguyen_tuy: { name: 'Đạo Nguyên Source Tủy', effect: '+650 điểm tẩy tủy linh căn, dùng cho mốc cao và Source Phẩm.', linhCanPurifyGain: 650, sourceItemGroup: 'data', sourceTag: 'shop_core_source', itemClass: 'source_khi', itemRarity: 'thanh_ban', stability: 80, directStats: { dotPha: 8, tamMaRisk: -5 } },
+
+    tui_tho: { name: 'Cache Túi Thô', effect: 'Sức chứa 5 vật phẩm. Túi cache nhập môn.', sourceItemGroup: 'data', sourceTag: 'shop_core_source', itemClass: 'pham_khi', itemRarity: 'thuong', stability: 95 },
+    tui_linh_moc: { name: 'Local Cache Túi', effect: 'Sức chứa 10 vật phẩm. Túi trữ vật nền Source.', sourceItemGroup: 'data', sourceTag: 'shop_core_source', itemClass: 'linh_khi', itemRarity: 'thuong', stability: 94 },
+    tui_huyen_thiet: { name: 'Indexed Cache Túi', effect: 'Sức chứa 20 vật phẩm. Truy xuất vật phẩm nhanh hơn, bớt lạc đồ như người dùng lạc tab.', sourceItemGroup: 'data', sourceTag: 'shop_core_source', itemClass: 'bao_khi', itemRarity: 'hiem', stability: 92 },
+    tui_can_khon: { name: 'Distributed Cache Túi', effect: 'Sức chứa 40 vật phẩm. Túi phân tán ổn định.', sourceItemGroup: 'data', sourceTag: 'shop_core_source', itemClass: 'phap_bao', itemRarity: 'co_ban', stability: 89 },
+    tui_tien_thien: { name: 'Cloud Storage Đạo Túi', effect: 'Sức chứa 80 vật phẩm. Không gian túi cấp cao theo Cloud Source.', sourceItemGroup: 'data', sourceTag: 'shop_core_source', itemClass: 'dao_khi', itemRarity: 'di_ban', stability: 86 },
+    json_tui: { name: 'JSON Cache Túi', effect: 'Sức chứa 10 vật phẩm. Túi dữ liệu nhẹ cho tân tu.', sourceItemGroup: 'data', sourceTag: 'shop_core_source', itemClass: 'linh_khi', itemRarity: 'thuong', stability: 94 },
+    sqlite_tui: { name: 'SQLite Động Túi', effect: 'Sức chứa 15 vật phẩm. Túi một file, sống sót nhờ đơn giản.', sourceItemGroup: 'data', sourceTag: 'shop_core_source', itemClass: 'bao_khi', itemRarity: 'hiem', stability: 92 },
+    postgresql_tui: { name: 'PostgreSQL Địa Mạch Túi', effect: 'Sức chứa 25 vật phẩm. Túi địa mạch dữ liệu ổn định.', sourceItemGroup: 'data', sourceTag: 'shop_core_source', itemClass: 'phap_bao', itemRarity: 'co_ban', stability: 90 },
+    redis_tui: { name: 'Redis Tốc Hành Túi', effect: 'Sức chứa 35 vật phẩm. Cache nhanh, đừng hỏi vì sao nóng.', sourceItemGroup: 'runtime', sourceTag: 'shop_core_source', itemClass: 'phap_bao', itemRarity: 'di_ban', stability: 84 },
+    supabase_khong_gian: { name: 'Supabase Không Gian Túi', effect: 'Sức chứa 70 vật phẩm. Không gian dữ liệu mở rộng.', sourceItemGroup: 'data', sourceTag: 'shop_core_source', itemClass: 'dao_khi', itemRarity: 'thanh_ban', stability: 83 },
+    cloud_storage_tui: { name: 'Cloud Storage Source Túi', effect: 'Sức chứa 100 vật phẩm. Túi lưu trữ cloud cấp cao.', sourceItemGroup: 'data', sourceTag: 'shop_core_source', itemClass: 'tien_khi', itemRarity: 'doc_ban', stability: 80 },
+    distributed_storage_tui: { name: 'Distributed Storage Đạo Túi', effect: 'Sức chứa 150 vật phẩm. Túi phân tán gần Source.', sourceItemGroup: 'data', sourceTag: 'shop_core_source', itemClass: 'source_khi', itemRarity: 'doc_ban', stability: 76 },
+
+    tieu_refactor_linh_thach: { name: 'Tiểu Source Refactor Thạch', effect: 'Đá nâng phẩm nền: Phàm → Hạ hoặc Hạ → Trung. Dùng để refactor phẩm chất vật phẩm.', sourceItemGroup: 'patch', sourceTag: 'shop_core_source', itemClass: 'linh_khi', itemRarity: 'thuong', stability: 95, sourceFamily: 'syntax', sourceFamilyName: 'Syntax Dị Văn' },
+    trung_refactor_linh_thach: { name: 'Trung Source Refactor Thạch', effect: 'Đá nâng phẩm: Trung → Thượng. Cần cho vật phẩm đã vượt nền nhập môn.', sourceItemGroup: 'patch', sourceTag: 'shop_core_source', itemClass: 'bao_khi', itemRarity: 'hiem', stability: 92, sourceFamily: 'runtime', sourceFamilyName: 'Runtime Hung Linh' },
+    dai_refactor_linh_thach: { name: 'Đại Source Refactor Thạch', effect: 'Đá nâng phẩm: Thượng → Cực. Bắt đầu có rủi ro phản phệ nếu ép quá tay.', sourceItemGroup: 'patch', sourceTag: 'shop_core_source', itemClass: 'phap_bao', itemRarity: 'co_ban', stability: 88, sourceFamily: 'legacy', sourceFamilyName: 'Legacy Thạch Khôi' },
+    thien_refactor_linh_thach: { name: 'Thiên Source Refactor Thạch', effect: 'Đá nâng phẩm: Cực → Thiên. Dùng cho đạo cụ cấp cao.', sourceItemGroup: 'patch', sourceTag: 'shop_core_source', itemClass: 'dao_khi', itemRarity: 'di_ban', stability: 82, sourceFamily: 'merge_conflict', sourceFamilyName: 'Merge Conflict Oán Linh' },
+    dao_refactor_linh_thach: { name: 'Đạo Source Refactor Thạch', effect: 'Đá nâng phẩm: Thiên → Đạo. Vật phẩm cực hiếm, không nên bấm như bấm captcha.', sourceItemGroup: 'patch', sourceTag: 'shop_core_source', itemClass: 'tien_khi', itemRarity: 'thanh_ban', stability: 78, sourceFamily: 'dependency', sourceFamilyName: 'Dependency Cửu Đầu Xà' },
+    source_refactor_linh_thach: { name: 'Source Refactor Nguyên Thạch', effect: 'Đá nâng phẩm: Đạo → Source. Fail dễ sinh nguyền, nợ kỹ thuật và vài thứ đời không cần thêm.', sourceItemGroup: 'patch', sourceTag: 'shop_core_source', itemClass: 'source_khi', itemRarity: 'doc_ban', stability: 72, sourceFamily: 'zero_day', sourceFamilyName: 'Zero-Day Ma Ảnh' },
+    rollback_phu: { name: 'Rollback Hộ Phù', effect: 'Giảm rủi ro bị nguyền khi nâng phẩm thất bại. Vá được hậu quả nhỏ, không vá được lòng tham.', sourceItemGroup: 'patch', sourceTag: 'shop_core_source', itemClass: 'phap_bao', itemRarity: 'co_ban', stability: 86, directStats: { tamMaRisk: -5, tuViLoss: -4 } },
+    safe_deploy_phu: { name: 'Safe Deploy Hộ Phù', effect: '+10% tỉ lệ nâng phẩm thành công ở lần nâng kế tiếp. Đừng biến nó thành lý do để gamble.', sourceItemGroup: 'patch', sourceTag: 'shop_core_source', itemClass: 'phap_bao', itemRarity: 'di_ban', stability: 84, directStats: { dotPha: 3, tamMaRisk: -3 } },
+  };
+
+  function applySourceShopCatalogUnification() {
+    const visibleCoreKeys = new Set(Object.keys(SOURCE_SHOP_CORE_OVERRIDES));
+    for (const item of SHOP_ITEMS) {
+      if (!item?.key) continue;
+      const override = SOURCE_SHOP_CORE_OVERRIDES[item.key];
+      if (override) {
+        Object.assign(item, override, { shopHidden: false, shopUnified: true });
+        if (!item.sourceItemGroupName && item.sourceItemGroup) item.sourceItemGroupName = getSourceItemGroup(item.sourceItemGroup)?.name || item.sourceItemGroup;
+        if (!item.itemClassName && item.itemClass) item.itemClassName = getSourceItemClass(item.itemClass).name;
+        if (!item.itemRarityName && item.itemRarity) item.itemRarityName = getSourceItemRarity(item.itemRarity).name;
+        continue;
+      }
+
+      if (String(item.key).startsWith('vp_')) {
+        item.shopHidden = false;
+        item.shopUnified = true;
+        continue;
+      }
+
+      // Giữ định nghĩa cũ để inventory/cơ chế cũ không vỡ, nhưng rút khỏi bảo khố hiện tại.
+      item.shopHidden = true;
+      item.legacyShopItem = true;
+    }
+
+    for (const key of visibleCoreKeys) {
+      const item = SHOP_ITEMS.find((entry) => entry.key === key);
+      if (item) item.shopHidden = false;
+    }
+  }
+
+  applySourceShopCatalogUnification();
+
+  const CRAFT_CONTENT_TARGET_COUNT = 1440;
+  const CRAFT_COOLDOWN_MS = 3 * 60 * 1000;
+  const CRAFT_RECIPE_PAGE_SIZE = 3;
+  const CRAFT_SPEC_DEFINITIONS = [
+    { key: 'on_dinh', name: 'Ổn Định Đạo Lô', successBonus: 0.08, perfectBonus: -0.01, mutationBonus: -0.01, costMult: 1, note: 'Tăng tỉ lệ thành công, hợp chế đồ cao cấp.' },
+    { key: 'than_toc', name: 'Thần Tốc Rèn Pháp', successBonus: -0.04, perfectBonus: 0, mutationBonus: 0, costMult: 0.9, cooldownMult: 0.55, note: 'Chế nhanh hơn, rẻ hơn chút nhưng dễ fail hơn.' },
+    { key: 'hoan_my', name: 'Hoàn Mỹ Khắc Ấn', successBonus: -0.08, perfectBonus: 0.09, mutationBonus: 0.01, costMult: 1.15, note: 'Dễ ra phẩm cao/hoàn mỹ, nhưng tốn và rủi ro hơn.' },
+    { key: 'tiet_kiem', name: 'Tiết Kiệm Linh Tài', successBonus: -0.03, perfectBonus: -0.01, mutationBonus: 0, costMult: 0.75, note: 'Giảm vật liệu tiêu hao, hợp farm nghèo nhưng kiên trì.' },
+    { key: 'di_bien', name: 'Dị Biến Cấm Lô', successBonus: -0.12, perfectBonus: 0.03, mutationBonus: 0.12, costMult: 1.05, note: 'Fail có thể sinh dị vật/nguyền khí mạnh. Rất hợp người thích tự làm khổ mình.' },
+  ];
+
+  function getCraftSpecByKey(key) {
+    return CRAFT_SPEC_DEFINITIONS.find((entry) => entry.key === key) ?? CRAFT_SPEC_DEFINITIONS[0];
+  }
+
+  function getUserCraftSpec(userData) {
+    const daoNghe = normalizeDaoNgheData(userData);
+    daoNghe.craftingSpec = getCraftSpecByKey(daoNghe.craftingSpec)?.key ?? 'on_dinh';
+    return getCraftSpecByKey(daoNghe.craftingSpec);
+  }
+
+  function createCraftMaterialCatalog(count = CRAFT_CONTENT_TARGET_COUNT) {
+    const materialForms = ['Mảnh', 'Hạch', 'Tinh', 'Ngọc', 'Tủy', 'Bụi', 'Ấn', 'Token', 'Vảy', 'Lõi'];
+    const materialGrades = ['Phàm', 'Hạ', 'Trung', 'Thượng', 'Cực', 'Thiên', 'Đạo', 'Source'];
+    const materialRoles = ['nền', 'hiếm', 'boss', 'chính đạo', 'tà đạo', 'nâng phẩm', 'set', 'dị biến', 'ổn định', 'xác minh'];
+    const catalog = [];
+    for (const family of SOURCE_DEFECT_FAMILIES) {
+      for (let i = 0; i < 120; i += 1) {
+        const serial = catalog.length + 1;
+        const gradeIndex = Math.min(materialGrades.length - 1, Math.floor(i / 15));
+        const form = materialForms[(i * 3 + gradeIndex) % materialForms.length];
+        const role = materialRoles[(i + gradeIndex) % materialRoles.length];
+        const name = `${materialGrades[gradeIndex]} ${family.short} ${family.materialCore.replace(/^(Phàm|Hạ|Trung|Thượng|Cực|Thiên|Đạo|Source)\s+/i, '')} ${form} ${String(i + 1).padStart(3, '0')}`;
+        catalog.push({
+          key: `mat_${String(serial).padStart(4, '0')}_${slugifyKey(name)}`,
+          name,
+          professionKey: family.professionKey,
+          family: family.key,
+          sourceFamily: family.key,
+          sourceFamilyName: family.name,
+          tierIndex: Math.min(6, gradeIndex),
+          materialRole: role,
+          rarity: gradeIndex >= 7 ? 'source' : gradeIndex >= 6 ? 'dao' : gradeIndex >= 5 ? 'thien' : gradeIndex >= 4 ? 'cuc' : gradeIndex >= 3 ? 'thuong' : gradeIndex >= 2 ? 'trung' : gradeIndex >= 1 ? 'ha' : 'pham',
+          source: i % 5 === 0 ? `${family.name} boss` : i % 5 === 1 ? 'nhiệm vụ Incident' : i % 5 === 2 ? 'bí cảnh Source' : i % 5 === 3 ? 'phân giải Đạo Cụ Source' : 'shop phôi/nguyên liệu nền',
+          note: `Nguyên liệu ${role} dùng cho vật phẩm hệ ${family.name}, mục tiêu ${family.targetStat}.`,
+        });
+      }
+    }
+    return catalog.slice(0, count);
+  }
+
+  function pickCraftMaterialForRecipe(familyKey, professionKey, seed = 0, minTier = 0) {
+    const familyPool = CRAFT_MATERIAL_CATALOG.filter((entry) => entry.family === familyKey && entry.tierIndex >= Math.max(0, minTier - 1));
+    const professionPool = CRAFT_MATERIAL_CATALOG.filter((entry) => entry.professionKey === professionKey && entry.tierIndex >= Math.max(0, minTier - 1));
+    const pool = familyPool.length ? familyPool : professionPool.length ? professionPool : CRAFT_MATERIAL_CATALOG;
+    return pool[Math.abs(seed) % pool.length] || CRAFT_MATERIAL_CATALOG[0];
+  }
+
+  function getCraftOutputPool() {
+    const generated = SHOP_ITEMS.filter((item) => item?.key?.startsWith('vp_') && !item.shopHidden);
+    const signature = SHOP_ITEMS.filter((item) => item?.professionKey && !item.key.startsWith('vp_') && !item.shopHidden && item.shopUnified);
+    const boss = SHOP_ITEMS.filter((item) => item?.sourceTag === 'boss_drop' && !item.shopHidden);
+    const pool = [...generated, ...signature, ...boss].filter((item) => item && item.key && !['bag'].includes(item.type));
+    const seen = new Set();
+    return pool.filter((item) => {
+      if (seen.has(item.key)) return false;
+      seen.add(item.key);
+      return true;
+    });
+  }
+
+  function createCraftRecipeCatalog(count = CRAFT_CONTENT_TARGET_COUNT) {
+    const pool = getCraftOutputPool();
+    const recipes = [];
+    const qualityByTier = ['pham_pham', 'ha_pham', 'trung_pham', 'thuong_pham', 'cuc_pham', 'thien_pham', 'dao_pham', 'source_pham'];
+    for (let i = 0; i < count; i += 1) {
+      const item = pool[i % pool.length];
+      const profession = getProfessionForItem(item) || DAO_NGHE_DEFINITIONS[i % DAO_NGHE_DEFINITIONS.length];
+      const sourceFamily = getSourceDefectFamily(item.family) || SOURCE_DEFECT_FAMILIES[i % SOURCE_DEFECT_FAMILIES.length];
+      const itemClass = getSourceItemClass(item.itemClass);
+      const itemRarity = getSourceItemRarity(item.itemRarity);
+      const tierIndex = Math.min(7, Math.max(0,
+        (SOURCE_ITEM_CLASS_DEFINITIONS.findIndex((entry) => entry.key === itemClass.key) >= 0 ? SOURCE_ITEM_CLASS_DEFINITIONS.findIndex((entry) => entry.key === itemClass.key) : getCatalogTierIndexForItem(item))
+        + (item.route === 'ta_dao' ? 1 : 0)
+        + (i % 17 === 0 ? 1 : 0),
+      ));
+      const difficulty = 20 + tierIndex * 16 + (i % 11);
+      const baseSuccess = Math.max(0.06, 0.88 - tierIndex * 0.095 - (item.route === 'ta_dao' ? 0.08 : 0) - (i % 5) * 0.008);
+      const matA = pickCraftMaterialForRecipe(sourceFamily.key, profession.key, i * 7, tierIndex);
+      const matB = pickCraftMaterialForRecipe(sourceFamily.key, profession.key, i * 13 + 17, Math.max(0, tierIndex - 1));
+      const matC = pickCraftMaterialForRecipe(sourceFamily.key, profession.key, i * 19 + 31, Math.max(0, tierIndex - 2));
+      const requiresBlueprint = tierIndex >= 2 || item.route === 'ta_dao' || i % 11 === 0;
+      const baseAmount = 1 + Math.max(0, Math.floor(tierIndex / 2)) + (i % 3);
+      recipes.push({
+        key: `ct_${String(i + 1).padStart(4, '0')}_${slugifyKey(item.name).slice(0, 42)}`,
+        name: `Công Thức ${item.name}`,
+        outputKey: item.key,
+        outputName: item.name,
+        outputType: item.type,
+        outputQuality: qualityByTier[Math.min(qualityByTier.length - 1, Math.max(0, tierIndex - 1))],
+        professionKey: profession.key,
+        family: sourceFamily.key,
+        sourceFamily: sourceFamily.key,
+        sourceFamilyName: sourceFamily.name,
+        itemClass: itemClass.key,
+        itemClassName: itemClass.name,
+        itemRarity: itemRarity.key,
+        itemRarityName: itemRarity.name,
+        itemRole: item.itemRole || 'combat',
+        route: item.route || 'neutral',
+        tierIndex: Math.min(6, tierIndex),
+        difficulty,
+        baseSuccess,
+        perfectBase: 0.02 + Math.min(6, tierIndex) * 0.007 + (itemRarity.multiplier > 1.4 ? 0.01 : 0),
+        mutationBase: 0.02 + Math.min(6, tierIndex) * 0.012 + (item.route === 'ta_dao' ? 0.05 : 0),
+        requiresBlueprint,
+        minRankIndex: Math.min(DAO_NGHE_RANKS.length - 1, Math.max(0, Math.floor(tierIndex / 1.25) - 1)),
+        congHienCost: Math.round((45 + tierIndex * 95 + (i % 8) * 14) * (item.route === 'ta_dao' ? 1.25 : 1)),
+        expGain: 30 + tierIndex * 20 + (i % 7) * 4,
+        costs: [
+          { key: profession.key, amount: baseAmount + 1, name: profession.materialName, professionMaterial: true },
+          { key: matA.key, amount: baseAmount + 1, name: matA.name },
+          { key: matB.key, amount: Math.max(1, baseAmount), name: matB.name },
+          ...(tierIndex >= 3 ? [{ key: matC.key, amount: 1 + Math.floor(tierIndex / 2), name: matC.name }] : []),
+        ],
+        note: `Chế ${getItemTypeText(item.type)} ${itemClass.name} · ${itemRarity.name}, dùng nguyên liệu ${sourceFamily.name}.`,
+      });
+    }
+    return recipes.slice(0, count);
+  }
+
+  function createCraftBlueprintCatalog(count = CRAFT_CONTENT_TARGET_COUNT) {
+    return CRAFT_RECIPE_CATALOG.slice(0, count).map((recipe, index) => ({
+      key: `bp_${recipe.key}`,
+      recipeKey: recipe.key,
+      name: `Bản Vẽ ${recipe.outputName}`,
+      professionKey: recipe.professionKey,
+      tierIndex: recipe.tierIndex,
+      source: index % 4 === 0 ? 'boss/bí cảnh' : index % 4 === 1 ? 'nhiệm vụ nghề' : index % 4 === 2 ? 'shop nghề' : 'phân giải dị vật',
+    }));
+  }
+
+  const CRAFT_MATERIAL_CATALOG = createCraftMaterialCatalog(CRAFT_CONTENT_TARGET_COUNT);
+  const CRAFT_RECIPE_CATALOG = createCraftRecipeCatalog(CRAFT_CONTENT_TARGET_COUNT);
+  const CRAFT_BLUEPRINT_CATALOG = createCraftBlueprintCatalog(CRAFT_CONTENT_TARGET_COUNT);
+
+  function getCraftMaterialByKey(key) {
+    return CRAFT_MATERIAL_CATALOG.find((entry) => entry.key === key) ?? null;
+  }
+
+  function getCraftBlueprintByRecipeKey(recipeKey) {
+    return CRAFT_BLUEPRINT_CATALOG.find((entry) => entry.recipeKey === recipeKey) ?? null;
+  }
+
+  function getCraftRecipeByKey(key) {
+    const value = String(key || '').trim().toLowerCase();
+    if (!value) return null;
+    return CRAFT_RECIPE_CATALOG.find((entry) => entry.key.toLowerCase() === value)
+      ?? CRAFT_RECIPE_CATALOG.find((entry) => entry.outputKey.toLowerCase() === value)
+      ?? CRAFT_RECIPE_CATALOG.find((entry) => entry.outputName.toLowerCase() === value)
+      ?? CRAFT_RECIPE_CATALOG.find((entry) => entry.key.toLowerCase().includes(value) || entry.outputName.toLowerCase().includes(value));
+  }
+
+  function getCraftRecipesForProfession(professionKey, options = {}) {
+    const keyword = String(options.keyword || '').trim().toLowerCase();
+    return CRAFT_RECIPE_CATALOG
+      .filter((recipe) => !professionKey || recipe.professionKey === professionKey)
+      .filter((recipe) => !keyword || recipe.key.toLowerCase().includes(keyword) || recipe.outputName.toLowerCase().includes(keyword) || recipe.family.toLowerCase().includes(keyword))
+      .sort((a, b) => a.tierIndex - b.tierIndex || a.difficulty - b.difficulty || a.key.localeCompare(b.key));
+  }
+
+  function getCraftMaterialAmount(userData, materialKey) {
+    const daoNghe = normalizeDaoNgheData(userData);
+    return Math.max(0, Number(daoNghe.materials[materialKey]) || 0);
+  }
+
+  function addCraftMaterial(userData, materialKey, amount) {
+    return addDaoNgheMaterial(userData, materialKey, amount);
+  }
+
+  function spendCraftMaterial(userData, materialKey, amount) {
+    return spendDaoNgheMaterial(userData, materialKey, amount);
+  }
+
+  function hasKnownBlueprint(userData, recipe) {
+    const daoNghe = normalizeDaoNgheData(userData);
+    return !recipe.requiresBlueprint || daoNghe.knownBlueprints.includes(recipe.key);
+  }
+
+  function sanitizeCraftDisplayText(value, maxLength = 96) {
+    return String(value || '')
+      .replace(/[\r\n\t]+/g, ' ')
+      .replace(/[`*_~|<>]/g, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim()
+      .slice(0, maxLength);
+  }
+
+  function isCraftRecipeUnlockedForUser(userData, recipe, options = {}) {
+    if (!userData || !recipe) return false;
+    const profession = getUserDaoNgheDefinition(userData);
+    if (!profession || recipe.professionKey !== profession.key) return false;
+    if (!hasKnownBlueprint(userData, recipe)) return false;
+    if (options.requireRank) {
+      const daoNghe = normalizeDaoNgheData(userData);
+      if (getDaoNgheRankIndex(daoNghe.exp) < recipe.minRankIndex) return false;
+    }
+    return true;
+  }
+
+  function getUnlockedCraftRecipesForUser(userData, options = {}) {
+    const profession = getUserDaoNgheDefinition(userData);
+    if (!profession) return [];
+    const keyword = String(options.keyword || '').trim().toLowerCase();
+    return getCraftRecipesForProfession(profession.key, { keyword })
+      .filter((recipe) => isCraftRecipeUnlockedForUser(userData, recipe, { requireRank: false }));
+  }
+
+  function getUnlockedCraftRecipeForUser(userData, input) {
+    const value = String(input || '').trim().toLowerCase();
+    if (!value) return null;
+    const recipes = getUnlockedCraftRecipesForUser(userData);
+    return recipes.find((entry) => entry.key.toLowerCase() === value)
+      ?? recipes.find((entry) => entry.outputKey.toLowerCase() === value)
+      ?? recipes.find((entry) => entry.outputName.toLowerCase() === value)
+      ?? recipes.find((entry) => entry.key.toLowerCase().includes(value) || entry.outputName.toLowerCase().includes(value));
+  }
+
+  function getCraftRecipeUnlockStatusText(userData, recipe) {
+    if (!recipe) return 'Không rõ';
+    const profession = getUserDaoNgheDefinition(userData);
+    if (!profession) return 'Chưa chọn nghề';
+    if (recipe.professionKey !== profession.key) return 'Khác nghề';
+    if (!hasKnownBlueprint(userData, recipe)) return 'Chưa mở khóa bản vẽ';
+    const daoNghe = normalizeDaoNgheData(userData);
+    if (getDaoNgheRankIndex(daoNghe.exp) < recipe.minRankIndex) return `Đã mở khóa, cần ${getRecipeRequiredRankText(recipe)}`;
+    return 'Có thể chế';
+  }
+
+  function learnCraftRecipe(userData, recipe) {
+    const daoNghe = normalizeDaoNgheData(userData);
+    if (!daoNghe.knownBlueprints.includes(recipe.key)) daoNghe.knownBlueprints.push(recipe.key);
+    return daoNghe.knownBlueprints.length;
+  }
+
+  function getCraftCostLines(recipe, userData = null) {
+    return recipe.costs.map((cost) => {
+      const have = userData ? getCraftMaterialAmount(userData, cost.key) : 0;
+      const enough = !userData || have >= cost.amount;
+      return `${enough ? '✅' : '❌'} ${cost.name}: **${have}/${cost.amount}**`;
+    });
+  }
+
+  function getCraftToolBonus(userData, recipe) {
+    const toolKey = userData?.equippedTool;
+    const tool = getShopItemByKey(toolKey);
+    if (!tool) return { success: 0, perfect: 0, text: 'Chưa trang bị pháp cụ nghề.' };
+    const entry = getBestInventoryEntryByKey(userData, tool.key);
+    const qualityIndex = getQualityIndex(getInventoryItemQuality(entry).key);
+    let success = 0.015 + qualityIndex * 0.006;
+    let perfect = 0.004 + qualityIndex * 0.002;
+    if (tool.professionKey === recipe.professionKey) success += 0.055;
+    if (tool.family && tool.family === recipe.family) success += 0.025;
+    if (tool.itemRole === 'nghe') perfect += 0.015;
+    return { success, perfect, text: `${tool.name} +${Math.round(success * 100)}% thành công, +${Math.round(perfect * 100)}% hoàn mỹ.` };
+  }
+
+  function calculateCraftChance(userData, recipe) {
+    const daoNghe = normalizeDaoNgheData(userData);
+    const rankIndex = getDaoNgheRankIndex(daoNghe.exp);
+    const spec = getUserCraftSpec(userData);
+    const toolBonus = getCraftToolBonus(userData, recipe);
+    const masteryBonus = rankIndex * 0.024 + Math.min(0.14, (daoNghe.craftedCount || 0) * 0.0012);
+    const overRankBonus = Math.max(0, rankIndex - recipe.minRankIndex) * 0.014;
+    const underRankPenalty = Math.max(0, recipe.minRankIndex - rankIndex) * 0.08;
+    const success = Math.max(0.05, Math.min(recipe.tierIndex >= 5 ? 0.78 : 0.95, recipe.baseSuccess + masteryBonus + overRankBonus + toolBonus.success + spec.successBonus - underRankPenalty));
+    const perfect = Math.max(0.01, Math.min(0.32, recipe.perfectBase + rankIndex * 0.006 + toolBonus.perfect + spec.perfectBonus));
+    const mutation = Math.max(0.01, Math.min(0.32, recipe.mutationBase + spec.mutationBonus));
+    return { success, perfect, mutation, rankIndex, spec, toolBonus, underRankPenalty };
+  }
+
+  function getAdjustedCraftCosts(recipe, userData) {
+    const spec = getUserCraftSpec(userData);
+    const mult = Math.max(0.5, Number(spec.costMult) || 1);
+    return {
+      congHienCost: Math.max(0, Math.round(recipe.congHienCost * mult)),
+      materialCosts: recipe.costs.map((cost) => ({ ...cost, amount: Math.max(1, Math.ceil(cost.amount * mult)) })),
+    };
+  }
+
+  function getCraftCooldownMs(userData) {
+    const spec = getUserCraftSpec(userData);
+    return Math.max(30 * 1000, Math.round(CRAFT_COOLDOWN_MS * (Number(spec.cooldownMult) || 1)));
+  }
+
+  function rollCraftQuality(recipe, chance, perfect) {
+    const baseIndex = getQualityIndex(recipe.outputQuality);
+    let bonus = 0;
+    if (perfect) bonus += 1;
+    if (chance.rankIndex >= recipe.tierIndex + 3 && Math.random() < 0.12) bonus += 1;
+    return ITEM_QUALITIES[Math.min(ITEM_QUALITIES.length - 1, baseIndex + bonus)]?.key ?? recipe.outputQuality;
+  }
+
+  function getCraftOutcomeName(outcome) {
+    return {
+      perfect: 'Thiên Công Hoàn Mỹ',
+      success: 'Thành Công',
+      light_fail: 'Lỗi Nhẹ',
+      hard_fail: 'Lỗi Nặng',
+      mutation: 'Dị Biến Cấm Lô',
+    }[outcome] ?? 'Không rõ';
+  }
+
+  function getRecipeRequiredRankText(recipe) {
+    return DAO_NGHE_RANKS[recipe.minRankIndex]?.name ?? DAO_NGHE_RANKS[0].name;
+  }
+
+  function grantRandomCraftMaterials(userData, professionKey, amount = 3, source = 'work') {
+    const profession = getDaoNgheDefinition(professionKey);
+    const pool = CRAFT_MATERIAL_CATALOG.filter((entry) => !profession || entry.professionKey === profession.key || profession.families.includes(entry.family));
+    const granted = [];
+    for (let i = 0; i < Math.max(1, amount); i += 1) {
+      const material = pool[(Math.floor(Math.random() * pool.length) + i * 7) % pool.length] || CRAFT_MATERIAL_CATALOG[Math.floor(Math.random() * CRAFT_MATERIAL_CATALOG.length)];
+      const qty = 1 + Math.floor(Math.random() * 2);
+      addCraftMaterial(userData, material.key, qty);
+      granted.push(`${material.name} x${qty}`);
+    }
+    if (source === 'work' && Math.random() < 0.22) {
+      const recipes = getCraftRecipesForProfession(professionKey).filter((recipe) => recipe.requiresBlueprint);
+      const recipe = recipes[Math.floor(Math.random() * recipes.length)];
+      if (recipe) {
+        learnCraftRecipe(userData, recipe);
+        granted.push(`Ngộ bản vẽ: ${recipe.outputName}`);
+      }
+    }
+    return granted;
+  }
+
+  function buildCongThucEmbed(member, userData, options = {}) {
+    const profession = getUserDaoNgheDefinition(userData);
+    const page = Math.max(0, Number(options.page) || 0);
+    const daoNghe = normalizeDaoNgheData(userData);
+    if (!profession) {
+      return new EmbedBuilder()
+        .setColor(GOLD)
+        .setTitle('Công Thức Chế Tạo')
+        .setDescription('Chưa chọn Đạo Nghiệp. Dùng `/nghenghiep hanhdong:chon nghe:<nghề>` trước. Lò nghề cần biết mình là lò gì, không thể vừa rèn kiếm vừa nấu chè được.');
+    }
+    const recipes = getUnlockedCraftRecipesForUser(userData, { keyword: options.keyword });
+    const pageCount = Math.max(1, Math.ceil(recipes.length / CRAFT_RECIPE_PAGE_SIZE));
+    const safePage = Math.min(pageCount - 1, page);
+    const visible = recipes.slice(safePage * CRAFT_RECIPE_PAGE_SIZE, safePage * CRAFT_RECIPE_PAGE_SIZE + CRAFT_RECIPE_PAGE_SIZE);
+    const rank = getDaoNgheRank(daoNghe.exp);
+    const embed = new EmbedBuilder()
+      .setColor(profession.color)
+      .setTitle(`Công Thức Đã Mở Khóa · ${profession.name}`)
+      .setDescription([
+        `${member} chỉ thấy công thức thuộc **nghề hiện tại** và **đã mở khóa**. Không còn xổ bừa 1440 công thức như phát tờ rơi ở chợ trời nữa.`,
+        `Rank nghề: **${rank.name}** · Chuyên tinh: **${getUserCraftSpec(userData).name}**`,
+        `Đã mở khóa trong nghề: **${recipes.length}** công thức · Mỗi trang **${CRAFT_RECIPE_PAGE_SIZE}** công thức`,
+        options.keyword ? `Lọc: \`${sanitizeCraftDisplayText(options.keyword, 48)}\`` : 'Dùng `/chetao congthuc:<mã>` để chế. Công thức thiếu nguyên liệu sẽ báo rõ bên dưới.',
+      ].join('\n'));
+    if (visible.length === 0) {
+      embed.addFields({
+        name: 'Chưa có công thức phù hợp',
+        value: options.keyword
+          ? 'Không có công thức đã mở khóa nào khớp từ khóa này. Thử từ khóa ngắn hơn.'
+          : 'Làm nghề, đi nhiệm vụ/bí cảnh hoặc học bản vẽ để mở thêm công thức.',
+        inline: false,
+      });
+      return embed.setFooter({ text: 'Trang 1/1' });
+    }
+    visible.forEach((recipe) => {
+      const item = getShopItemByKey(recipe.outputKey);
+      const chance = calculateCraftChance(userData, recipe);
+      const costs = getAdjustedCraftCosts(recipe, userData);
+      const statusText = getCraftRecipeUnlockStatusText(userData, recipe);
+      const materialLines = costs.materialCosts.map((cost) => {
+        const have = getCraftMaterialAmount(userData, cost.key);
+        const enough = have >= cost.amount;
+        return `${enough ? '✅' : '❌'} ${sanitizeCraftDisplayText(cost.name, 54)}: **${have}/${cost.amount}**`;
+      });
+      embed.addFields({
+        name: `${sanitizeCraftDisplayText(recipe.outputName, 72)}`,
+        value: [
+          `Mã: \`${recipe.key}\` · Loại: **${getItemTypeText(item?.type)}** · Vai trò: **${sanitizeCraftDisplayText(recipe.itemRole, 24)}**`,
+          `Trạng thái: **${statusText}** · Rank cần: **${getRecipeRequiredRankText(recipe)}**`,
+          `Tỉ lệ: **${Math.round(chance.success * 100)}%** thành công · **${Math.round(chance.perfect * 100)}%** hoàn mỹ · **${Math.round(chance.mutation * 100)}%** dị biến`,
+          `Cống hiến: **${getSpendableCongHien(userData)}/${costs.congHienCost}**`,
+          `Nguyên liệu:\n${materialLines.join('\n')}`,
+        ].join('\n'),
+        inline: false,
+      });
+    });
+    return embed.setFooter({ text: `Trang ${safePage + 1}/${pageCount}` });
+  }
+
+  function buildNguyenLieuEmbed(member, userData) {
+    const daoNghe = normalizeDaoNgheData(userData);
+    const profession = getUserDaoNgheDefinition(userData);
+    const entries = Object.entries(daoNghe.materials)
+      .filter(([, value]) => Number(value) > 0)
+      .sort((a, b) => Number(b[1]) - Number(a[1]))
+      .slice(0, 30);
+    const lines = entries.map(([key, value]) => {
+      const material = getCraftMaterialByKey(key);
+      const def = getDaoNgheDefinition(key);
+      return `${material?.name || def?.materialName || key}: **${value}**`;
+    });
+    return new EmbedBuilder()
+      .setColor(profession?.color ?? GOLD)
+      .setTitle('Kho Nguyên Liệu Chế Tạo')
+      .setDescription(lines.join('\n') || 'Chưa có nguyên liệu. Làm nghề, đi nhiệm vụ/bí cảnh hoặc phân giải vật phẩm để kiếm.')
+      .addFields(
+        { name: 'Quy mô hệ thống', value: `Nguyên liệu: **${CRAFT_MATERIAL_CATALOG.length}** · Công thức: **${CRAFT_RECIPE_CATALOG.length}** · Bản vẽ: **${CRAFT_BLUEPRINT_CATALOG.length}**`, inline: false },
+        { name: 'Thống kê nghề', value: `Chế thành công: **${daoNghe.craftSuccessCount}** · Thất bại: **${daoNghe.craftFailCount}** · Phân giải: **${daoNghe.decomposeCount}**`, inline: false },
+      );
+  }
+
+  async function handleCongThuc(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Công thức chỉ mở trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => interaction.member);
+    const keyword = interaction.options.getString('tukhoa', false);
+    const page = interaction.options.getInteger('trang', false) || 1;
+    await interaction.reply({ embeds: [buildCongThucEmbed(member, userData, { keyword, page: page - 1 })], flags: MessageFlags.Ephemeral });
+  }
+
+  async function handleNguyenLieu(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Kho nguyên liệu chỉ mở trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => interaction.member);
+    await interaction.reply({ embeds: [buildNguyenLieuEmbed(member, userData)], flags: MessageFlags.Ephemeral });
+  }
+
+  async function handleChuyenTinh(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Chuyên tinh nghề chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    const profession = getUserDaoNgheDefinition(userData);
+    if (!profession) {
+      await interaction.reply({ content: 'Chưa chọn Đạo Nghiệp. Dùng `/nghenghiep hanhdong:chon` trước.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const specKey = interaction.options.getString('huong', true);
+    const spec = getCraftSpecByKey(specKey);
+    userData.daoNghe.craftingSpec = spec.key;
+    saveUsers(users);
+    await interaction.reply({ embeds: [new EmbedBuilder().setColor(profession.color).setTitle('Đổi Chuyên Tinh Chế Tạo').setDescription([`${interaction.user} đổi sang **${spec.name}**.`, spec.note, 'Chuyên tinh áp dụng cho `/chetao`.'].join('\n'))], flags: MessageFlags.Ephemeral });
+  }
+
+  async function handleHocCongThuc(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Học công thức chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const recipeKey = interaction.options.getString('congthuc', true);
+    const recipe = getCraftRecipeByKey(recipeKey);
+    if (!recipe) {
+      await interaction.reply({ content: 'Không tìm thấy công thức đó. Công thức học phải thuộc nghề hiện tại hoặc bản vẽ đang có mã rõ ràng.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    const profession = getUserDaoNgheDefinition(userData);
+    if (!profession || profession.key !== recipe.professionKey) {
+      await interaction.reply({ content: `Công thức này thuộc **${getDaoNgheDefinition(recipe.professionKey)?.name || recipe.professionKey}**. Nghề khác không học sâu được, tông môn chưa cấp bằng đa nghề, thật độc đoán nhưng cân bằng.`, flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const daoNghe = normalizeDaoNgheData(userData);
+    if (daoNghe.knownBlueprints.includes(recipe.key)) {
+      await interaction.reply({ content: 'Đạo hữu đã biết công thức này rồi.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const rankIndex = getDaoNgheRankIndex(daoNghe.exp);
+    if (rankIndex < recipe.minRankIndex) {
+      await interaction.reply({ content: `Cần nghề đạt **${getRecipeRequiredRankText(recipe)}** mới học được.`, flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const learnCost = 80 + recipe.tierIndex * 120;
+    if (getSpendableCongHien(userData) < learnCost) {
+      await interaction.reply({ content: `Học bản vẽ cần **${learnCost} cống hiến**. Tri thức không miễn phí, thật phản cảm.`, flags: MessageFlags.Ephemeral });
+      return;
+    }
+    userData.congHienBalance -= learnCost;
+    learnCraftRecipe(userData, recipe);
+    addDaoNgheExp(userData, 20 + recipe.tierIndex * 6);
+    saveUsers(users);
+    const blueprint = getCraftBlueprintByRecipeKey(recipe.key);
+    await interaction.reply({ embeds: [new EmbedBuilder().setColor(profession.color).setTitle('Ngộ Công Thức Thành Công').setDescription([`Đã học **${blueprint?.name || recipe.name}**.`, `Mã craft: \`${recipe.key}\``, `Tốn: **${learnCost} cống hiến**.`].join('\n'))], flags: MessageFlags.Ephemeral });
+  }
+
+  async function handleCheTao(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Chế tạo chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const recipeInput = interaction.options.getString('congthuc', false);
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    normalizeInventoryData(userData);
+    const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => interaction.member);
+    const profession = getUserDaoNgheDefinition(userData);
+    if (!profession) {
+      await interaction.reply({ content: 'Chưa chọn Đạo Nghiệp. Dùng `/nghenghiep hanhdong:chon` trước.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    if (!recipeInput) {
+      await interaction.reply({ embeds: [buildCongThucEmbed(member, userData, {})], flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const rawRecipe = getCraftRecipeByKey(recipeInput);
+    const recipe = getUnlockedCraftRecipeForUser(userData, recipeInput);
+    if (!recipe) {
+      const status = rawRecipe ? getCraftRecipeUnlockStatusText(userData, rawRecipe) : 'Không tìm thấy';
+      await interaction.reply({ content: `Không thể chế công thức này: **${status}**. Dùng `/congthuc` để xem đúng các công thức nghề hiện tại đã mở khóa.`, flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const daoNghe = normalizeDaoNgheData(userData);
+    const rankIndex = getDaoNgheRankIndex(daoNghe.exp);
+    if (rankIndex < recipe.minRankIndex) {
+      await interaction.reply({ content: `Cần nghề đạt **${getRecipeRequiredRankText(recipe)}** mới chế được.`, flags: MessageFlags.Ephemeral });
+      return;
+    }
+    if (!hasKnownBlueprint(userData, recipe)) {
+      await interaction.reply({ content: `Cần học bản vẽ trước. Dùng \`/hoccongthuc congthuc:${recipe.key}\`.`, flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const cooldownMs = getCraftCooldownMs(userData);
+    const remaining = daoNghe.lastCraftAt + cooldownMs - Date.now();
+    if (remaining > 0) {
+      await interaction.reply({ content: `Lò nghề còn đang nguội. Chờ **${formatDuration(remaining)}** nữa.`, flags: MessageFlags.Ephemeral });
+      return;
+    }
+    if (!hasInventorySpace(userData)) {
+      await interaction.reply({ content: getInventoryFullMessage(userData), flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const costs = getAdjustedCraftCosts(recipe, userData);
+    if (getSpendableCongHien(userData) < costs.congHienCost) {
+      await interaction.reply({ content: `Thiếu cống hiến. Cần **${costs.congHienCost}**, hiện có **${getSpendableCongHien(userData)}**.`, flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const missing = costs.materialCosts.filter((cost) => getCraftMaterialAmount(userData, cost.key) < cost.amount);
+    if (missing.length > 0) {
+      await interaction.reply({ content: `Thiếu nguyên liệu:\n${missing.map((cost) => `- ${cost.name}: ${getCraftMaterialAmount(userData, cost.key)}/${cost.amount}`).join('\n')}`, flags: MessageFlags.Ephemeral });
+      return;
+    }
+    userData.congHienBalance -= costs.congHienCost;
+    for (const cost of costs.materialCosts) spendCraftMaterial(userData, cost.key, cost.amount);
+
+    const chance = calculateCraftChance(userData, recipe);
+    const roll = Math.random();
+    let outcome = 'success';
+    let craftedEntry = null;
+    let extraText = [];
+    if (roll <= chance.success) {
+      const perfect = Math.random() < chance.perfect;
+      outcome = perfect ? 'perfect' : 'success';
+      const quality = rollCraftQuality(recipe, chance, perfect);
+      craftedEntry = addItemToInventory(userData, recipe.outputKey, { quality, cursed: false });
+      daoNghe.craftSuccessCount += 1;
+      daoNghe.craftedCount += 1;
+      addDaoNgheExp(userData, Math.round(recipe.expGain * (perfect ? 1.6 : 1)));
+      extraText.push(`Nhận: **${recipe.outputName} - ${getQualityByKey(quality).name}**`);
+    } else {
+      const mutation = Math.random() < chance.mutation;
+      const hardFail = Math.random() < 0.35 + recipe.tierIndex * 0.04;
+      outcome = mutation ? 'mutation' : hardFail ? 'hard_fail' : 'light_fail';
+      daoNghe.craftFailCount += 1;
+      addDaoNgheExp(userData, Math.round(recipe.expGain * (hardFail ? 0.65 : 0.35)));
+      const scrapKey = costs.materialCosts[0]?.key || profession.key;
+      const refund = mutation ? 1 : hardFail ? 0 : 1;
+      if (refund > 0) addCraftMaterial(userData, scrapKey, refund);
+      if (mutation && hasInventorySpace(userData)) {
+        const quality = getQualityByKey(recipe.outputQuality)?.key ?? DEFAULT_ITEM_QUALITY;
+        craftedEntry = addItemToInventory(userData, recipe.outputKey, { quality, cursed: true });
+        extraText.push(`Dị biến sinh ra **${recipe.outputName} - ${getQualityByKey(quality).name} [Nguyền]**.`);
+      } else {
+        extraText.push(hardFail ? 'Lò nổ nhẹ, mất nguyên liệu chính. Nhận exp nghề vì đau thương cũng là giáo trình.' : `Thu hồi được **${costs.materialCosts[0]?.name || profession.materialName} x${refund}**.`);
+      }
+    }
+    daoNghe.lastCraftDate = getTodayString();
+    daoNghe.lastCraftAt = Date.now();
+    saveUsers(users);
+
+    const embed = new EmbedBuilder()
+      .setColor(outcome === 'perfect' ? 0xfacc15 : outcome === 'success' ? profession.color : outcome === 'mutation' ? 0xa855f7 : 0x991b1b)
+      .setTitle(`${profession.emoji} Chế Tạo · ${getCraftOutcomeName(outcome)}`)
+      .setDescription([
+        `${member} vận **${profession.name}** chế **${recipe.outputName}**.`,
+        `Roll: **${Math.round(roll * 100)}** / Thành công **${Math.round(chance.success * 100)}%** · Hoàn mỹ **${Math.round(chance.perfect * 100)}%** · Dị biến **${Math.round(chance.mutation * 100)}%**`,
+        ...extraText,
+      ].join('\n'))
+      .addFields(
+        { name: 'Chi phí', value: [`Cống hiến: **${costs.congHienCost}**`, ...costs.materialCosts.map((cost) => `${cost.name} x${cost.amount}`)].join('\n'), inline: false },
+        { name: 'Chuyên tinh & pháp cụ', value: `${chance.spec.name}: ${chance.spec.note}\n${chance.toolBonus.text}`, inline: false },
+      );
+    await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+
+    const announceQuality = getCraftQualityAnnouncementLevel(craftedEntry);
+    if (announceQuality && ['perfect', 'success', 'mutation'].includes(outcome)) {
+      const publicEmbed = new EmbedBuilder()
+        .setColor(announceQuality.color || GOLD)
+        .setTitle(outcome === 'mutation' ? '☄️ Dị Biến Chế Tạo' : '✨ Dị Tượng Chế Tạo')
+        .setDescription(`${member} vừa luyện thành **${recipe.outputName} · ${announceQuality.name}${craftedEntry?.cursed ? ' [Nguyền]' : ''}**.`)
+        .addFields(
+          { name: 'Đạo Nghiệp', value: profession.name, inline: true },
+          { name: 'Hệ Dị Lỗi', value: recipe.familyName || 'Source Dị Lỗi', inline: true },
+        )
+        .setFooter({ text: 'Chỉ phẩm cao, Source Phẩm hoặc đồ nguyền mới thông báo công khai.' });
+      await sendChannelAnnouncement(interaction, { embeds: [publicEmbed] });
+    }
+  }
+
+  async function handlePhanGiai(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Phân giải chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const key = interaction.options.getString('item', true);
+    const item = getShopItemByKey(key);
+    if (!item) {
+      await interaction.reply({ content: 'Không tìm thấy vật phẩm để phân giải.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    normalizeInventoryData(userData);
+    const entry = getBestInventoryEntryByKey(userData, item.key);
+    if (!entry) {
+      await interaction.reply({ content: `Đạo hữu chưa sở hữu **${item.name}**.`, flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const profession = getUserDaoNgheDefinition(userData) || getProfessionForItem(item);
+    if (!removeItemFromInventory(userData, item.key, (candidate) => candidate === entry || getInventoryItemQuality(candidate).key === getInventoryItemQuality(entry).key)) {
+      await interaction.reply({ content: 'Không thể lấy vật phẩm khỏi túi. Túi này cũng biết phản kháng, phiền thật.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const qualityIndex = getQualityIndex(getInventoryItemQuality(entry).key);
+    const itemProfession = getProfessionForItem(item) || profession;
+    const materialPool = CRAFT_MATERIAL_CATALOG.filter((material) => material.professionKey === itemProfession.key || material.family === item.family);
+    const gainCount = 2 + qualityIndex + Math.max(0, getCatalogTierIndexForItem(item));
+    const gained = [];
+    for (let i = 0; i < Math.min(6, gainCount); i += 1) {
+      const material = materialPool[(i * 11 + qualityIndex * 7) % materialPool.length] || CRAFT_MATERIAL_CATALOG[(i * 17) % CRAFT_MATERIAL_CATALOG.length];
+      const qty = 1 + Math.floor((qualityIndex + i) / 3);
+      addCraftMaterial(userData, material.key, qty);
+      gained.push(`${material.name} x${qty}`);
+    }
+    if (profession) addDaoNgheExp(userData, 8 + qualityIndex * 4);
+    normalizeDaoNgheData(userData).decomposeCount += 1;
+    saveUsers(users);
+    await interaction.reply({ embeds: [new EmbedBuilder().setColor(profession?.color ?? GOLD).setTitle('Phân Giải Vật Phẩm').setDescription([`Đã phân giải **${item.name} - ${getInventoryItemQuality(entry).name}**.`, 'Nhận:', ...gained.map((line) => `- ${line}`)].join('\n'))], flags: MessageFlags.Ephemeral });
+  }
+
+
+  function mergeItemStats(base = {}, extra = {}) {
+    const keys = ['tuVi', 'congHien', 'lucChien', 'dotPha', 'tamMaRisk', 'trongThuongDuration', 'tuViLoss', 'statusDuration'];
+    const out = { ...base };
+    for (const key of keys) out[key] = (Number(out[key]) || 0) + (Number(extra[key]) || 0);
+    return out;
+  }
+
+  function getCatalogTierIndexForItem(item) {
+    return Math.max(0, getShopTierIndex(normalizeMissionTier(item?.minShopTier || item?.weaponTier || 'tap_dich')));
+  }
+
+  function rebalanceShopCatalog() {
+    const manualFixes = {
+      git_kiem: { price: 240, directStats: { tuVi: 4, congHien: 1, lucChien: 2 }, effect: '+4% tu vi từ GitHub commit, +1% cống hiến từ hoạt động Git.' },
+      sql_tran_ban: { price: 240, directStats: { tuVi: 3, lucChien: 3, dotPha: 1 }, effect: '+3% tu vi và +3% lực chiến khi theo hệ database/backend.' },
+      docker_ho_lo: { price: 240, directStats: { tuVi: 3, lucChien: 2, trongThuongDuration: -2 }, effect: '+3% tu vi, giảm thời gian tĩnh dưỡng nhẹ khi làm DevOps/Deploy.' },
+      ide_khai_ngo: { price: 360, directStats: { tamMaRisk: -6, dotPha: 2 }, effect: 'Giảm mạnh rủi ro Tâm Ma và hỗ trợ đột phá ổn định.' },
+      ban_phim_linh_khi: { price: 420, directStats: { tuVi: 5, congHien: 2, lucChien: 2 }, effect: '+5% tu vi mọi nguồn, +2% cống hiến; đắt hơn nhưng không còn đểu hơn đồ rẻ.' },
+      chuot_tram_bug: { price: 320, directStats: { tuVi: 4, lucChien: 4, tamMaRisk: -1 }, effect: '+4% tu vi, +4% lực chiến khi trảm bug/hotfix.' },
+      hoi_nguyen_dan: { price: 100, tuViGain: 90, effect: '+90 tu vi.' },
+      linh_khi_dan: { price: 180, tuViGain: 180, effect: '+180 tu vi.' },
+      cong_hien_dan: { price: 160, congHienGain: 80, effect: '+80 cống hiến khả dụng và tổng cống hiến.' },
+      tay_tuy_dan: { price: 220, linhCanPurifyGain: 60, effect: '+60 điểm tẩy tủy linh căn.' },
+      linh_can_tinh_hoa: { price: 620, linhCanPurifyGain: 180, effect: '+180 điểm tẩy tủy linh căn.' },
+      ngu_hanh_linh_dich: { price: 950, linhCanPurifyGain: 320, effect: '+320 điểm tẩy tủy linh căn.' },
+      dao_nguyen_tuy: { price: 1900, linhCanPurifyGain: 650, effect: '+650 điểm tẩy tủy linh căn, dùng để đột phá phẩm chất cao.' },
+    };
+
+    const tierPriceFloor = [120, 650, 1600, 4200];
+    const tierStatBonus = [
+      {},
+      { lucChien: 4, tuVi: 1, congHien: 1, dotPha: 1, tamMaRisk: -1, trongThuongDuration: -1 },
+      { lucChien: 9, tuVi: 3, congHien: 2, dotPha: 3, tamMaRisk: -2, trongThuongDuration: -3 },
+      { lucChien: 16, tuVi: 5, congHien: 4, dotPha: 5, tamMaRisk: -3, trongThuongDuration: -5 },
+    ];
+
+    for (const item of SHOP_ITEMS) {
+      const fix = manualFixes[item.key];
+      if (fix) {
+        Object.assign(item, fix);
+        if (fix.directStats) item.directStats = mergeItemStats(item.directStats, fix.directStats);
+      }
+
+      const tierIndex = getCatalogTierIndexForItem(item);
+      if (['artifact', 'weapon', 'armor', 'tool', 'talisman'].includes(item.type)) {
+        item.price = Math.max(Number(item.price) || 0, tierPriceFloor[tierIndex] || tierPriceFloor[0]);
+        item.directStats = mergeItemStats(item.directStats, tierStatBonus[tierIndex] || {});
+      }
+
+      if (item.type === 'pill' && item.tuViGain) {
+        const minGainByTier = [90, 180, 360, 720][tierIndex] || 90;
+        item.tuViGain = Math.max(Number(item.tuViGain) || 0, minGainByTier);
+        item.effect = item.effect?.replace(/\+\d+ tu vi/, `+${item.tuViGain} tu vi`) || `+${item.tuViGain} tu vi.`;
+      }
+    }
+  }
+
+  rebalanceShopCatalog();
+
+  for (const item of SHOP_ITEMS) {
+    if (!item.professionKey) item.professionKey = getProfessionKeyForFamily(item.family || item.type);
+  }
+
+  function getDailyShopSeed(member = null) {
+    const tier = getShopTierForMember(member);
+    return `${getTodayString()}:${tier}:daily-shop-v18-balanced`;
+  }
+
+  function deterministicScoreForKey(key, seed) {
+    return hashStringToNumber(`${seed}:${key}`);
+  }
+
+  function getDailyShopUnlockedItems(member = null) {
+    const seed = getDailyShopSeed(member);
+    const unlocked = SHOP_ITEMS.filter((item) => isShopItemUnlockedForMember(item, member));
+    const mustHave = ['pill', 'artifact', 'tool', 'talisman', 'upgrade_stone', 'bag']
+      .map((type) => unlocked
+        .filter((item) => (type === 'artifact' ? isPhapBaoItem(item) : item.type === type))
+        .sort((a, b) => deterministicScoreForKey(a.key, `${seed}:must:${type}`) - deterministicScoreForKey(b.key, `${seed}:must:${type}`))[0])
+      .filter(Boolean);
+    const rest = unlocked
+      .filter((item) => !mustHave.some((picked) => picked.key === item.key))
+      .sort((a, b) => deterministicScoreForKey(a.key, seed) - deterministicScoreForKey(b.key, seed));
+    return [...mustHave, ...rest].slice(0, DAILY_SHOP_LIMIT);
+  }
+
+  function isDailyShopItemAvailable(item, member = null) {
+    if (!item) return false;
+    return getDailyShopUnlockedItems(member).some((dailyItem) => dailyItem.key === item.key);
+  }
+
+  function pickBiCanhSituation(mission) {
+    const seed = `${mission.id}:${mission.templateKey}:${getTodayString()}`;
+    const index = deterministicScoreForKey(seed, 'bicanh-situation') % BI_CANH_SITUATIONS_360.length;
+    return BI_CANH_SITUATIONS_360[index];
+  }
+
+  function decorateMissionEncounter(mission) {
+    const isBiCanh = (String(mission.id || '').includes('_pb_') || String(mission.id || '').includes('_bc_')) || String(mission.name || '').toLowerCase().includes('bí cảnh') || String(mission.name || '').toLowerCase().includes('bi canh');
+    if (!isBiCanh || mission.bicanhSituationKey) return mission;
+    const situation = pickBiCanhSituation(mission);
+    mission.bicanhSituationKey = situation.key;
+    mission.bicanhSituationName = situation.name;
+    mission.bicanhSituationText = situation.text;
+    mission.bicanhSituationType = situation.type;
+    if (situation.type === 'monster') {
+      const monster = CODE_TU_MONSTERS_360.find((entry) => entry.key === situation.monsterKey) ?? CODE_TU_MONSTERS_360[0];
+      mission.monsterKey = monster.key;
+      mission.monsterArchetype = monster.archetype;
+      mission.enemyName = monster.name;
+      mission.enemyPowerMultiplier = monster.powerMultiplier;
+      mission.family = mission.family || monster.family;
+      mission.lootFamily = monster.lootBias?.[0] || monster.family;
+      mission.aura = monster.text;
+    } else {
+      mission.enemyName = `Kỳ Ngộ: ${situation.name}`;
+      mission.enemyPowerMultiplier = 0.86;
+      mission.aura = situation.text;
+      mission.kyNgoBonus = {
+        directStats: getKyNgoBuffStats(situation),
+        hours: getKyNgoDurationHours(situation),
+      };
+    }
+    return mission;
   }
 
   function slugifyKey(value) {
@@ -634,14 +4559,23 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     ensureLuanDaoFile();
     ensureTribulationsFile();
     ensureMissionsFile();
+    ensureSuKienFile();
+    ensureBicanhFile();
     scheduleActiveTribulations();
+    scheduleWeeklyBicanhAutoResolve();
+    cleanupStaleManagedTickets(client).catch((error) => console.error('Loi don ticket cu:', error));
     console.log(`Thien Dao da nhap the: ${client.user.tag}`);
   });
 
   client.on('interactionCreate', async (interaction) => {
     try {
+      if ((interaction.isChatInputCommand?.() || interaction.isButton?.() || interaction.isStringSelectMenu?.() || interaction.isModalSubmit?.())
+        && await shouldBlockInteractionForBeQuan(interaction)) {
+        return;
+      }
+
       if (interaction.isChatInputCommand()) {
-        if (interaction.commandName === 'setup-linhcan') {
+        if (interaction.commandName === 'setup-linhcan' || interaction.commandName === 'setupnhapmon') {
           await handleSetupLinhCan(interaction);
           return;
         }
@@ -656,8 +4590,33 @@ const AUTO_DISCIPLE_THRESHOLDS = [
           return;
         }
 
+        if (interaction.commandName === 'skill') {
+          await handleSkill(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'capcongphap') {
+          await handleCapCongPhap(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'congphap') {
+          await handleCongPhap(interaction);
+          return;
+        }
+
         if (interaction.commandName === 'profile') {
           await handleProfile(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'homnay') {
+          await handleHomNay(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'goiy') {
+          await handleGoiY(interaction);
           return;
         }
 
@@ -686,6 +4645,71 @@ const AUTO_DISCIPLE_THRESHOLDS = [
           return;
         }
 
+        if (interaction.commandName === 'nghenghiep') {
+          await handleNgheNghiep(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'congthuc') {
+          await handleCongThuc(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'chetao') {
+          await handleCheTao(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'nguyenlieu') {
+          await handleNguyenLieu(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'phangiai') {
+          await handlePhanGiai(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'hoccongthuc') {
+          await handleHocCongThuc(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'chuyentinh') {
+          await handleChuyenTinh(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'vatpham') {
+          await handleVatPham(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'diemdanh') {
+          await handleDiemDanh(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'nangthanphan') {
+          await handleNangThanPhan(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'thientuong') {
+          await handleThienTuong(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'xemmenh') {
+          await handleXemMenh(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'dohuyenmach') {
+          await handleDoHuyenMach(interaction);
+          return;
+        }
+
         if (interaction.commandName === 'tuvi') {
           await handleTuVi(interaction);
           return;
@@ -701,8 +4725,28 @@ const AUTO_DISCIPLE_THRESHOLDS = [
           return;
         }
 
-        if (interaction.commandName === 'coduyen') {
-          await handleCoDuyen(interaction);
+        if (interaction.commandName === 'kyngo') {
+          await handleKyNgo(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'tamma') {
+          await handleTamMa(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'tulinh') {
+          await handleTuLinh(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'sukien') {
+          await handleSuKien(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'dauphap') {
+          await handleDauPhap(interaction);
           return;
         }
 
@@ -746,6 +4790,16 @@ const AUTO_DISCIPLE_THRESHOLDS = [
           return;
         }
 
+        if (interaction.commandName === 'xuatson') {
+          await handleXuatSon(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'doiconghien') {
+          await handleDoiCongHien(interaction);
+          return;
+        }
+
         if (interaction.commandName === 'shop') {
           await handleShop(interaction);
           return;
@@ -753,6 +4807,11 @@ const AUTO_DISCIPLE_THRESHOLDS = [
 
         if (interaction.commandName === 'mua') {
           await handleMua(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'banphapbao') {
+          await handleBanPhapBao(interaction);
           return;
         }
 
@@ -776,6 +4835,36 @@ const AUTO_DISCIPLE_THRESHOLDS = [
           return;
         }
 
+        if (interaction.commandName === 'ketbai') {
+          await handleKetBai(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'ketdaolu') {
+          await handleKetDaoLu(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'baisu') {
+          await handleBaiSu(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'nhando') {
+          await handleNhanDo(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'quanhe') {
+          await handleQuanHe(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'huyquanhe') {
+          await handleHuyQuanHe(interaction);
+          return;
+        }
+
         if (interaction.commandName === 'nangpham') {
           await handleNangPham(interaction);
           return;
@@ -786,15 +4875,63 @@ const AUTO_DISCIPLE_THRESHOLDS = [
           return;
         }
 
+        if (interaction.commandName === 'bangnhiemvu') {
+          await handleBangNhiemVu(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'setupbangnhiemvu') {
+          await handleSetupBangNhiemVu(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'bicanh' || interaction.commandName === 'phoban') {
+          await handlePhoBan(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'setupbicanh' || interaction.commandName === 'setupphoban') {
+          await handleSetupPhoBan(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'taonhiemvu') {
+          await handleSetupNhiemVu(interaction);
+          return;
+        }
+
+        // Legacy handler: kept only so old cached /setupnhiemvu interactions still work until Discord refreshes commands.
         if (interaction.commandName === 'setupnhiemvu') {
           await handleSetupNhiemVu(interaction);
           return;
         }
       }
 
+      if (interaction.isModalSubmit()) {
+        if (interaction.customId === ONBOARDING_BIRTH_MODAL_ID) {
+          await handleOnboardingBirthModal(interaction);
+          return;
+        }
+      }
+
       if (interaction.isStringSelectMenu()) {
+        if (interaction.customId === CONG_PHAP_SELECT_CUSTOM_ID) {
+          await handleSelectCongPhap(interaction);
+          return;
+        }
+
         if (interaction.customId === MISSION_SELECT_CUSTOM_ID) {
           await handleMissionSelect(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(BICANH_CELL_SELECT_PREFIX)) {
+          await handleBicanhCellSelect(interaction);
+          return;
+        }
+
+        if (interaction.customId === DUNGEON_SELECT_CUSTOM_ID) {
+          await handleDungeonSelect(interaction);
           return;
         }
       }
@@ -802,6 +4939,26 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       if (interaction.isButton()) {
         if (interaction.customId === OPEN_TICKET_BUTTON) {
           await handleOpenTicket(interaction);
+          return;
+        }
+
+        if (interaction.customId === ONBOARDING_LINH_CAN_BUTTON) {
+          await handleOnboardingLinhCanButton(interaction);
+          return;
+        }
+
+        if (interaction.customId === ONBOARDING_HUYEN_MACH_BUTTON) {
+          await handleOnboardingHuyenMach(interaction);
+          return;
+        }
+
+        if (interaction.customId === ONBOARDING_MENH_CACH_BUTTON) {
+          await handleOnboardingMenhCach(interaction);
+          return;
+        }
+
+        if (interaction.customId === ONBOARDING_STATUS_BUTTON) {
+          await handleOnboardingStatus(interaction);
           return;
         }
 
@@ -836,12 +4993,22 @@ const AUTO_DISCIPLE_THRESHOLDS = [
         }
 
         if (interaction.customId === REJECT_MASTER_BUTTON) {
-          await handleRejectTicket(interaction, MASTER_STAFF_ROLE_NAMES, 'Đơn xin bái sư đã bị từ chối.');
+          await handleRejectTicket(interaction, MASTER_STAFF_ROLE_NAMES, 'Đơn truyền thừa cũ đã bị từ chối.');
           return;
         }
 
         if (interaction.customId === CLOSE_REQUEST_TICKET_BUTTON) {
           await handleCloseAnyTicket(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(RELATION_ACCEPT_BUTTON_PREFIX)) {
+          await handleRelationAccept(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(RELATION_REJECT_BUTTON_PREFIX)) {
+          await handleRelationReject(interaction);
           return;
         }
 
@@ -860,18 +5027,193 @@ const AUTO_DISCIPLE_THRESHOLDS = [
           return;
         }
 
+        if (interaction.customId.startsWith(DESTINY_PAGE_BUTTON_PREFIX)) {
+          await handleDestinyPage(interaction);
+          return;
+        }
+
         if (interaction.customId.startsWith(SHOP_PAGE_BUTTON_PREFIX)) {
           await handleShopPage(interaction);
           return;
         }
 
-        if (interaction.customId === MISSION_REFRESH_BUTTON) {
+        if (interaction.customId.startsWith(SHOP_CATEGORY_BUTTON_PREFIX)) {
+          await handleShopCategory(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(SHOP_ITEM_BUTTON_PREFIX)) {
+          await handleShopItemPage(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(SHOP_BACK_BUTTON_PREFIX)) {
+          await handleShopBack(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(SHOP_BUY_BUTTON_PREFIX)) {
+          await handleShopBuyButton(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(TUIDO_CATEGORY_BUTTON_PREFIX)) {
+          await handleTuiDoCategory(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(TUIDO_ITEM_BUTTON_PREFIX)) {
+          await handleTuiDoItemPage(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(TUIDO_BACK_BUTTON_PREFIX)) {
+          await handleTuiDoBack(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(DUNGEON_NAV_BUTTON_PREFIX)) {
+          await handleDungeonNavigate(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(BICANH_COMBAT_SKILL_PREFIX)) {
+          await handleBicanhCombatSkill(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(BICANH_COMBAT_DEFEND_PREFIX)) {
+          await handleBicanhCombatDefend(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(BICANH_COMBAT_AUTO_PREFIX)) {
+          await handleBicanhCombatAuto(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(BICANH_COMBAT_ESCAPE_PREFIX)) {
+          await handleBicanhCombatEscape(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(XUAT_SON_PICK_BUTTON_PREFIX)) {
+          await handleXuatSonPickButton(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(XUAT_SON_METHOD_BUTTON_PREFIX)) {
+          await handleXuatSonMethodButton(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(XUAT_SON_PREP_BUTTON_PREFIX)) {
+          await handleXuatSonPrepButton(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(HOMNAY_NAV_BUTTON_PREFIX)) {
+          await handleHomNayNavButton(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(BICANH_ROUTE_BUTTON_PREFIX)) {
+          await handleBicanhRouteButton(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(BICANH_EVENT_ACTION_BUTTON_PREFIX)) {
+          await handleBicanhEventAction(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(BICANH_QUICK_FIGHT_BUTTON_PREFIX)) {
+          await handleBicanhQuickFight(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(BICANH_EXPLORE_BUTTON_PREFIX)) {
+          await handleBicanhExploreButton(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(BICANH_JOIN_PARTY_BUTTON_PREFIX)) {
+          await handleBicanhJoinParty(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(BICANH_FIGHT_BUTTON_PREFIX)) {
+          await handleBicanhFight(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(BICANH_ESCAPE_BUTTON_PREFIX)) {
+          await handleBicanhEscape(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(BICANH_REFRESH_BUTTON_PREFIX)) {
+          await handleBicanhRefresh(interaction);
+          return;
+        }
+
+        if (interaction.customId === DUNGEON_REFRESH_BUTTON) {
+          await handleDungeonRefresh(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(DUNGEON_OPEN_PREFIX)) {
+          await handleDungeonOpen(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(DAU_PHAP_ACCEPT_BUTTON_PREFIX)) {
+          await handleDauPhapAccept(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(DAU_PHAP_REJECT_BUTTON_PREFIX)) {
+          await handleDauPhapReject(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(SU_KIEN_JOIN_BUTTON_PREFIX)) {
+          await handleSuKienJoin(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(MISSION_COMBAT_SKILL_PREFIX)) {
+          await handleMissionCombatSkill(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(MISSION_COMBAT_DEFEND_PREFIX)) {
+          await handleMissionCombatDefend(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(MISSION_COMBAT_AUTO_PREFIX)) {
+          await handleMissionCombatAuto(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(MISSION_COMBAT_ESCAPE_PREFIX)) {
+          await handleMissionCombatEscape(interaction);
+          return;
+        }
+
+        if (interaction.customId === MISSION_REFRESH_BUTTON || interaction.customId.startsWith(MISSION_REFRESH_BUTTON_PREFIX)) {
           await handleMissionRefresh(interaction);
           return;
         }
 
         if (interaction.customId === MISSION_MY_STATUS_BUTTON) {
           await handleMissionMyStatus(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(MISSION_NAV_BUTTON_PREFIX)) {
+          await handleMissionNavigate(interaction);
           return;
         }
 
@@ -887,6 +5229,21 @@ const AUTO_DISCIPLE_THRESHOLDS = [
 
         if (interaction.customId.startsWith(MISSION_LEAVE_PARTY_PREFIX)) {
           await handleMissionLeaveParty(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(MISSION_STRATEGY_PREFIX)) {
+          await handleMissionStrategy(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(MISSION_LOOT_CHOICE_PREFIX)) {
+          await handleMissionLootChoice(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(MISSION_CLOSE_TICKET_PREFIX)) {
+          await handleMissionCloseTicket(interaction);
           return;
         }
 
@@ -936,20 +5293,37 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     }
 
     if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
-      await interaction.reply({ content: 'Chỉ chưởng quản tông môn mới được dựng Linh Căn Đài.', flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: 'Chỉ chưởng quản tông môn mới được dựng Thiên Môn Nhập Đạo.', flags: MessageFlags.Ephemeral });
       return;
     }
 
     const embed = new EmbedBuilder()
       .setColor(GOLD)
-      .setTitle('Linh Căn Đài')
-      .setDescription('Đạo hữu muốn khai mở căn cơ hãy bấm nút bên dưới. Linh Căn Đài sẽ lập một động phủ riêng để kiểm tra.')
-      .setFooter({ text: 'Thiên Đạo Tông Môn' });
+      .setTitle('Thiên Môn Nhập Đạo')
+      .setDescription(
+        [
+          'Một lần mở động phủ, đi đủ trọn tuyến nhập môn của Thiên Đạo Tông.',
+          '',
+          '**Lộ trình nhập đạo**',
+          '① Bấm **Khắc Ngày Sinh & Dò Linh Mạch** để nhập ngày sinh bằng biểu mẫu riêng.',
+          '② Khai **Huyền Mạch / Đạo Thể** ngay trong ticket.',
+          '③ Soi **Mệnh Cách** để định hướng đạo lộ.',
+          '④ Chọn **Công Pháp Chủ Tu** hợp với căn cơ.',
+          '⑤ Trang khác **Gia Nhập Tông Môn** để gửi đơn xin vào **Đại Đạo Tông**.',
+          '',
+          'Tất cả kết quả quan trọng đều được ghi trong động phủ riêng, không kéo dài kênh công khai.',
+        ].join('\n'),
+      )
+      .addFields(
+        { name: 'Cần chuẩn bị', value: 'Ngày / tháng / năm sinh để Thiên Đạo tính linh căn, huyền mạch và mệnh bàn.', inline: false },
+        { name: 'Ghi chú', value: 'Mỗi đạo hữu chỉ mở một động phủ nhập môn. Kết quả căn cơ đã khắc thì không tự ý dò lại.', inline: false },
+      )
+      .setFooter({ text: 'Thiên Đạo Tông Môn - Khai căn trước, xin gia nhập Đại Đạo Tông sau.' });
 
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(OPEN_TICKET_BUTTON)
-        .setLabel('Khai Mở Linh Căn Đài')
+        .setLabel('Mở Động Phủ Nhập Môn')
         .setStyle(ButtonStyle.Primary),
     );
 
@@ -958,7 +5332,7 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     if (recentMessages) {
       const oldPanel = recentMessages.find((message) =>
         message.author.id === client.user.id &&
-        message.embeds?.[0]?.title === 'Linh Căn Đài'
+        ['Linh Căn Đài', 'Thiên Môn Nhập Đạo'].includes(message.embeds?.[0]?.title)
       );
 
       if (oldPanel) {
@@ -967,7 +5341,7 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     }
 
     await interaction.channel.send({ embeds: [embed], components: [row] });
-    await interaction.reply({ content: 'Đã dựng Linh Căn Đài.', flags: MessageFlags.Ephemeral });
+    await interaction.reply({ content: 'Đã dựng **Thiên Môn Nhập Đạo**.', flags: MessageFlags.Ephemeral });
   }
 
   async function handleSetupCongPhap(interaction) {
@@ -1002,7 +5376,9 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       return;
     }
 
-    const selectedKey = interaction.customId.slice(CONG_PHAP_BUTTON_PREFIX.length);
+    const selectedKey = interaction.isStringSelectMenu()
+      ? interaction.values[0]
+      : interaction.customId.slice(CONG_PHAP_BUTTON_PREFIX.length);
     const selected = CONG_PHAP_OPTIONS.find((option) => option.key === selectedKey);
 
     if (!selected) {
@@ -1010,14 +5386,29 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       return;
     }
 
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const shouldUpdateOnboardingMessage = isLinhCanTicket(interaction.channel);
+
+    if (shouldUpdateOnboardingMessage) {
+      await interaction.deferUpdate();
+    } else {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    }
+
     await interaction.guild.roles.fetch();
 
     const member = await interaction.guild.members.fetch(interaction.user.id);
-    const targetRole = interaction.guild.roles.cache.find((role) => role.name === selected.roleName);
-
+    let targetRole = interaction.guild.roles.cache.find((role) => role.name === selected.roleName);
+    if (!targetRole && interaction.guild.members.me?.permissions.has(PermissionFlagsBits.ManageRoles)) {
+      targetRole = await interaction.guild.roles.create({
+        name: selected.roleName,
+        colors: { primaryColor: 0x94a3b8 },
+        permissions: [],
+        mentionable: false,
+        reason: 'Thien Dao tu tao role cong phap khi reset role sach khong tao cong phap.',
+      }).catch(() => null);
+    }
     if (!targetRole) {
-      await interaction.editReply(`Thiếu role công pháp **${selected.roleName}**. Hãy chạy \`npm run create:roles\` rồi thử lại.`);
+      await interaction.editReply(`Thiếu role công pháp **${selected.roleName}** và bot không tự tạo được. Hãy tạo role này hoặc cấp Manage Roles.`);
       return;
     }
 
@@ -1055,10 +5446,10 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     saveUsers(users);
 
     const refreshedMember = await interaction.guild.members.fetch(interaction.user.id);
-    const hasTuViRole = refreshedMember.roles.cache.some((role) => TU_VI_REALMS.includes(role.name));
-    const hasMinorRole = refreshedMember.roles.cache.some((role) => MINOR_REALMS.includes(role.name));
+    const hasTuViRole = refreshedMember.roles.cache.some((role) => ALL_TU_VI_REALM_ROLE_NAMES.includes(role.name));
+    const hasTuViStageRole = getAssignedTuViLevel(refreshedMember) !== null;
 
-    if (!hasTuViRole || !hasMinorRole) {
+    if (!hasTuViRole || !hasTuViStageRole) {
       const syncResult = await syncTuViRoles(interaction.guild, refreshedMember, userData.tuViExp);
 
       if (!syncResult.ok) {
@@ -1067,26 +5458,179 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       }
     }
 
+    if (shouldUpdateOnboardingMessage) {
+      await interaction.message.edit({
+        embeds: [buildOnboardingFlowEmbed(refreshedMember, userData, 4)],
+        components: buildOnboardingFlowComponents(4, interaction.user.id, getMemberOnboardingSectStatus(refreshedMember)),
+      });
+      return;
+    }
+
     const embed = new EmbedBuilder()
       .setColor(GOLD)
-      .setTitle('Pháp Môn Đã Định')
+      .setTitle('Công Pháp Đã Cập Nhật')
       .setDescription(`${member} đã chọn **${selected.roleName}** làm công pháp chủ tu.`)
-      .addFields(
-        {
-          name: 'Công pháp tu luyện',
-          value: selected.roleName,
-          inline: false,
-        },
-        {
-          name: 'Lời truyền pháp',
-          value: oldRoles.size > 0 ? 'Công pháp cũ đã được thu hồi, đạo tâm quy về một mối.' : 'Đạo tâm sơ lập, từ nay chuyên chú một pháp môn.',
-          inline: false,
-        },
-      )
       .setFooter({ text: 'Dùng /profile để xem công pháp đang tu luyện.' });
 
-    await interaction.editReply({ embeds: [embed] });
+    await interaction.editReply({ embeds: [embed], components: [] });
   }
+
+
+  function profileCardLine(label, value, icon = '◆') {
+    return `${icon} **${label}**  ${value}`;
+  }
+
+  function profileChip(label, value) {
+    return `\`${label}: ${value}\``;
+  }
+
+  function profileRankFrame(memberName, sectIdentity, discipleRank, tuSiText) {
+    const safeName = String(memberName || 'Đạo hữu').slice(0, 28);
+    return [
+      '╔════════════════════════════════╗',
+      '║        THIÊN CƠ ĐẠO HỒ         ║',
+      '╠════════════════════════════════╣',
+      `║ ${safeName.padEnd(30, ' ')} ║`,
+      '╚════════════════════════════════╝',
+      '',
+      `${profileChip('Tông môn', sectIdentity)} ${profileChip('Thân phận', discipleRank)}`,
+      `${profileChip('Tu sĩ', tuSiText)}`,
+    ].join('\n');
+  }
+
+  function formatDirectStatsBadges(stats = createEmptyDirectStats()) {
+    const compact = formatDirectStatsCompact(stats, { emptyText: '' });
+    if (!compact.trim()) {
+      return '`Không có chỉ số cộng thêm`';
+    }
+
+    return compact
+      .split('\n')
+      .map((line) => {
+        const match = line.match(/^(.+?): \*\*([+-]?\d+%)\*\*(.*)$/);
+        if (!match) return `\`${line.replace(/\*\*/g, '')}\``;
+        const [, label, value, suffix] = match;
+        return `\`${label.trim()} ${value}${suffix.trim() ? ` ${suffix.trim()}` : ''}\``;
+      })
+      .join(' ');
+  }
+
+
+  function isDirectImageUrl(url) {
+    const value = String(url || '').trim();
+    return /^https?:\/\/.+\.(png|jpe?g|webp|gif)(\?.*)?$/i.test(value)
+      || /^https?:\/\/i\.pinimg\.com\//i.test(value)
+      || /^https?:\/\/cdn\.discordapp\.com\//i.test(value)
+      || /^https?:\/\/media\.discordapp\.net\//i.test(value);
+  }
+
+  function profileValueLine(icon, label, value) {
+    return `${icon} **${label}**\n> ${value}`;
+  }
+
+  function profileMiniLine(icon, label, value) {
+    return `${icon} **${label}:** ${value}`;
+  }
+
+  function buildProfileLinkRows() {
+    const rows = [];
+
+    if (PROFILE_ART_URL) {
+      rows.push(
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setLabel('Tu Tiên Linh Họa')
+            .setStyle(ButtonStyle.Link)
+            .setURL(PROFILE_ART_URL),
+        ),
+      );
+    }
+
+    return rows;
+  }
+
+
+  function profileDecorDivider(title) {
+    return `╭─ ✦ ${title} ✦ ─╮`;
+  }
+
+
+
+
+  function getUserTuDaoPathText(userData = {}) {
+    const raw = String(userData.pathType ?? userData.daoPath ?? userData.tuDaoPath ?? userData.route ?? userData.path ?? '').toLowerCase();
+    if (/force|push|ma|tà|ta_dao|ta-dao|ta dao/.test(raw)) return 'Force Push Ma Đạo';
+    if (/commit|clean|chinh|chính|chinh_dao|chinh-dao|chinh dao/.test(raw)) return 'Commit Đạo';
+    return 'Chưa phân mạch';
+  }
+
+  function getUserRiskStats(userData = {}) {
+    return {
+      nghiepLuc: Math.max(0, Number(userData.nghiepLuc ?? userData.menhCach?.nghiepLuc ?? 0) || 0),
+      technicalDebt: Math.max(0, Number(userData.technicalDebt ?? userData.sourceRisk?.technicalDebt ?? 0) || 0),
+      entropy: Math.max(0, Number(userData.entropy ?? userData.sourceRisk?.entropy ?? 0) || 0),
+    };
+  }
+
+  function formatUserRiskStats(userData = {}) {
+    const risk = getUserRiskStats(userData);
+    return [
+      `Nghiệp lực: **${uiNumber(risk.nghiepLuc)}**`,
+      `Nợ kỹ thuật: **${uiNumber(risk.technicalDebt)}**`,
+      `Độ hỗn loạn: **${uiNumber(risk.entropy)}**`,
+    ].join('\n');
+  }
+
+  function getCraftQualityAnnouncementLevel(entry) {
+    if (!entry) return null;
+    const quality = getInventoryItemQuality(entry);
+    const index = getQualityIndex(quality.key);
+    const thienIndex = getQualityIndex('thien_pham');
+    if (index >= thienIndex || entry.cursed) return quality;
+    return null;
+  }
+
+  async function sendChannelAnnouncement(interaction, payload) {
+    try {
+      if (interaction.channel?.send) {
+        await interaction.channel.send(payload);
+      }
+    } catch (error) {
+      console.error('Khong gui duoc thong bao cong khai:', error);
+    }
+  }
+
+  function formatDirectStatsPretty(stats = createEmptyDirectStats()) {
+    const compact = formatDirectStatsCompact(stats, { emptyText: 'Không có chỉ số cộng thêm.' });
+    if (compact === 'Không có chỉ số cộng thêm.' || compact === 'Không cộng thêm.') {
+      return [
+        '```',
+        '╭────────  CHỈ SỐ CỘNG THÊM  ────────╮',
+        ' ✧ Không có chỉ số cộng thêm',
+        '╰─────────────────────────────────────╯',
+        '```',
+      ].join('\n');
+    }
+
+    const lines = compact.split('\n').map((line) => {
+      const cleaned = line
+        .replace(': **', '  ')
+        .replace(/\*\*/g, '')
+        .replace(' nguy cơ', ' nguy cơ')
+        .replace(' thời gian', ' thời gian');
+      return ` ✧ ${cleaned}`;
+    });
+
+    return [
+      '```',
+      '╭────────  CHỈ SỐ CỘNG THÊM  ────────╮',
+      ...lines,
+      '╰─────────────────────────────────────╯',
+      '```',
+    ].join('\n');
+  }
+
+
   async function handleProfile(interaction) {
     if (!interaction.inGuild()) {
       await interaction.reply({
@@ -1096,119 +5640,123 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       return;
     }
 
-    const targetUser = interaction.options.getUser('thanhvien') ?? interaction.user;
+    const requestedTargetUser = interaction.options.getUser('thanhvien', false);
+    const targetUser = requestedTargetUser ?? interaction.user;
+    // UX rule: /profile without target or targeting yourself is private; viewing another member is public.
+    // Keep this explicit because Discord flags are sticky-looking enough to confuse even a small bureaucracy.
+    const isSelfView = !requestedTargetUser || targetUser.id === interaction.user.id;
+    const shouldSendProfilePrivate = isSelfView;
     const member = await interaction.guild.members.fetch(targetUser.id);
     const users = loadUsers();
     const userData = users[targetUser.id] ? getOrCreateUser(users, targetUser.id) : null;
 
     if (userData) {
       const statusResult = await resolveTemporaryStatusEffects(interaction.guild, member, userData);
-
       if (!statusResult.ok) {
         await interaction.reply({ content: statusResult.message, flags: MessageFlags.Ephemeral });
         return;
       }
-
       saveUsers(users);
     }
 
-    const linhCanText = getMemberLinhCanClassificationText(member);
-    const elementText = getMemberElementText(member);
-    const qualityText = getMemberQualityText(member);
-    const congPhapText = getMemberCongPhapText(member);
-
+    const sectIdentity = getSectIdentityText(member, userData) || 'Đại Đạo Tông';
+    const discipleRank = getDiscipleRankDisplay(member, userData) || 'Ký Danh Đệ Tử';
     const tuViLevel = userData ? getCurrentTuViLevel(member, userData.tuViExp) : 0;
     const tuVi = userData ? getTuViByLevel(tuViLevel) : null;
+    const tuSiText = tuVi ? `${tuVi.realm} ${tuVi.minor}` : 'Phàm Nhân Hậu Kỳ';
+    const pathText = getUserTuDaoPathText(userData || {});
 
-    const congHienExp = userData?.congHienExp ?? 0;
-    const sectPosition = getMemberSectPosition(member);
-    const sectIdentity = getSectIdentityText(member, userData);
-    const discipleRank = getDiscipleRankDisplay(member, userData);
-    const nextContribution = sectPosition
-      ? 'Không áp dụng cho chức vị tông môn'
-      : getNextContributionText(congHienExp, getMemberHighestAutoDiscipleRank(member));
+    const currentExp = Math.max(0, Number(userData?.tuViExp) || 0);
+    const currentMin = Number(tuVi?.minExp) || 0;
+    const nextTuVi = userData ? getTuViByLevel(Math.min(MAX_TU_VI_LEVEL, tuViLevel + 1)) : null;
+    const nextMin = Number(nextTuVi?.minExp) || Math.max(currentMin + 1, currentExp + 1);
+    const progressText = userData ? uiBar(currentExp - currentMin, Math.max(1, nextMin - currentMin), 12) : '▱▱▱▱▱▱▱▱▱▱▱▱';
 
-    const githubText = userData?.githubUsername
-      ? `${userData.githubUsername}\n${userData.githubVerified ? 'Đã xác minh' : 'Chưa xác minh'}`
-      : 'Chưa liên kết';
-    const masterText = userData?.masterId ? `<@${userData.masterId}>` : 'Chưa có';
-    const discipleCount = Array.isArray(userData?.disciples) ? userData.disciples.length : 0;
-    const temporaryStatusText = formatTemporaryStatus(userData);
-    const bagText = userData ? `${getStorageBag(userData).name} (${getInventoryUsed(userData)}/${getStorageCapacity(userData)} ô)` : 'Chưa có';
-    const equippedArtifact = userData ? getEquippedArtifact(userData) : null;
-    const artifactText = equippedArtifact ? `${equippedArtifact.name} - ${equippedArtifact.effect}` : 'Chưa trang bị pháp bảo';
+    const linhCanQuality = getMemberQualityText(member).replace(/\.$/, '');
+    const linhCanElement = getMemberElementText(member).replace(/\.$/, '');
+    const linhCanClass = getMemberLinhCanClassificationText(member).replace(/\.$/, '');
+    const linhCanText = [linhCanQuality, linhCanElement, linhCanClass]
+      .filter((value, index, arr) => value && value !== 'Chưa rõ' && arr.indexOf(value) === index)
+      .join(' · ') || 'Chưa khai linh căn';
+
+    const congPhapText = getMemberCongPhapText(member) || 'Chưa chọn công pháp';
+    const daoNgheText = userData ? formatDaoNgheProgress(userData).split('\n').slice(0, 2).join('\n') : 'Chưa chọn Đạo Nghiệp';
+    const menhName = userData?.menhCach?.name ?? 'Chưa khai mệnh';
+    const daoTheName = userData?.huyenMach?.name ?? 'Chưa khai thể';
+    const equippedGear = userData ? getEquippedCombatItems(userData) : [];
+    const phapBaoText = equippedGear.length > 0 ? equippedGear.map((item) => item.name).slice(0, 5).join(' · ') : 'Chưa trang bị';
+    const statsBadges = userData ? formatDirectStatsBadges(getUserDirectStats(userData, member)) : '`Không có chỉ số cộng thêm`';
 
     const embed = new EmbedBuilder()
-      .setColor(GOLD)
-      .setTitle(`Đạo Hồ - ${member.displayName}`)
+      .setColor(0xd6a84f)
+      .setAuthor({
+        name: `${member.displayName} · Thiên Cơ Đạo Hồ`,
+        iconURL: targetUser.displayAvatarURL({ size: 128 }),
+      })
       .setThumbnail(targetUser.displayAvatarURL({ size: 256 }))
+      .setDescription(isSelfView ? '# Hồ sơ cá nhân · Chỉ mình đạo hữu thấy' : `# ${member.displayName}`)
       .addFields(
         {
-          name: 'Đạo danh',
-          value: `${member}`,
-          inline: false,
-        },
-        {
-          name: 'Thân phận tông môn',
+          name: '━━━  Thân phận  ━━━',
           value: [
-            `Thân phận: ${sectIdentity}`,
-            `Cấp đệ tử: ${discipleRank}`,
-            `Điểm cống hiến: ${congHienExp}`,
-            `Mốc tiếp theo: ${nextContribution}`,
+            profileMiniLine('🏯', 'Tông môn', sectIdentity),
+            profileMiniLine('🎖️', 'Thân phận', discipleRank),
+            profileMiniLine('🧭', 'Đường tu', pathText),
+            profileMiniLine('🧘', 'Tu sĩ', tuSiText),
           ].join('\n'),
           inline: false,
         },
         {
-          name: 'Tu luyện',
+          name: '━━━  Tu luyện  ━━━',
           value: [
-            `Tu vi: ${tuVi ? `${tuVi.realm} ${tuVi.minor}` : 'Chưa nhập đạo'}`,
-            `Tu vi exp: ${userData ? userData.tuViExp : 0}`,
-            `Trạng thái: ${temporaryStatusText}`,
+            profileValueLine('📈', 'Tiến độ', progressText),
+            profileValueLine('📜', 'Công pháp chủ tu', congPhapText),
+            profileValueLine('🧰', 'Đạo Nghiệp', daoNgheText),
           ].join('\n'),
           inline: false,
         },
         {
-          name: 'Căn cơ',
+          name: '━━━  Đạo cơ  ━━━',
           value: [
-            `Linh căn: ${linhCanText}`,
-            `Hệ ngũ hành: ${elementText}`,
-            `Phẩm chất linh căn: ${qualityText}`,
+            profileValueLine('💠', 'Linh căn', linhCanText),
+            profileValueLine('✦', 'Mệnh cách', menhName),
+            profileValueLine('✧', 'Đạo thể', daoTheName),
           ].join('\n'),
           inline: false,
         },
         {
-          name: 'Công pháp tu luyện',
-          value: congPhapText,
-          inline: false,
-        },
-        {
-          name: 'Hành trang',
+          name: '━━━  Trang bị & rủi ro Source  ━━━',
           value: [
-            `Pháp bảo: ${artifactText}`,
-            `Túi trữ vật: ${bagText}`,
-            `Cống hiến khả dụng: ${userData ? getSpendableCongHien(userData) : 0}`,
+            profileValueLine('⚔️', 'Đạo cụ trang bị', phapBaoText),
+            profileValueLine('⚠️', 'Rủi ro', userData ? formatUserRiskStats(userData) : 'Chưa có dữ liệu'),
           ].join('\n'),
           inline: false,
         },
         {
-          name: 'Truyền thừa',
-          value: [
-            `Sư phụ: ${masterText}`,
-            `Đệ tử: ${discipleCount}`,
-          ].join('\n'),
-          inline: false,
-        },
-        {
-          name: 'GitHub',
-          value: githubText,
+          name: '━━━  Chỉ số cộng thêm  ━━━',
+          value: statsBadges.slice(0, 1000),
           inline: false,
         },
       )
-      .setFooter({
-        text: 'Thiên Đạo ghi nhận đạo tâm, căn cơ, tu vi và cống hiến của môn nhân.',
-      });
+      .setFooter({ text: isSelfView ? 'Profile bản thân được gửi riêng tư để khỏi khoe cả ví lẫn nghiệp lực.' : 'Thiên Cơ · xem hồ sơ người khác sẽ hiển thị công khai trong kênh.' });
 
-    await interaction.reply({ embeds: [embed] });
+    if (isDirectImageUrl(PROFILE_BANNER_URL)) {
+      embed.setImage(PROFILE_BANNER_URL);
+    }
+
+    const rows = buildProfileLinkRows();
+    const replyPayload = {
+      embeds: [embed],
+      allowedMentions: { users: [] },
+    };
+    if (shouldSendProfilePrivate) {
+      replyPayload.flags = MessageFlags.Ephemeral;
+    }
+    if (rows.length > 0) {
+      replyPayload.components = rows;
+    }
+
+    await interaction.reply(replyPayload);
   }
 
   async function handleLinkGithub(interaction) {
@@ -1399,6 +5947,7 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     userData.githubDailyRewardCount += 1;
     userData.githubTotalExp += gain;
     userData.githubStreak = isFirstGithubRewardToday ? nextStreak : userData.githubStreak;
+    await grantCongPhapMastery(userData, member, 10 + Math.min(20, commitCount * 2), 'checkcommit');
 
     const syncResult = await syncTuViRoles(interaction.guild, member, userData.tuViExp);
 
@@ -1437,7 +5986,7 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     let userData = users[interaction.user.id];
 
     if (!userData) {
-      await interaction.reply({ content: 'Ngươi chưa nhập đạo, hãy kiểm tra linh căn trước.', flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: 'Đạo hữu chưa nhập đạo. Dùng `/linhcan` trước để khai Đạo Cơ.', flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -1447,27 +5996,29 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     const tuVi = getTuViByLevel(level);
     const needed = getExpNeededForBreakthrough(userData.tuViExp, level);
     const nextTuVi = level >= MAX_TU_VI_LEVEL ? null : getTuViByLevel(level + 1);
+    const currentMin = Number(tuVi?.minExp) || 0;
+    const nextMin = Number(nextTuVi?.minExp) || Math.max(currentMin + 1, Number(userData.tuViExp) + 1);
+    const progressText = uiBar((Number(userData.tuViExp) || 0) - currentMin, Math.max(1, nextMin - currentMin), 14);
     const breakthroughText = nextTuVi
       ? needed > 0
-        ? `Còn thiếu ${needed} tu vi exp để đột phá lên ${nextTuVi.realm} ${nextTuVi.minor}.`
-        : `Đã đủ tu vi để dùng /dotpha lên ${nextTuVi.realm} ${nextTuVi.minor}. Có thể giữ điểm lại để luyện căn, dưỡng linh mạch hoặc xử lý trạng thái xấu.`
+        ? `Còn thiếu **${uiNumber(needed)}** tu vi để đột phá lên **${nextTuVi.realm} ${nextTuVi.minor}**.`
+        : `Đã đủ tu vi. Dùng **/dotpha** để đột phá lên **${nextTuVi.realm} ${nextTuVi.minor}**.`
       : 'Đã chạm đỉnh cảnh giới hiện tại của Thiên Đạo.';
 
     const embed = new EmbedBuilder()
       .setColor(GOLD)
-      .setTitle(`Tu Vi - ${member.displayName}`)
+      .setTitle(`🧘 Tu Vi · ${member.displayName}`)
+      .setDescription('Thông tin tu vi được gửi riêng tư. Cả tông môn không cần biết đạo hữu thiếu bao nhiêu exp, dù họ chắc chắn sẽ tò mò.')
       .addFields(
-        { name: 'Tu vi hiện tại', value: tuVi.realm, inline: true },
-        { name: 'Tiểu cảnh', value: tuVi.minor, inline: true },
-        { name: 'Tu vi exp', value: `${userData.tuViExp}`, inline: true },
-        { name: 'Mốc đột phá', value: breakthroughText, inline: false },
-        { name: 'GitHub', value: userData.githubUsername ?? 'Chưa liên kết', inline: true },
-        { name: 'Xác minh GitHub', value: userData.githubVerified ? 'Đã xác minh' : 'Chưa xác minh', inline: true },
-        { name: 'Thưởng commit gần nhất', value: userData.lastGithubRewardDate ?? 'Chưa có', inline: true },
+        { name: 'Cảnh giới', value: `**${tuVi.realm} · ${tuVi.minor}**`, inline: true },
+        { name: 'Tu vi hiện có', value: `**${uiNumber(userData.tuViExp)}**`, inline: true },
+        { name: 'Tiến độ', value: progressText, inline: false },
+        { name: 'Đột phá', value: breakthroughText, inline: false },
+        { name: 'Commit Đạo hôm nay', value: [`GitHub: **${userData.githubUsername ?? 'Chưa liên kết'}**`, `Xác minh: **${userData.githubVerified ? 'Đã xác minh' : 'Chưa xác minh'}**`, `Thưởng gần nhất: **${userData.lastGithubRewardDate ?? 'Chưa có'}**`, `Tiến độ ngày: **${uiNumber(userData.githubDailyExp ?? 0)}/${uiNumber(GITHUB_DAILY_TUVI_CAP)}**`].join('\n'), inline: false },
       )
-      .setFooter({ text: 'Tu vi tăng qua hoạt động GitHub public commit.' });
+      .setFooter({ text: 'Commit sạch giúp Đạo Cơ đồng bộ với Đại Source. Dùng /checkcommit để nhận thưởng.' });
 
-    await interaction.reply({ embeds: [embed] });
+    await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
   }
 
   async function handleDotPha(interaction) {
@@ -1570,7 +6121,7 @@ const AUTO_DISCIPLE_THRESHOLDS = [
 
     const embed = new EmbedBuilder()
       .setColor(GOLD)
-      .setTitle('Thiên Lôi Độ Kiếp')
+      .setTitle('⚡ Source Audit · Thiên Kiếp Đang Diễn Ra')
       .setDescription(lines.join('\n'));
 
     if (stillActive.length > 0) {
@@ -1591,9 +6142,10 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     const userData = getOrCreateUser(users, interaction.user.id);
     const member = await interaction.guild.members.fetch(interaction.user.id);
     const sectPosition = getMemberSectPosition(member);
-    const nextRank = sectPosition
-      ? null
-      : getNextDiscipleRank(userData.congHienExp, getMemberHighestAutoDiscipleRank(member));
+    const currentRank = getMemberHighestAutoDiscipleRank(member);
+    const nextRank = sectPosition ? null : getNextDiscipleRankByRole(currentRank || 'Ký Danh Đệ Tử');
+    const nextRankCost = nextRank ? getDiscipleRankRequiredExp(nextRank.roleName) : 0;
+    const spendable = getSpendableCongHien(userData);
     const today = getTodayString();
 
     if (userData.dailyMessageDate !== today) {
@@ -1602,178 +6154,652 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       saveUsers(users);
     }
 
+    const missing = nextRank ? Math.max(0, nextRankCost - spendable) : 0;
+    const upgradeText = sectPosition
+      ? 'Không áp dụng cho chức vị tông môn.'
+      : nextRank
+        ? [`Mốc kế tiếp: **${nextRank.roleName}**`, `Cần: **${uiNumber(nextRankCost)}** cống hiến khả dụng`, `Còn thiếu: **${uiNumber(missing)}**`, 'Bot **không tự nâng thân phận**. Dùng **/nangthanphan** để thăng bậc.'].join('\n')
+        : 'Đã đạt mốc nâng cấp cao nhất bằng cống hiến.';
+
     const embed = new EmbedBuilder()
       .setColor(GOLD)
-      .setTitle(`Cống Hiến - ${member.displayName}`)
+      .setTitle(`🏮 Cống Hiến · ${member.displayName}`)
       .addFields(
-        { name: 'Điểm cống hiến hiện tại', value: `${userData.congHienExp}`, inline: true },
-        { name: 'Cấp đệ tử hiện tại', value: getDiscipleRankDisplay(member, userData), inline: true },
-      {
-        name: 'Điểm cần để lên cấp tiếp theo',
-        value: sectPosition
-          ? 'Không áp dụng cho chức vị tông môn'
-          : nextRank
-            ? `${nextRank.exp - userData.congHienExp} điểm để lên ${nextRank.roleName}`
-            : 'Đã đạt mốc tự động cao nhất',
-        inline: false,
-      },
-        { name: 'Cống hiến hôm nay', value: `${userData.dailyMessageCongHien}/${DAILY_MESSAGE_CONG_HIEN_LIMIT}`, inline: true },
+        { name: 'Tổng từng kiếm', value: `**${uiNumber(userData.congHienExp)}**`, inline: true },
+        { name: 'Có thể tiêu', value: `**${uiNumber(spendable)}**`, inline: true },
+        { name: 'Hôm nay', value: `**${uiNumber(userData.dailyMessageCongHien)}/${uiNumber(DAILY_MESSAGE_CONG_HIEN_LIMIT)}**`, inline: true },
+        { name: 'Thân phận hiện tại', value: getDiscipleRankDisplay(member, userData), inline: false },
+        { name: 'Nâng thân phận tiếp theo', value: upgradeText, inline: false },
       )
-      .setFooter({ text: 'Chat hợp lệ trong kênh học/code sẽ tăng cống hiến.' });
+      .setFooter({ text: 'Cống hiến là tài nguyên cá nhân, nên bot gửi riêng tư. Văn minh tối thiểu, nhưng vẫn là văn minh.' });
+
+    await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+  }
+
+  async function syncDaoNgheRole(guild, member, userData) {
+    normalizeDaoNgheData(userData);
+    const active = getUserDaoNgheDefinition(userData);
+    const oldRoles = member.roles.cache.filter((role) => DAO_NGHE_ROLE_NAMES.includes(role.name));
+    const activeRole = active ? guild.roles.cache.find((role) => role.name === active.roleName) : null;
+    const toAdd = activeRole && !member.roles.cache.has(activeRole.id) ? [activeRole] : [];
+    const toManage = [...oldRoles.values(), ...toAdd];
+
+    if (active && !activeRole) {
+      return { ok: false, message: `Thiếu role nghề nghiệp: ${active.roleName}. Hãy chạy \`npm run create:roles\` rồi thử lại.` };
+    }
+
+    if (toManage.length === 0) return { ok: true };
+    const blocker = await getDiscipleRoleManageBlocker(guild, toManage);
+    if (blocker) return { ok: false, message: blocker };
+    if (oldRoles.size > 0) await member.roles.remove(oldRoles, 'Dong bo role Dao Nghiep.');
+    if (toAdd.length > 0) await member.roles.add(toAdd, 'Gan role Dao Nghiep.');
+    return { ok: true };
+  }
+
+  function buildNgheNghiepOverviewEmbed(member, userData) {
+    normalizeDaoNgheData(userData);
+    const current = getUserDaoNgheDefinition(userData);
+    const lines = DAO_NGHE_DEFINITIONS.map((entry, index) => {
+      const mark = current?.key === entry.key ? '✓' : `${index + 1}.`;
+      return `${mark} ${entry.emoji} **${entry.name}** — ${entry.motto}`;
+    });
+    return uiEmbedBase('Đạo Nghiệp · Code Tu Tiên', member, UI_V19.colors.azure)
+      .setDescription([
+        formatDaoNgheProgress(userData),
+        '',
+        '**10 nghề chính thức:**',
+        ...lines,
+      ].join('\n').slice(0, 4000))
+      .addFields(
+        { name: 'Lệnh', value: '`/nghenghiep hanhdong:chon nghe:<nghề>`\n`/nghenghiep hanhdong:lamviec`\n`/nghenghiep hanhdong:chetao`\n`/nghenghiep hanhdong:kho`', inline: false },
+        { name: 'Chỉ số nghề', value: formatDirectStatsCompact(getDaoNgheDirectStats(userData)), inline: false },
+      );
+  }
+
+  function buildNgheNghiepKhoText(userData) {
+    const daoNghe = normalizeDaoNgheData(userData);
+    const lines = DAO_NGHE_DEFINITIONS.map((entry) => `${entry.emoji} ${entry.materialName}: **${daoNghe.materials[entry.key] || 0}**`);
+    return lines.join('\n');
+  }
+
+  function getCraftableItemsForProfession(professionKey) {
+    return SHOP_ITEMS.filter((item) => item.professionKey === professionKey && ['artifact', 'weapon', 'armor', 'tool', 'talisman', 'pill'].includes(item.type)).slice(0, 12);
+  }
+
+
+
+  function getItemCombatRoleText(item = {}) {
+    const sourceStats = item.sourceStats || {};
+    const parts = [];
+    const group = getSourceItemGroup(item.sourceItemGroup);
+    const family = getSourceDefectFamily(item.family);
+    if (group?.name) parts.push(group.name.replace('Pháp Cụ ', '').replace('Đạo Bào / ', ''));
+    if (item.type === 'weapon' || sourceStats.sourcePower || item.powerBonus) parts.push('Sát thương/Sức Source');
+    if (item.type === 'armor' || sourceStats.integrity || sourceStats.stability) parts.push('Toàn vẹn/Ổn định');
+    if (sourceStats.runtime || item.family === 'runtime' || item.family === 'rate_limit') parts.push('Nhịp lượt/Cooldown');
+    if (sourceStats.logic || ['syntax', 'hallucination', 'cache'].includes(item.family)) parts.push('Logic/Xác minh');
+    if (sourceStats.throughput || ['memory_leak', 'data'].includes(item.itemRole)) parts.push('Hiệu suất/Farm');
+    if (item.route === 'ta_dao' || item.cursedByDefault) parts.push('Cấm khí/rủi ro');
+    if (item.type === 'pill') parts.push('Đan/tiêu hao');
+    if (item.type === 'upgrade_stone') parts.push('Nâng phẩm');
+    if (family?.targetStat) parts.push(`Khắc ${family.targetStat}`);
+    return [...new Set(parts)].slice(0, 4).join(' · ') || 'Phụ trợ';
+  }
+
+  function getItemSourceText(item = {}) {
+    const family = getSourceDefectFamily(item.family);
+    if (item.route === 'ta_dao') return `Force Push Ma Đạo · ${family?.name || 'Dị Lỗi'} · craft/boss/cấm nhiệm vụ`;
+    if (item.route === 'chinh_dao') return `Commit Đạo · ${family?.name || 'Dị Lỗi'} · nhiệm vụ sạch/craft`;
+    if (family) return `${family.name} · ${family.materialCore} · craft/boss/nhiệm vụ Incident`;
+    if (String(item.key || '').startsWith('dao_nghe_')) return `Chế tạo Đạo Nghiệp · ${getItemProfessionText(item)}`;
+    if (item.sourceTag === 'drop_only') return 'Drop bí cảnh/boss hiếm · có thể xuất hiện rất hiếm trong shop';
+    if (String(item.key || '').startsWith('vp_')) return 'Vạn Vật Đạo Khố / Shop nền / nhiệm vụ / bí cảnh';
+    if (item.minShopTier) return `Shop ${getShopTierLabel(item.minShopTier)}`;
+    return 'Shop · Drop · Sự kiện';
+  }
+
+  function getItemUseText(item = {}) {
+    if (item.type === 'pill') return '/dung';
+    if (['weapon', 'artifact', 'armor', 'tool', 'talisman'].includes(item.type)) return '/trangbi';
+    if (item.type === 'upgrade_stone') return '/nangpham';
+    return 'Tùy hệ thống';
+  }
+
+  function filterItemsByCombatRole(items, role) {
+    const value = String(role || '').trim();
+    if (!value || value === 'tatca') return items;
+    return items.filter((item) => {
+      const text = getItemCombatRoleText(item).toLowerCase();
+      if (value === 'sat_thuong') return text.includes('sát thương') || text.includes('chí mạng');
+      if (value === 'phong_thu') return text.includes('phòng thủ');
+      if (value === 'hoi_phuc') return text.includes('hồi phục') || text.includes('hồi khí');
+      if (value === 'khong_che') return text.includes('khống chế');
+      if (value === 'khac_bug') return text.includes('bug') || item.family === 'bug' || item.family === 'clean';
+      if (value === 'party') return ['runtime_tran_su', 'cloud_phap_su', 'git_menh_su', 'patch_lenh_su'].includes(item.professionKey);
+      if (value === 'boss') return ['core_forge_su', 'security_ho_dao_su', 'ai_dien_toan_su', 'debug_dao_su'].includes(item.professionKey);
+      return true;
+    });
+  }
+
+  function buildVatPhamCatalogEmbed({ member, action = 'tongquan', professionKey = null, combatRole = null, keyword = null }) {
+    const allItems = [...SHOP_ITEMS]
+      .filter((item) => item && !item.shopHidden && !item.legacyShopItem)
+      .filter((item, index, arr) => arr.findIndex((other) => other.key === item.key) === index);
+    const profession = getDaoNgheDefinition(professionKey);
+    let items = allItems;
+    if (profession) items = items.filter((item) => item.professionKey === profession.key || getProfessionForItem(item)?.key === profession.key);
+    if (combatRole) items = filterItemsByCombatRole(items, combatRole);
+    if (keyword) {
+      const lower = String(keyword).toLowerCase();
+      items = items.filter((item) => `${item.name} ${item.family} ${item.sourceFamilyName || ''} ${item.sourceItemGroupName || ''} ${item.itemClassName || ''} ${item.itemRarityName || ''} ${item.type} ${item.itemRole || ''} ${item.itemSet || ''} ${item.effect} ${item.passiveEffect || ''} ${item.activeEffect || ''} ${item.procEffect || ''}`.toLowerCase().includes(lower));
+    }
+
+    const title = action === 'chitiet' || keyword ? 'Vạn Vật Đạo Khố · Tìm Vật Phẩm'
+      : profession ? `Vạn Vật Đạo Khố · ${profession.name}`
+        : combatRole ? 'Vạn Vật Đạo Khố · Theo Combat'
+          : 'Vạn Vật Đạo Khố · Tổng Quan';
+
+    const embed = uiEmbedBase(title, member, UI_V19.colors.violet);
+    if (action === 'tongquan' && !profession && !combatRole && !keyword) {
+      const byType = {};
+      const byProfession = {};
+      for (const item of allItems) {
+        byType[item.type || 'khac'] = (byType[item.type || 'khac'] || 0) + 1;
+        const prof = getProfessionForItem(item)?.name || 'Không chuyên';
+        byProfession[prof] = (byProfession[prof] || 0) + 1;
+      }
+      embed.setDescription([
+        `Tổng vật phẩm hệ thống: **${allItems.length}**`,
+        `Chuẩn nội dung: **${CONTENT_SYSTEM_TARGET_COUNT} Đạo Cụ Source** theo 12 hệ Dị Lỗi + vật phẩm nghề/base.`,
+        'Mỗi món có: loại lỗi liên quan · công dụng · cấp/độ hiếm · độ ổn định · chỉ số Source · nguồn nhận.',
+      ].filter(Boolean).join('\n'));
+      embed.addFields(
+        { name: 'Theo loại', value: Object.entries(byType).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([k, v]) => `• ${k}: **${v}**`).join('\n') || 'Chưa có', inline: true },
+        { name: 'Theo nghề', value: Object.entries(byProfession).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([k, v]) => `• ${k}: **${v}**`).join('\n') || 'Chưa có', inline: true },
+        { name: 'Lọc nhanh', value: '`/vatpham hanhdong:theonghe nghe:<nghề>`\n`/vatpham hanhdong:theocombat combat:<vai trò>`\n`/vatpham hanhdong:tim tukhoa:<tên>`', inline: false },
+      );
+      return embed;
+    }
+
+    const lines = items.slice(0, 12).map((item, index) => [
+      `**${index + 1}. ${item.name}**`,
+      `↳ ${item.itemClassName || getSourceItemClass(item.itemClass).name} · ${item.itemRarityName || getSourceItemRarity(item.itemRarity).name} · Stability **${Number(item.stability) || 80}/100**`,
+      `↳ Hệ: **${item.sourceFamilyName || getSourceDefectFamily(item.family)?.name || item.family || 'khác'}** · ${getItemProfessionText(item)}`,
+      `↳ ${getItemCombatRoleText(item)} · Dùng: ${getItemUseText(item)}${item.itemSet ? ` · Set: ${ITEM_SET_DEFINITIONS[item.itemSet]?.name || item.itemSet}` : ''}`,
+      `↳ Nguồn: ${getItemSourceText(item)}`,
+    ].join('\n'));
+    embed.setDescription(lines.join('\n').slice(0, 3900) || 'Không tìm thấy vật phẩm phù hợp. Đạo Khố không có mục phù hợp với bộ lọc hiện tại.');
+    embed.setFooter({ text: `Hiển thị ${Math.min(items.length, 12)}/${items.length} món · UI cố ý gọn, không ném cả kho vào mặt người chơi.` });
+    return embed;
+  }
+
+  async function handleVatPham(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Vạn Vật Đạo Khố chỉ mở trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const action = interaction.options.getString('hanhdong') || 'tongquan';
+    const professionKey = interaction.options.getString('nghe', false);
+    const combatRole = interaction.options.getString('combat', false);
+    const keyword = interaction.options.getString('tukhoa', false);
+    const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => interaction.member);
+    await interaction.reply({ embeds: [buildVatPhamCatalogEmbed({ member, action, professionKey, combatRole, keyword })], flags: MessageFlags.Ephemeral });
+  }
+
+  async function handleNgheNghiep(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Đạo Nghiệp chỉ tu luyện trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const action = interaction.options.getString('hanhdong') || 'xem';
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    normalizeInventoryData(userData);
+    const member = await interaction.guild.members.fetch(interaction.user.id);
+
+    if (action === 'xem') {
+      await interaction.reply({ embeds: [buildNgheNghiepOverviewEmbed(member, userData)], flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (action === 'kho') {
+      await interaction.reply({
+        embeds: [uiEmbedBase('Kho Đạo Tài Nghề Nghiệp', member, UI_V19.colors.jade).setDescription(buildNgheNghiepKhoText(userData))],
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    if (action === 'chon') {
+      const professionKey = interaction.options.getString('nghe');
+      const profession = getDaoNgheDefinition(professionKey);
+      if (!profession) {
+        await interaction.reply({ content: 'Hãy chọn nghề muốn nhập đạo bằng option `nghe`.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const current = getUserDaoNgheDefinition(userData);
+      if (current?.key === profession.key) {
+        await interaction.reply({ content: `Đạo hữu đang tu **${profession.name}** rồi.`, flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      if (current && (Number(userData.daoNghe.exp) || 0) > 0) {
+        const changeCost = 200;
+        if (getSpendableCongHien(userData) < changeCost) {
+          await interaction.reply({ content: `Đổi nghề cần **${changeCost} cống hiến** để phá lời thề nghề cũ. Máy móc lạnh lùng nhưng sổ nợ thì rất nóng.`, flags: MessageFlags.Ephemeral });
+          return;
+        }
+        userData.congHienBalance -= changeCost;
+      }
+
+      userData.daoNghe = { key: profession.key, exp: 0, lastWorkDate: null, lastCraftDate: null, lastCraftAt: 0, materials: {}, knownBlueprints: [], craftingSpec: 'on_dinh', craftedCount: 0, craftSuccessCount: 0, craftFailCount: 0, decomposeCount: 0 };
+      addDaoNgheMaterial(userData, profession.key, 2);
+      const syncResult = await syncDaoNgheRole(interaction.guild, member, userData);
+      if (!syncResult.ok) {
+        await interaction.reply({ content: syncResult.message, flags: MessageFlags.Ephemeral });
+        return;
+      }
+      saveUsers(users);
+
+      await interaction.reply({
+        embeds: [uiEmbedBase('Nhập Đạo Nghiệp Thành Công', member, profession.color).setDescription([
+          `${member} đã chọn **${profession.emoji} ${profession.name}**.`,
+          profession.motto,
+          `Nhận nhập môn: **${profession.materialName} x2**.`,
+        ].join('\n'))],
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const profession = getUserDaoNgheDefinition(userData);
+    if (!profession) {
+      await interaction.reply({ content: 'Đạo hữu chưa chọn nghề. Dùng `/nghenghiep hanhdong:chon nghe:<nghề>` trước.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (action === 'lamviec') {
+      const today = getTodayString();
+      if (userData.daoNghe.lastWorkDate === today) {
+        await interaction.reply({ content: 'Hôm nay đạo hữu đã làm nghề rồi. Nghề nghiệp cũng cần cooldown, rất đáng tiếc cho chủ nghĩa cày cuốc.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const rankIndex = getDaoNgheRankIndex(userData.daoNghe.exp);
+      const expGain = 75 + rankIndex * 12 + Math.floor(Math.random() * 26);
+      const materialGain = 2 + Math.floor(rankIndex / 2) + Math.floor(Math.random() * 3);
+      const congHienGain = 30 + rankIndex * 6 + Math.floor(Math.random() * 18);
+      const tuViGain = 20 + rankIndex * 5 + Math.floor(Math.random() * 12);
+      userData.daoNghe.lastWorkDate = today;
+      addDaoNgheExp(userData, expGain);
+      addDaoNgheMaterial(userData, profession.key, materialGain);
+      const actualCongHien = addCongHien(userData, congHienGain);
+      const craftMaterialRewards = grantRandomCraftMaterials(userData, profession.key, 2 + Math.floor(rankIndex / 2), 'work');
+      const rewardInfo = applyArtifactTuViBonus(userData, member, applyTuViMultiplier(userData, tuViGain), 'general');
+      userData.tuViExp += rewardInfo.amount;
+      await syncTuViRoles(interaction.guild, member, userData.tuViExp).catch(() => null);
+      await syncDiscipleRole(interaction.guild, member, userData.congHienExp).catch(() => null);
+      await syncDaoNgheRole(interaction.guild, member, userData).catch(() => null);
+      saveUsers(users);
+
+      await interaction.reply({ embeds: [uiEmbedBase(`${profession.emoji} ${profession.name} · Làm Nghề`, member, profession.color).setDescription([
+        `${member} ${profession.craftVerb}, hoàn thành một đơn nghề trong tông.`,
+        `+${expGain} tinh thông nghề`,
+        `+${materialGain} ${profession.materialName}`,
+        `Nguyên liệu craft: ${craftMaterialRewards.slice(0, 4).join(', ') || 'không có'}`,
+        `+${rewardInfo.amount} tu vi · +${actualCongHien} cống hiến`,
+        '',
+        formatDaoNgheProgress(userData),
+      ].join('\n'))], flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (action === 'chetao') {
+      await handleCheTao(interaction);
+      return;
+    }
+
+    if (action === 'congthuc') {
+      await handleCongThuc(interaction);
+      return;
+    }
+
+    if (action === 'nguyenlieu') {
+      await handleNguyenLieu(interaction);
+      return;
+    }
+
+    await interaction.reply({ content: 'Hành động nghề nghiệp không hợp lệ.', flags: MessageFlags.Ephemeral });
+  }
+
+  async function handleDiemDanh(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Điểm danh chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    const member = await interaction.guild.members.fetch(interaction.user.id);
+    const today = getTodayString();
+    const yesterday = getTodayString(new Date(Date.now() - ONE_DAY_MS));
+
+    if (userData.lastCheckInDate === today) {
+      await interaction.editReply(`Đạo hữu đã điểm danh hôm nay rồi. Chuỗi hiện tại: **${userData.checkInStreak || 0} ngày**.`);
+      return;
+    }
+
+    const streak = userData.lastCheckInDate === yesterday ? (Number(userData.checkInStreak) || 0) + 1 : 1;
+    const streakBonus = Math.min(streak, DAILY_CHECKIN_MAX_STREAK_BONUS_DAYS);
+    const congHienReward = DAILY_CHECKIN_BASE_CONG_HIEN + streakBonus * 10;
+    const tuViReward = DAILY_CHECKIN_BASE_TUVI + streakBonus * 15;
+    const bonusLines = [];
+
+    userData.lastCheckInDate = today;
+    userData.checkInStreak = streak;
+    userData.lastCheckInAt = Date.now();
+    addCongHien(userData, congHienReward);
+    addTuViExp(userData, tuViReward, member);
+
+    if (streak % 7 === 0) {
+      if (hasInventorySpace(userData, 1)) {
+        addItemToInventory(userData, 'tieu_refactor_linh_thach');
+        bonusLines.push('Thưởng mốc 7 ngày: **Tiểu Refactor Linh Thạch**.');
+      } else {
+        bonusLines.push(`Thưởng mốc 7 ngày bị giữ lại vì ${getInventoryFullMessage(userData, 1)}`);
+      }
+    }
+
+    const tuViSync = await syncTuViRoles(interaction.guild, member, userData.tuViExp, { fromExp: true });
+    const discipleSync = await syncDiscipleRole(interaction.guild, member, userData.congHienExp);
+    saveUsers(users);
+
+    const currentRank = getMemberHighestAutoDiscipleRank(member) || discipleSync?.rank?.roleName || 'Ký Danh Đệ Tử';
+    const nextRank = getMemberSectPosition(member) ? null : getNextDiscipleRankByRole(currentRank);
+    const spendable = getSpendableCongHien(userData);
+    const rankHint = nextRank
+      ? `Hiện tại: **${currentRank}**\nMốc kế tiếp: **${nextRank.roleName}** · cần **${uiNumber(getDiscipleRankRequiredExp(nextRank.roleName))}** cống hiến khả dụng\nDùng **/nangthanphan** nếu đủ. Bot không tự nâng role.`
+      : `Hiện tại: **${currentRank}**\nKhông còn mốc nâng thân phận thường bằng cống hiến.`;
+
+    const embed = new EmbedBuilder()
+      .setColor(GOLD)
+      .setTitle('📅 Điểm Danh Tông Môn')
+      .setDescription(`Đạo hữu đã điểm danh ngày **${today}**.`)
+      .addFields(
+        { name: 'Chuỗi điểm danh', value: `${streak} ngày`, inline: true },
+        { name: 'Nhận được', value: `+${uiNumber(congHienReward)} cống hiến\n+${uiNumber(tuViReward)} tu vi`, inline: true },
+        { name: 'Cống hiến khả dụng', value: `${uiNumber(spendable)}`, inline: true },
+        { name: 'Mốc thân phận', value: rankHint, inline: false },
+        { name: 'Ghi chú', value: bonusLines.length > 0 ? bonusLines.join('\n') : 'Mỗi ngày điểm danh một lần. Mốc 7 ngày có thưởng thêm vật phẩm.', inline: false },
+      );
+
+    if (!tuViSync.ok) {
+      embed.addFields({ name: 'Cảnh báo đồng bộ tu vi', value: tuViSync.message, inline: false });
+    }
+
+    await interaction.editReply({ embeds: [embed] });
+  }
+
+  async function handleThienTuong(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Thiên tượng chỉ xem được trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const result = calculateThienTuong(interaction.guild.id, getTodayString());
+    const embed = new EmbedBuilder()
+      .setColor(GOLD)
+      .setTitle(`Thiên Tượng Hôm Nay - ${result.name}`)
+      .setDescription(result.omen)
+      .addFields(
+        { name: 'Ngày đạo lịch', value: result.date, inline: true },
+        { name: 'Chủ hành', value: `${result.element} hành`, inline: true },
+        { name: 'Đạo áp', value: `${result.pressure}/100`, inline: true },
+        { name: 'Dấu hiệu thiên cơ', value: [`Thiên tượng số: **${result.skyScore}/997**`, `Ngũ hành thiên tượng: ${formatElementScores(result.scores)}`].join('\n'), inline: false },
+        { name: 'Ảnh hưởng nên tận dụng', value: result.effect, inline: false },
+      )
+      .setFooter({ text: 'Thiên tượng đổi mỗi ngày theo giờ Việt Nam và khí số của tông môn.' });
 
     await interaction.reply({ embeds: [embed] });
   }
 
-  async function handleCoDuyen(interaction) {
+
+  async function syncDestinyRole(member, result, roleNames, reason) {
+    // Menh cach va Dao the da chuyen sang data/profile de tiet kiem role Discord.
+    // Khong tao/gán role nua, tranh vuot gioi han 250 role/server.
+    return { ok: true, skipped: true };
+  }
+
+
+
+  async function syncOnboardingDestinyRoles(member, userData) {
+    const results = [];
+
+    if (userData?.huyenMach?.name) {
+      results.push(await syncDestinyRole(member, userData.huyenMach, DAO_THE_ROLE_NAMES, 'Gan role Dao The tuyen Nhap Dao'));
+    }
+
+    if (userData?.menhCach?.name) {
+      results.push(await syncDestinyRole(member, userData.menhCach, MENH_CACH_ROLE_NAMES, 'Gan role Menh Cach tuyen Nhap Dao'));
+    }
+
+    const warnings = results
+      .filter((result) => result && !result.ok && result.message)
+      .map((result) => result.message);
+
+    return warnings.length > 0
+      ? { ok: false, message: [...new Set(warnings)].join('\n') }
+      : { ok: true };
+  }
+
+  async function handleXemMenh(interaction) {
     if (!interaction.inGuild()) {
-      await interaction.reply({ content: 'Cơ duyên chỉ hiển lộ trong tông môn.', flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: 'Xem mệnh chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
       return;
     }
 
     const users = loadUsers();
     const userData = getOrCreateUser(users, interaction.user.id);
-    const now = Date.now();
-
-    if (now - userData.lastCoDuyenAt < CO_DUYEN_COOLDOWN_MS) {
-      const remaining = Math.ceil((CO_DUYEN_COOLDOWN_MS - (now - userData.lastCoDuyenAt)) / 3600000);
-      await interaction.reply({ content: `Cơ duyên chưa tới, đạo hữu hãy quay lại sau khoảng ${remaining} giờ.`, flags: MessageFlags.Ephemeral });
-      return;
-    }
-
-    await interaction.deferReply();
-
     const member = await interaction.guild.members.fetch(interaction.user.id);
-    const statusResolve = await resolveTemporaryStatusEffects(interaction.guild, member, userData);
+    let ngay = interaction.options.getInteger('ngay');
+    let thang = interaction.options.getInteger('thang');
+    let nam = interaction.options.getInteger('nam');
+    const hasAnyDate = ngay !== null || thang !== null || nam !== null;
 
-    if (!statusResolve.ok) {
-      await interaction.editReply(statusResolve.message);
+    if (userData.menhCach) {
+      const roleSync = await syncDestinyRole(member, userData.menhCach, MENH_CACH_ROLE_NAMES, 'Dong bo role Menh Cach da dinh');
+      await interaction.reply({
+        content: roleSync.ok ? undefined : roleSync.message,
+        embeds: [buildMenhCachEmbed(member, userData.menhCach, true, 0)],
+        components: buildDestinyResultComponents('menh', 0, interaction.user.id, getMemberDiscipleRank(member) ?? 'Tán Tu', false),
+        flags: MessageFlags.Ephemeral,
+      });
       return;
     }
 
-    const event = pickCoDuyenEvent(userData);
-    const effectKey = event.effectKey ?? event.key;
-    userData.lastCoDuyenAt = now;
-
-    let detail = event.description ?? '';
-    let effect = '';
-    let syncTuVi = false;
-    let syncDisciple = false;
-    const previousLuckBonus = userData.coDuyenLuckBonus ?? 0;
-
-    if (previousLuckBonus > 0 && effectKey !== 'thien_co') {
-      userData.coDuyenLuckBonus = 0;
+    const storedDate = getStoredBirthDate(userData);
+    if (!hasAnyDate && storedDate) {
+      ({ ngay, thang, nam } = storedDate);
     }
 
-    if (effectKey === 'tang_kinh') {
-      const gain = applyTuViMultiplier(userData, 80);
-      const foundFragment = Math.random() < 0.35;
-
-      userData.tuViExp += gain;
-      detail = detail || 'Ngươi vô tình nghe được tiếng chuông cổ vọng ra từ Tàng Kinh Các. Một quyển tàn kinh tự bay đến trước mặt.';
-      effect = `+${gain} tu vi exp.`;
-
-      if (foundFragment) {
-        userData.tanQuyenCount += 1;
-        setTemporaryStatus(userData, 'Cơ Duyên Gia Thân', ONE_DAY_MS, { tuViMultiplierValue: 1.15 });
-        effect += ' Lại nhận thêm một mảnh Tàn Quyển, tu vi nhận được trong ngày tăng x1.15.';
-      }
-
-      syncTuVi = true;
-    }
-
-    if (effectKey === 'cao_nhan') {
-      addCongHien(userData, 30);
-      detail = detail || 'Một vị lão giả không rõ lai lịch chỉ nhìn qua đạo tâm của ngươi rồi cười nhạt: “Sai ở chỗ tâm chưa tĩnh.”';
-      effect = '+30 cống hiến.';
-
-      if (isTemporaryStatusActive(userData, 'Tâm Ma Quấn Thân')) {
-        userData.temporaryStatus = null;
-        userData.temporaryStatusExpireAt = 0;
-        userData.dotPhaPenaltyUntil = 0;
-        effect += ' Tâm Ma Quấn Thân được hóa giải.';
-      } else if (Date.now() < (userData.dotPhaPenaltyUntil ?? 0)) {
-        userData.dotPhaPenaltyUntil = 0;
-        effect += ' Tâm ma trong đạo tâm được giảm bớt.';
-      }
-
-      syncDisciple = true;
-    }
-
-    if (effectKey === 'tam_ma') {
-      setTemporaryStatus(userData, 'Tâm Ma Quấn Thân', ONE_DAY_MS, { dotPhaPenalty: true });
-      detail = detail || 'Trong lúc nhập định, ngươi thấy chính mình ở một tương lai thất bại, đạo tâm dao động.';
-      effect = 'Tâm Ma Quấn Thân trong 24 giờ, giảm tỉ lệ đột phá.';
-    }
-
-    if (effectKey === 'tan_quyen') {
-      userData.tanQuyenCount += 1;
-      setTemporaryStatus(userData, 'Cơ Duyên Gia Thân', ONE_DAY_MS, { tuViMultiplierValue: 1.15 });
-      detail = detail || 'Trong đống cổ thư mục nát, ngươi tìm được một mảnh công pháp thất truyền.';
-      effect = 'Nhận Tàn Quyển, công pháp đang tu được cộng hưởng nhẹ. Tu vi nhận được trong ngày tăng x1.15.';
-    }
-
-    if (effectKey === 'linh_khi') {
-      setTemporaryStatus(userData, 'Linh Khí Bạo Phát', ONE_DAY_MS, { tuViMultiplierValue: 2 });
-      detail = detail || 'Linh khí trong động phủ đột nhiên cuộn trào, kinh mạch mở rộng, đạo cơ rung chuyển.';
-      effect = 'Tu vi nhận được trong hôm nay tăng x2.';
-    }
-
-    if (effectKey === 'dao_tam') {
-      setTemporaryStatus(userData, 'Đạo Tâm Kiên Định', ONE_DAY_MS, { dotPhaBonus: true });
-      detail = detail || 'Sau một đêm tĩnh tọa, ngươi không còn bị tạp niệm quấy nhiễu.';
-      effect = 'Tăng tỉ lệ đột phá lần sau.';
-    }
-
-    if (effectKey === 'nghich_luu') {
-      detail = detail || 'Linh khí hấp thu quá nhanh khiến kinh mạch rối loạn.';
-      effect = 'Không nhận thưởng, nhưng cooldown /coduyen vẫn được tính.';
-    }
-
-    if (effectKey === 'thien_co') {
-      userData.coDuyenLuckBonus = Math.min(30, (userData.coDuyenLuckBonus ?? 0) + 10);
-      detail = detail || 'Thiên đạo hôm nay không đáp lại lời cầu duyên của ngươi.';
-      effect = `Không nhận thưởng. May mắn lần cầu duyên sau tăng nhẹ (+${userData.coDuyenLuckBonus}% cát duyên).`;
-    }
-
-    if (syncTuVi) {
-      const syncResult = await syncTuViRoles(interaction.guild, member, userData.tuViExp);
-
-      if (!syncResult.ok) {
-        await interaction.editReply(syncResult.message);
-        return;
-      }
-    }
-
-    if (syncDisciple) {
-      const syncResult = await syncDiscipleRole(interaction.guild, member, userData.congHienExp);
-
-      if (!syncResult.ok) {
-        await interaction.editReply(syncResult.message);
-        return;
-      }
-    }
-
-    const statusSync = await syncTemporaryStatusRole(interaction.guild, member, userData);
-
-    if (!statusSync.ok) {
-      await interaction.editReply(statusSync.message);
+    if (ngay === null || thang === null || nam === null) {
+      await interaction.reply({ content: 'Muốn soi mệnh lần đầu cần nhập đủ `/xemmenh ngay:<ngày> thang:<tháng> nam:<năm>` hoặc dùng `/linhcan` trước trong Động Phủ Nhập Môn để lưu ngày sinh.', flags: MessageFlags.Ephemeral });
       return;
     }
 
+    if (!isValidDate(ngay, thang, nam)) {
+      await interaction.reply({ content: 'Ngày sinh không hợp lệ, đạo hữu hãy nhập lại.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const result = calculateMenhCach(ngay, thang, nam, interaction.user.id, member.displayName);
+    userData.menhCach = result;
+    const roleSync = await syncDestinyRole(member, result, MENH_CACH_ROLE_NAMES, 'Gan role Menh Cach moi');
+    saveUsers(users);
+    await interaction.reply({
+      content: roleSync.ok ? undefined : roleSync.message,
+      embeds: [buildMenhCachEmbed(member, result, false, 0)],
+      components: buildDestinyResultComponents('menh', 0, interaction.user.id, getMemberDiscipleRank(member) ?? 'Tán Tu', false),
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  async function handleDoHuyenMach(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Dò huyền mạch chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    const member = await interaction.guild.members.fetch(interaction.user.id);
+    let ngay = interaction.options.getInteger('ngay');
+    let thang = interaction.options.getInteger('thang');
+    let nam = interaction.options.getInteger('nam');
+    const hasAnyDate = ngay !== null || thang !== null || nam !== null;
+
+    if (userData.huyenMach) {
+      const roleSync = await syncDestinyRole(member, userData.huyenMach, DAO_THE_ROLE_NAMES, 'Dong bo role Dao The da khac');
+      await interaction.reply({
+        content: roleSync.ok ? undefined : roleSync.message,
+        embeds: [buildHuyenMachEmbed(member, userData.huyenMach, true, 0)],
+        components: buildDestinyResultComponents('huyen', 0, interaction.user.id, getMemberDiscipleRank(member) ?? 'Tán Tu', false),
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    const storedDate = getStoredBirthDate(userData);
+    if (!hasAnyDate && storedDate) {
+      ({ ngay, thang, nam } = storedDate);
+    }
+
+    if (ngay === null || thang === null || nam === null) {
+      await interaction.reply({ content: 'Muốn dò huyền mạch lần đầu cần nhập đủ `/dohuyenmach ngay:<ngày> thang:<tháng> nam:<năm>` hoặc dùng `/linhcan` trước trong Động Phủ Nhập Môn để lưu ngày sinh.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (!isValidDate(ngay, thang, nam)) {
+      await interaction.reply({ content: 'Ngày sinh không hợp lệ, đạo hữu hãy nhập lại.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const result = calculateHuyenMach(ngay, thang, nam, interaction.user.id, member.displayName);
+    userData.huyenMach = result;
+    const roleSync = await syncDestinyRole(member, result, DAO_THE_ROLE_NAMES, 'Gan role Dao The moi');
+    saveUsers(users);
+    await interaction.reply({
+      content: roleSync.ok ? undefined : roleSync.message,
+      embeds: [buildHuyenMachEmbed(member, result, false, 0)],
+      components: buildDestinyResultComponents('huyen', 0, interaction.user.id, getMemberDiscipleRank(member) ?? 'Tán Tu', false),
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  async function handleNangThanPhan(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Nâng thân phận chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    const member = await interaction.guild.members.fetch(interaction.user.id);
+
+    if (getMemberSectPosition(member)) {
+      await interaction.editReply('Đạo hữu đang giữ chức vị tông môn nên không dùng tuyến nâng cấp đệ tử thường. Nhân sự cấp cao vẫn phải có quy trình, thật đáng sợ.');
+      return;
+    }
+
+    let currentRank = getMemberHighestAutoDiscipleRank(member);
+    if (!currentRank) {
+      const sectRole = findRoleByName(interaction.guild, DAI_DAO_TONG_ROLE_NAME);
+      const kyDanhRole = findRoleByName(interaction.guild, 'Ký Danh Đệ Tử');
+
+      if (!sectRole || !member.roles.cache.has(sectRole.id)) {
+        await interaction.editReply('Đạo hữu chưa được duyệt vào **Đại Đạo Tông**, chưa thể nâng thân phận. Hãy dùng tuyến xin gia nhập trước.');
+        return;
+      }
+
+      if (!kyDanhRole) {
+        await interaction.editReply('Thiếu role **Ký Danh Đệ Tử**. Hãy chạy `npm run create:roles` hoặc tạo role này trước.');
+        return;
+      }
+
+      const blocker = await getDiscipleRoleManageBlocker(interaction.guild, [kyDanhRole]);
+      if (blocker) {
+        await interaction.editReply(blocker);
+        return;
+      }
+
+      await member.roles.add(kyDanhRole, 'Khoi tao than phan Ky Danh bang /nangthanphan.');
+      await interaction.editReply('Đã nhận thân phận khởi điểm **Ký Danh Đệ Tử**. Dùng lại `/nangthanphan` khi muốn tiêu cống hiến để lên bậc tiếp theo.');
+      await sendChannelAnnouncement(interaction, { content: `🏮 ${member} đã chính thức nhận thân phận **Ký Danh Đệ Tử** trong **Đại Đạo Tông**.` });
+      return;
+    }
+
+    const nextRank = getNextDiscipleRankByRole(currentRank);
+    if (!nextRank) {
+      await interaction.editReply(`Thân phận **${currentRank}** đã đạt mốc nâng cấp thường cao nhất. Muốn lên cao hơn cần cơ chế truyền thừa riêng.`);
+      return;
+    }
+
+    const cost = getDiscipleRankRequiredExp(nextRank.roleName);
+    const balance = getSpendableCongHien(userData);
+
+    if (balance < cost) {
+      await interaction.editReply(`Chưa đủ cống hiến để nâng từ **${currentRank}** lên **${nextRank.roleName}**. Cần **${uiNumber(cost)}**, hiện có **${uiNumber(balance)}**, còn thiếu **${uiNumber(cost - balance)}**.`);
+      return;
+    }
+
+    const targetRole = findRoleByName(interaction.guild, nextRank.roleName);
+    const oldRoles = member.roles.cache.filter((role) => AUTO_DISCIPLE_THRESHOLDS.map((entry) => entry.roleName).includes(role.name));
+
+    if (!targetRole) {
+      await interaction.editReply(`Thiếu role **${nextRank.roleName}**. Hãy chạy npm run create:roles hoặc tạo role này trước.`);
+      return;
+    }
+
+    const blocker = await getDiscipleRoleManageBlocker(interaction.guild, [targetRole, ...oldRoles.values()]);
+    if (blocker) {
+      await interaction.editReply(blocker);
+      return;
+    }
+
+    userData.congHienBalance = Math.max(0, balance - cost);
+    if (oldRoles.size > 0) {
+      await member.roles.remove(oldRoles, 'Nang cap than phan bang cong hien.');
+    }
+    await member.roles.add(targetRole, 'Nang cap than phan bang cong hien.');
     saveUsers(users);
 
-    const embed = new EmbedBuilder()
+    const privateEmbed = new EmbedBuilder()
       .setColor(GOLD)
-      .setTitle(`Cơ Duyên - ${event.name}`)
-      .setDescription(detail)
+      .setTitle('🎖️ Thăng Thân Phận')
+      .setDescription(`Đã tiêu **${uiNumber(cost)} cống hiến** để thăng từ **${currentRank}** lên **${nextRank.roleName}**.`)
       .addFields(
-        { name: 'Nhóm', value: event.group, inline: true },
-        { name: 'Đạo hữu', value: `${member}`, inline: true },
-        { name: 'Hiệu ứng', value: effect || 'Không có.', inline: false },
-        { name: 'Trạng thái', value: formatTemporaryStatus(userData), inline: true },
+        { name: 'Cống hiến còn lại', value: `**${uiNumber(userData.congHienBalance)}**`, inline: true },
+        { name: 'Ghi chú', value: 'Thân phận chỉ tăng qua `/nangthanphan`, không tự tăng theo cống hiến.', inline: false },
       );
 
-    await interaction.editReply({ embeds: [embed] });
+    await interaction.editReply({ embeds: [privateEmbed] });
+
+    const publicEmbed = new EmbedBuilder()
+      .setColor(GOLD)
+      .setTitle('🎖️ Thăng Thân Phận')
+      .setDescription(`${member} đã thăng lên **${nextRank.roleName}**.`)
+      .addFields(
+        { name: 'Trước', value: currentRank, inline: true },
+        { name: 'Sau', value: nextRank.roleName, inline: true },
+      )
+      .setFooter({ text: 'Mọi lần thăng bậc đều thông qua /nangthanphan.' });
+
+    await sendChannelAnnouncement(interaction, { embeds: [publicEmbed] });
   }
 
   async function handleLuanDao(interaction) {
@@ -2076,7 +7102,156 @@ const AUTO_DISCIPLE_THRESHOLDS = [
 
 
 
-  // ===== Trảm Yêu Bảng / Nhiệm vụ có nút chọn =====
+
+  function normalizeMissionTier(tier) {
+    return MISSION_TIER_CONFIGS[String(tier || '').trim()] ? String(tier).trim() : 'tap_dich';
+  }
+
+  function getMissionTierConfig(tier) {
+    return MISSION_TIER_CONFIGS[normalizeMissionTier(tier)];
+  }
+
+  function getMissionTierLabel(tier) {
+    return getMissionTierConfig(tier).label;
+  }
+
+  function getMissionTierRequirementText(tier) {
+    const config = getMissionTierConfig(tier);
+    const normalizedTier = config.key;
+
+    if (normalizedTier === 'tap_dich') return 'Ký Danh Đệ Tử / Tạp Dịch Đệ Tử';
+    if (normalizedTier === 'ngoai_mon') return 'Ngoại Môn Đệ Tử';
+    if (normalizedTier === 'noi_mon') return 'Nội Môn Đệ Tử trở lên trong hàng đệ tử';
+    return 'Trưởng Lão hoặc chức vị tông môn cấp cao';
+  }
+
+  function getDiscipleRankOrderIndex(roleName) {
+    return DISCIPLE_RANK_ROLES.indexOf(roleName);
+  }
+
+  function getNextDiscipleRankByRole(currentRoleName) {
+    const index = AUTO_DISCIPLE_THRESHOLDS.findIndex((entry) => entry.roleName === currentRoleName);
+    if (index < 0) return AUTO_DISCIPLE_THRESHOLDS[0];
+    return AUTO_DISCIPLE_THRESHOLDS[index + 1] ?? null;
+  }
+
+  function hasDiscipleRankAtLeast(member, minRoleName) {
+    const currentRole = getMemberDiscipleRank(member);
+    const currentIndex = getDiscipleRankOrderIndex(currentRole);
+    const minIndex = getDiscipleRankOrderIndex(minRoleName);
+    return currentIndex >= 0 && minIndex >= 0 && currentIndex >= minIndex;
+  }
+
+  function getMissionTierForMember(member) {
+    if (!member) return null;
+
+    // Gameplay tier is determined only by explicit Thiên Đạo roles.
+    // Discord Administrator permission is NOT treated as Trưởng Lão,
+    // so server admins can remove sect-position roles and play as normal disciples.
+    const sectPosition = getMemberSectPosition(member);
+    if (sectPosition && SENIOR_DISCIPLE_APPROVER_ROLE_NAMES.includes(sectPosition)) return 'truong_lao';
+
+    const rank = getMemberDiscipleRank(member);
+    if (['Ký Danh Đệ Tử', 'Tạp Dịch Đệ Tử'].includes(rank)) return 'tap_dich';
+    if (rank === 'Ngoại Môn Đệ Tử') return 'ngoai_mon';
+    if (['Nội Môn Đệ Tử', 'Chân Truyền Đệ Tử', 'Thân Truyền Đệ Tử', 'Thánh Tử', 'Thánh Nữ'].includes(rank)) return 'noi_mon';
+
+    return null;
+  }
+
+  function hasMissionTierAccess(member, tier) {
+    return getMissionTierForMember(member) === normalizeMissionTier(tier);
+  }
+
+  function getMissionTierAccessMessage(tier, member = null) {
+    const ownTier = member ? getMissionTierForMember(member) : null;
+    const ownText = ownTier ? ` Thân phận hiện tại của đạo hữu thuộc bảng **${getMissionTierConfig(ownTier).shortLabel}**.` : '';
+    return `Bảng này chỉ dành cho **${getMissionTierRequirementText(tier)}**.${ownText}`;
+  }
+
+  function getHighestMissionTierForMember(member) {
+    return getMissionTierForMember(member) ?? 'tap_dich';
+  }
+
+  function getMissionTierFromInteraction(interaction, fallback = null) {
+    const optionTier = interaction.options?.getString?.('cap', false);
+    if (optionTier) return normalizeMissionTier(optionTier);
+    return normalizeMissionTier(fallback || getHighestMissionTierForMember(interaction.member));
+  }
+
+  function inferMissionTierFromTemplate(template) {
+    if (template?.tier && MISSION_TIER_CONFIGS[template.tier]) {
+      return template.tier;
+    }
+
+    const minRealm = Number(template.minRealmIndex) || 0;
+    if (minRealm >= 5) return 'truong_lao';
+    if (minRealm >= 3) return 'noi_mon';
+    if (minRealm >= 1) return 'ngoai_mon';
+    return 'tap_dich';
+  }
+
+  function getMissionsForTier(data, tier, kind = null) {
+    const normalizedTier = normalizeMissionTier(tier);
+    const normalizedKind = ['don', 'bang'].includes(kind) ? kind : null;
+    return data.missions
+      .filter((mission) => normalizeMissionTier(mission.tier) === normalizedTier)
+      .filter((mission) => !normalizedKind || mission.missionKind === normalizedKind)
+      .sort((a, b) => {
+        const realmDiff = (Number(a.requiredRealmIndex) || 0) - (Number(b.requiredRealmIndex) || 0);
+        if (realmDiff !== 0) return realmDiff;
+        const rewardDiff = (Number(a.rewardTotal) || 0) - (Number(b.rewardTotal) || 0);
+        if (rewardDiff !== 0) return rewardDiff;
+        return String(a.name || '').localeCompare(String(b.name || ''), 'vi');
+      });
+  }
+
+  function normalizeMissionOpenLimits(openLimits = {}, fallback = MISSION_DEFAULT_OPEN_LIMIT) {
+    const normalized = {};
+    for (const tier of MISSION_TIER_ORDER) {
+      const raw = typeof openLimits === 'object' && openLimits ? openLimits[tier] : fallback;
+      normalized[tier] = Math.max(MISSION_MIN_OPEN_LIMIT, Math.min(MISSION_MAX_OPEN_LIMIT, Number(raw) || Number(fallback) || MISSION_DEFAULT_OPEN_LIMIT));
+    }
+    return normalized;
+  }
+
+  function selectMissionTemplatesForTier(tier, limit) {
+    const normalizedTier = normalizeMissionTier(tier);
+    const config = getMissionTierConfig(normalizedTier);
+    const filtered = MISSION_TEMPLATES.filter((template) => inferMissionTierFromTemplate(template) === normalizedTier);
+    const fallbackPool = MISSION_TEMPLATES.filter((template) => (Number(template.minRealmIndex) || 0) >= config.minRealmIndex);
+    const basePool = filtered.length > 0 ? filtered : fallbackPool;
+    const pool = basePool.length > 0 ? basePool : MISSION_TEMPLATES;
+    const shuffled = [...pool].sort(() => Math.random() - 0.5);
+    const result = [];
+
+    for (let index = 0; index < Math.max(0, Number(limit) || 0); index += 1) {
+      result.push(shuffled[index % shuffled.length]);
+    }
+
+    return result;
+  }
+
+  function getTierMissionName(template, tier) {
+    const prefix = {
+      tap_dich: 'Tạp Dịch',
+      ngoai_mon: 'Ngoại Môn',
+      noi_mon: 'Nội Môn',
+      truong_lao: 'Trưởng Lão',
+    }[normalizeMissionTier(tier)] ?? 'Tông Môn';
+
+    return `${prefix} · ${template.name}`.slice(0, 100);
+  }
+
+  function getDungeonTier(dungeon) {
+    const minRealm = Number(dungeon.minRealmIndex) || 0;
+    if (minRealm >= 5) return 'truong_lao';
+    if (minRealm >= 3) return 'noi_mon';
+    if (minRealm >= 2) return 'ngoai_mon';
+    return 'tap_dich';
+  }
+
+  // ===== Nhiệm Vụ Nội Tông / bảng có nút chọn =====
   function ensureMissionsFile() {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -2085,7 +7260,9 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     if (!fs.existsSync(MISSIONS_FILE)) {
       const data = {
         date: null,
+        contentVersion: MISSION_CONTENT_VERSION,
         openLimit: MISSION_DEFAULT_OPEN_LIMIT,
+        openLimits: normalizeMissionOpenLimits({}, MISSION_DEFAULT_OPEN_LIMIT),
         missions: [],
       };
       fs.writeFileSync(MISSIONS_FILE, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
@@ -2112,14 +7289,17 @@ const AUTO_DISCIPLE_THRESHOLDS = [
   }
 
   function normalizeMissionData(data = {}) {
-    const openLimit = Math.max(
+    const fallbackOpenLimit = Math.max(
       MISSION_MIN_OPEN_LIMIT,
       Math.min(MISSION_MAX_OPEN_LIMIT, Number(data.openLimit) || MISSION_DEFAULT_OPEN_LIMIT),
     );
+    const openLimits = normalizeMissionOpenLimits(data.openLimits, fallbackOpenLimit);
 
     return {
       date: typeof data.date === 'string' ? data.date : null,
-      openLimit,
+      contentVersion: typeof data.contentVersion === 'string' ? data.contentVersion : null,
+      openLimit: fallbackOpenLimit,
+      openLimits,
       missions: Array.isArray(data.missions) ? data.missions.map(normalizeMission) : [],
     };
   }
@@ -2129,6 +7309,8 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       id: String(mission.id || ''),
       templateKey: String(mission.templateKey || ''),
       type: mission.type === 'clean' ? 'clean' : 'hunt',
+      tier: normalizeMissionTier(mission.tier || 'tap_dich'),
+      dangerKey: getMissionDangerKey(mission, normalizeMissionTier(mission.tier || 'tap_dich')),
       name: String(mission.name || 'Vô danh nhiệm vụ'),
       aura: String(mission.aura || 'Khí tức mơ hồ'),
       requiredRealmIndex: Math.max(0, Math.min(TU_VI_REALMS.length - 1, Number(mission.requiredRealmIndex) || 0)),
@@ -2143,61 +7325,216 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       revealedAt: Number(mission.revealedAt) || 0,
       completedAt: Number(mission.completedAt) || 0,
       resultText: typeof mission.resultText === 'string' ? mission.resultText : null,
+      outcome: ['success', 'failed', 'escaped'].includes(mission.outcome) ? mission.outcome : null,
+      completedById: mission.completedById ? String(mission.completedById) : null,
+      completedByName: typeof mission.completedByName === 'string' ? mission.completedByName : null,
+      completionTitle: typeof mission.completionTitle === 'string' ? mission.completionTitle : null,
+      completedPartySize: Math.max(0, Number(mission.completedPartySize) || 0),
       enemyPower: Number(mission.enemyPower) || 0,
       partyPower: Number(mission.partyPower) || 0,
       winChance: Number(mission.winChance) || 0,
+      awaitingLootChoice: Boolean(mission.awaitingLootChoice),
+      pendingLoot: mission.pendingLoot && typeof mission.pendingLoot === 'object' ? mission.pendingLoot : null,
+      lootChoice: mission.lootChoice ? String(mission.lootChoice) : null,
+      strategyKey: MISSION_STRATEGY_CONFIGS[mission.strategyKey] ? String(mission.strategyKey) : null,
+      partyRoleSnapshot: mission.partyRoleSnapshot && typeof mission.partyRoleSnapshot === 'object' ? mission.partyRoleSnapshot : null,
+      combat: mission.combat && typeof mission.combat === 'object' ? mission.combat : null,
+      activeCombatId: mission.activeCombatId ? String(mission.activeCombatId) : null,
+      enemyName: mission.enemyName ? String(mission.enemyName) : null,
+      enemyPowerMultiplier: Number(mission.enemyPowerMultiplier) || 0,
+      monsterKey: mission.monsterKey ? String(mission.monsterKey) : null,
+      monsterArchetype: mission.monsterArchetype ? String(mission.monsterArchetype) : null,
+      lootFamily: mission.lootFamily ? String(mission.lootFamily) : null,
+      family: mission.family ? String(mission.family) : null,
+      sourceFamilyName: mission.sourceFamilyName ? String(mission.sourceFamilyName) : null,
+      defectFamily: mission.defectFamily ? String(mission.defectFamily) : null,
+      missionCategory: mission.missionCategory ? String(mission.missionCategory) : null,
+      actionName: mission.actionName ? String(mission.actionName) : null,
+      targetStat: mission.targetStat ? String(mission.targetStat) : null,
+      materialCore: mission.materialCore ? String(mission.materialCore) : null,
+      description: mission.description ? String(mission.description) : null,
+      successText: mission.successText ? String(mission.successText) : null,
+      failText: mission.failText ? String(mission.failText) : null,
+      contentTier: mission.contentTier ? String(mission.contentTier) : getUnifiedContentTier(normalizeMissionTier(mission.tier)).key,
+      missionKind: ['don', 'bang', 'hidden', 'bicanh'].includes(mission.missionKind) ? mission.missionKind : (mission.tier === 'tap_dich' ? 'don' : 'bang'),
+      recommendedProfessions: Array.isArray(mission.recommendedProfessions) ? mission.recommendedProfessions.map(String).slice(0, 4) : [],
+      powerScale: mission.powerScale && typeof mission.powerScale === 'object' ? mission.powerScale : null,
+      rewardScale: Number(mission.rewardScale) || 1,
+      tags: Array.isArray(mission.tags) ? mission.tags.map(String).slice(0, 12) : [],
+      bicanhSituationKey: mission.bicanhSituationKey ? String(mission.bicanhSituationKey) : null,
+      bicanhSituationName: mission.bicanhSituationName ? String(mission.bicanhSituationName) : null,
+      bicanhSituationText: mission.bicanhSituationText ? String(mission.bicanhSituationText) : null,
+      bicanhSituationType: mission.bicanhSituationType ? String(mission.bicanhSituationType) : null,
+      kyNgoBonus: mission.kyNgoBonus && typeof mission.kyNgoBonus === 'object' ? {
+        directStats: normalizeDirectStats(mission.kyNgoBonus.directStats || {}),
+        hours: Math.max(1, Number(mission.kyNgoBonus.hours) || 4),
+      } : null,
+      ticketChannelId: mission.ticketChannelId ? String(mission.ticketChannelId) : null,
+      ticketMessageId: mission.ticketMessageId ? String(mission.ticketMessageId) : null,
+      ticketCreatedAt: Number(mission.ticketCreatedAt) || 0,
     };
+  }
+
+  function ensureMissionTiersAvailable(data) {
+    const normalized = normalizeMissionData(data);
+    const openLimits = normalizeMissionOpenLimits(normalized.openLimits, normalized.openLimit);
+    let changed = false;
+
+    for (const tier of MISSION_TIER_ORDER) {
+      const limit = openLimits[tier] ?? MISSION_DEFAULT_OPEN_LIMIT;
+      const tierMissions = getMissionsForTier(normalized, tier);
+
+      if (tierMissions.length !== limit) {
+        const generated = generateDailyMissions(openLimits, normalized.date || getTodayString(), tier);
+        normalized.missions = [
+          ...normalized.missions.filter((mission) => normalizeMissionTier(mission.tier) !== tier),
+          ...generated.missions,
+        ];
+        changed = true;
+      }
+    }
+
+    normalized.openLimits = openLimits;
+    normalized.openLimit = openLimits.tap_dich ?? MISSION_DEFAULT_OPEN_LIMIT;
+    normalized.contentVersion = MISSION_CONTENT_VERSION;
+    return { data: normalizeMissionData(normalized), changed };
   }
 
   function getMissionDataForToday() {
     const today = getTodayString();
     const data = loadMissionData();
 
-    if (data.date !== today || !Array.isArray(data.missions) || data.missions.length === 0) {
-      const refreshed = generateDailyMissions(data.openLimit, today);
+    if (data.date !== today || data.contentVersion !== MISSION_CONTENT_VERSION || !Array.isArray(data.missions) || data.missions.length === 0) {
+      const refreshed = generateDailyMissions(data.openLimits || data.openLimit, today);
       saveMissionData(refreshed);
       return refreshed;
     }
 
-    return data;
+    const checked = ensureMissionTiersAvailable(data);
+    if (checked.changed) {
+      saveMissionData(checked.data);
+    }
+
+    return checked.data;
   }
 
-  function generateDailyMissions(openLimit = MISSION_DEFAULT_OPEN_LIMIT, date = getTodayString()) {
-    const limit = Math.max(MISSION_MIN_OPEN_LIMIT, Math.min(MISSION_MAX_OPEN_LIMIT, Number(openLimit) || MISSION_DEFAULT_OPEN_LIMIT));
-    const templates = [...MISSION_TEMPLATES].sort(() => Math.random() - 0.5).slice(0, limit);
-    const missions = templates.map((template, index) => createMissionFromTemplate(template, index + 1, date));
+  function generateDailyMissions(openLimit = MISSION_DEFAULT_OPEN_LIMIT, date = getTodayString(), onlyTier = null) {
+    const openLimits = normalizeMissionOpenLimits(typeof openLimit === 'object' ? openLimit : {}, typeof openLimit === 'number' ? openLimit : MISSION_DEFAULT_OPEN_LIMIT);
+    const tiers = onlyTier ? [normalizeMissionTier(onlyTier)] : MISSION_TIER_ORDER;
+    const missions = [];
+
+    for (const tier of tiers) {
+      const limit = openLimits[tier] ?? MISSION_DEFAULT_OPEN_LIMIT;
+      const templates = selectMissionTemplatesForTier(tier, limit);
+      templates.forEach((template, index) => {
+        missions.push(createMissionFromTemplate(template, index + 1, date, tier));
+      });
+    }
 
     return {
       date,
-      openLimit: limit,
+      contentVersion: MISSION_CONTENT_VERSION,
+      openLimit: openLimits.tap_dich ?? MISSION_DEFAULT_OPEN_LIMIT,
+      openLimits,
       missions,
     };
   }
 
-  function createMissionFromTemplate(template, order, date) {
-    const requiredRealmIndex = Math.max(0, Math.min(TU_VI_REALMS.length - 1, Number(template.minRealmIndex) || 0));
+  function regenerateMissionTier(data, tier, openLimit) {
+    const normalizedTier = normalizeMissionTier(tier);
+    const normalizedData = normalizeMissionData(data);
+    const openLimits = normalizeMissionOpenLimits(normalizedData.openLimits, normalizedData.openLimit);
+    openLimits[normalizedTier] = Math.max(MISSION_MIN_OPEN_LIMIT, Math.min(MISSION_MAX_OPEN_LIMIT, Number(openLimit) || MISSION_DEFAULT_OPEN_LIMIT));
+    const generated = generateDailyMissions(openLimits, normalizedData.date || getTodayString(), normalizedTier);
+
+    return normalizeMissionData({
+      date: normalizedData.date || getTodayString(),
+      contentVersion: MISSION_CONTENT_VERSION,
+      openLimit: openLimits.tap_dich,
+      openLimits,
+      missions: [
+        ...normalizedData.missions.filter((mission) => normalizeMissionTier(mission.tier) !== normalizedTier),
+        ...generated.missions,
+      ],
+    });
+  }
+
+  function createMissionFromTemplate(template, order, date, tier = null) {
+    const missionTier = normalizeMissionTier(tier || inferMissionTierFromTemplate(template));
+    const tierConfig = getMissionTierConfig(missionTier);
+    const requiredRealmIndex = Math.max(tierConfig.minRealmIndex, Math.min(TU_VI_REALMS.length - 1, Number(template.minRealmIndex) || 0));
     const minLevel = requiredRealmIndex * MINOR_REALMS.length;
+    const dangerKey = getMissionDangerKey(template, missionTier);
+    const dangerConfig = getMissionDangerConfig(dangerKey);
+    const maxDelta = Math.max(0, Math.min(Number(dangerConfig.levelDeltaMax) || 0, MAX_TU_VI_LEVEL - minLevel));
     const hiddenLevel = Math.max(
       0,
-      Math.min(MAX_TU_VI_LEVEL, minLevel + Math.floor(Math.random() * Math.min(6, MAX_TU_VI_LEVEL - minLevel + 1))),
+      Math.min(MAX_TU_VI_LEVEL, minLevel + Math.floor(Math.random() * (maxDelta + 1))),
     );
     const realmIndex = Math.floor(hiddenLevel / MINOR_REALMS.length);
     const rewardTable = template.type === 'clean' ? CLEAN_REWARD_TOTAL_BY_REALM : HUNT_REWARD_TOTAL_BY_REALM;
 
+    const rewardMultiplier = Number(template.rewardMultiplier) || MISSION_TIER_REWARD_MULTIPLIERS[missionTier] || 1;
+    const tuViMultiplier = Number(template.tuViMultiplier) || MISSION_TIER_TUVI_MULTIPLIERS[missionTier] || 1;
+    const baseReward = rewardTable[realmIndex] ?? rewardTable[rewardTable.length - 1];
+    const baseTuViReward = MISSION_TUVI_TOTAL_BY_REALM[realmIndex] ?? MISSION_TUVI_TOTAL_BY_REALM[MISSION_TUVI_TOTAL_BY_REALM.length - 1];
+
     return normalizeMission({
-      id: `${date.replace(/-/g, '')}_${String(order).padStart(2, '0')}`,
+      id: `${date.replace(/-/g, '')}_${missionTier}_${String(order).padStart(2, '0')}`,
       templateKey: template.key,
       type: template.type,
-      name: template.name,
+      tier: missionTier,
+      dangerKey,
+      name: getTierMissionName(template, missionTier),
       aura: MISSION_AURAS[Math.floor(Math.random() * MISSION_AURAS.length)],
       requiredRealmIndex,
       hiddenLevel,
-      rewardTotal: rewardTable[realmIndex] ?? rewardTable[rewardTable.length - 1],
-      tuViRewardTotal: MISSION_TUVI_TOTAL_BY_REALM[realmIndex] ?? MISSION_TUVI_TOTAL_BY_REALM[MISSION_TUVI_TOTAL_BY_REALM.length - 1],
+      rewardTotal: Math.max(1, Math.floor(baseReward * rewardMultiplier)),
+      tuViRewardTotal: Math.max(1, Math.floor(baseTuViReward * tuViMultiplier)),
       status: MISSION_STATUS_OPEN,
       party: [],
       leaderId: null,
+      contentTier: template.contentTier || getUnifiedContentTier(missionTier).key,
+      missionKind: template.missionKind || (missionTier === 'tap_dich' ? 'don' : 'bang'),
+      recommendedProfessions: Array.isArray(template.recommendedProfessions) ? template.recommendedProfessions : [],
+      powerScale: template.powerScale || getUnifiedPowerBudget({ tier: template.contentTier || missionTier, dangerKey, realmIndex, role: template.type === 'hunt' ? 'combat' : 'support' }),
+      rewardScale: Number(template.rewardScale) || getUnifiedContentTier(template.contentTier || missionTier).rewardMult,
+      tags: Array.isArray(template.tags) ? template.tags : [],
+      family: template.family || template.defectFamily || null,
+      lootFamily: template.lootFamily || template.family || template.defectFamily || null,
+      sourceFamilyName: template.sourceFamilyName || null,
+      defectFamily: template.defectFamily || template.family || null,
+      missionCategory: template.missionCategory || template.actionType || null,
+      actionName: template.actionName || null,
+      targetStat: template.targetStat || null,
+      materialCore: template.materialCore || null,
+      description: template.description || null,
+      successText: template.successText || null,
+      failText: template.failText || null,
     });
+  }
+
+  function createMissionFromDungeonTemplate(template, order, date, leaderId) {
+    const dungeonTier = getDungeonTier(template);
+    const mission = createMissionFromTemplate(template, order, date, dungeonTier);
+    const nowCode = Date.now().toString(36).slice(-6);
+    mission.id = `${date.replace(/-/g, '')}_bc_${dungeonTier}_${slugifyKey(template.key)}_${nowCode}`.slice(0, 100);
+    mission.templateKey = template.key;
+    mission.tier = dungeonTier;
+    mission.name = `Bí cảnh ${getMissionTierConfig(dungeonTier).shortLabel}: ${template.name}`;
+    mission.aura = template.aura || mission.aura;
+    mission.hiddenLevel = Math.max(0, Math.min(MAX_TU_VI_LEVEL, mission.hiddenLevel + (Number(template.hiddenLevelBonus) || 0)));
+    const realmIndex = Math.floor(mission.hiddenLevel / MINOR_REALMS.length);
+    const rewardTable = template.type === 'clean' ? CLEAN_REWARD_TOTAL_BY_REALM : HUNT_REWARD_TOTAL_BY_REALM;
+    mission.rewardTotal = Math.floor((rewardTable[realmIndex] ?? rewardTable[rewardTable.length - 1]) * (Number(template.rewardMultiplier) || 1.25));
+    mission.tuViRewardTotal = Math.floor((MISSION_TUVI_TOTAL_BY_REALM[realmIndex] ?? MISSION_TUVI_TOTAL_BY_REALM[MISSION_TUVI_TOTAL_BY_REALM.length - 1]) * 1.2);
+    mission.party = [leaderId];
+    mission.leaderId = leaderId;
+    return normalizeMission(mission);
+  }
+
+  function getDungeonTemplateByKey(key) {
+    return DUNGEON_TEMPLATES.find((template) => template.key === key) ?? null;
   }
 
   function getMissionById(data, missionId) {
@@ -2209,31 +7546,186 @@ const AUTO_DISCIPLE_THRESHOLDS = [
   }
 
   function getMissionTypeText(type) {
-    return type === 'clean' ? 'Quét dọn bí cảnh' : 'Diệt quái';
+    return type === 'clean' ? 'Xử lý nội tông' : 'Giao chiến';
   }
 
   function getMissionActionText(type) {
-    return type === 'clean' ? 'Quét dọn' : 'Chiến đấu';
+    return type === 'clean' ? 'Xử lý' : 'Giao chiến';
   }
 
   function getMissionEnemyText(type) {
-    return type === 'clean' ? 'Uế khí / bí cảnh' : 'Yêu thú / tà ma';
+    return type === 'clean' ? 'Vướng mắc cần xử lý' : 'Dị lỗi hiện thân';
+  }
+
+  function getMissionObjectiveText(mission = {}) {
+    const family = getSourceDefectFamily(mission.family || mission.defectFamily);
+    const lines = [];
+    if (mission.description) lines.push(mission.description);
+    if (!mission.description) lines.push(`${mission.actionName || getMissionTypeText(mission.type)}: ${mission.name}.`);
+    if (family) lines.push(`Loại lỗi: ${family.name} · Ảnh hưởng chính: ${family.targetStat} · Nguyên liệu có thể nhận: ${family.materialCore}.`);
+    if (mission.type === 'clean') lines.push('Cách chơi: lập đội → xuất phát → chọn chiến thuật xử lý. Nhiệm vụ này không mở đánh theo lượt, trừ nhóm Giao chiến.');
+    return lines.join('\n');
+  }
+
+  function getMissionObstacleText(mission = {}) {
+    const family = getSourceDefectFamily(mission.family || mission.defectFamily);
+    const action = mission.actionName || 'Tình huống nội tông';
+    const axis = family?.targetStat || 'Source';
+    if (mission.type !== 'clean') return mission.enemyName || family?.name || getMissionEnemyText(mission.type);
+    return `${action} đang bị vướng bởi ${family?.short || axis}`;
   }
 
   function getMissionStatusText(mission) {
     if (mission.status === MISSION_STATUS_COMPLETED) {
-      return 'Đã kết thúc';
+      if (mission.outcome === 'success') return mission.completionTitle || (mission.type === 'clean' ? 'Xử lý thành công' : 'Chinh phạt thành công');
+      if (mission.outcome === 'escaped') return mission.type === 'clean' ? 'Đã rút khỏi nhiệm vụ' : 'Đã thoát khỏi bí cảnh';
+      return mission.type === 'clean' ? 'Xử lý thất bại' : 'Chinh phạt thất bại';
     }
 
     if (mission.status === MISSION_STATUS_REVEALED) {
-      return 'Đã chạm trán';
+      return mission.type === 'clean' ? 'Đang chờ chọn chiến thuật' : 'Đã gặp địch';
     }
 
     if (mission.party.length > 0) {
-      return `Đang lập tiểu đội ${mission.party.length}/${MISSION_MAX_PARTY_SIZE}`;
+      return getMissionPartyTitle(mission);
     }
 
-    return 'Chưa có tiểu đội';
+    return 'Còn trống';
+  }
+
+  function getMissionPartyTitle(mission) {
+    const partySize = Array.isArray(mission.party) ? mission.party.length : 0;
+    const leaderId = mission.leaderId || mission.party?.[0];
+
+    if (partySize <= 0) {
+      return 'Chưa có tiểu đội';
+    }
+
+    if (partySize === 1) {
+      return `Độc Hành Hành Sự <@${leaderId}>`;
+    }
+
+    return `Tiểu đội của <@${leaderId}> (${partySize}/${MISSION_MAX_PARTY_SIZE})`;
+  }
+
+  function getMissionCompletionTitle(mission, actorMember = null) {
+    const partySize = getMissionPartySize(mission);
+    const leaderId = mission.leaderId || mission.party?.[0] || actorMember?.id;
+    const actorName = actorMember?.displayName || actorMember?.user?.username || 'ẩn danh đạo hữu';
+
+    if (partySize <= 1) {
+      return mission.type === 'clean'
+        ? `Hoàn tất bởi ${actorName}`
+        : `Chinh phạt thành công bởi Độc Hành Trảm Đạo ${actorName}`;
+    }
+
+    return mission.type === 'clean'
+      ? `Hoàn tất bởi tiểu đội <@${leaderId}> (${partySize} đạo hữu)`
+      : `Chinh phạt thành công bởi tiểu đội <@${leaderId}> (${partySize} đạo hữu)`;
+  }
+
+  function getMissionSelectEmoji(mission) {
+    if (mission.status === MISSION_STATUS_COMPLETED) {
+      if (mission.outcome === 'success') return '✅';
+      if (mission.outcome === 'escaped') return '↩️';
+      return '💀';
+    }
+
+    if (mission.status === MISSION_STATUS_REVEALED) return mission.type === 'clean' ? '🔎' : '🔥';
+    if (mission.party.length > 0) return mission.type === 'clean' ? '📋' : (mission.party.length === 1 ? '🗡️' : '👥');
+    return '▫️';
+  }
+
+  function getMissionSelectDescription(mission) {
+    const requirement = `Yêu cầu ${getMissionRequiredText(mission)}`;
+
+    if (mission.status === MISSION_STATUS_COMPLETED) {
+      if (mission.outcome === 'success') {
+        return `${mission.completionTitle || getMissionCompletionTitle(mission)} • ${requirement}`.slice(0, 100);
+      }
+
+      if (mission.outcome === 'escaped') {
+        return `${mission.type === 'clean' ? 'Đã rút khỏi nhiệm vụ' : 'Đã thoát khỏi bí cảnh'} • ${requirement}`.slice(0, 100);
+      }
+
+      return `${mission.type === 'clean' ? 'Xử lý thất bại' : 'Chinh phạt thất bại'} • ${requirement}`.slice(0, 100);
+    }
+
+    if (mission.status === MISSION_STATUS_REVEALED) {
+      return `${mission.type === 'clean' ? 'Đã mở tình huống' : 'Đã chạm trán'} • ${requirement}`.slice(0, 100);
+    }
+
+    if (mission.party.length > 0) {
+      return `${getMissionPartyTitle(mission)} • ${requirement}`.slice(0, 100);
+    }
+
+    return `Còn trống • ${requirement}`.slice(0, 100);
+  }
+
+  function getMissionPageLabel(missionId, data = null, tier = null) {
+    const missionData = data ?? getMissionDataForToday();
+    const mission = missionData.missions.find((entry) => entry.id === missionId);
+    const missionTier = normalizeMissionTier(tier || mission?.tier);
+    const missions = getMissionsForTier(missionData, missionTier);
+    const index = missions.findIndex((entry) => entry.id === missionId);
+
+    if (index < 0 || missions.length <= 0) {
+      return '0/0';
+    }
+
+    return `${index + 1}/${missions.length}`;
+  }
+
+  function getDungeonPageLabel(dungeonKey) {
+    const index = DUNGEON_TEMPLATES.findIndex((dungeon) => dungeon.key === dungeonKey);
+
+    if (index < 0 || DUNGEON_TEMPLATES.length <= 0) {
+      return '0/0';
+    }
+
+    return `${index + 1}/${DUNGEON_TEMPLATES.length}`;
+  }
+
+  function getMissionPartySize(mission) {
+    return Math.max(1, Array.isArray(mission.party) ? mission.party.length : 0);
+  }
+
+  function getMissionRewardText(mission) {
+    const partySize = getMissionPartySize(mission);
+    const rewardEach = Math.floor((Number(mission.rewardTotal) || 0) / partySize);
+    const tuViEach = Math.floor((Number(mission.tuViRewardTotal) || 0) / partySize);
+    const lines = [
+      `Tổng thưởng nếu thành công: **${mission.rewardTotal} cống hiến** + **${mission.tuViRewardTotal} tu vi**.`,
+      `Đội hiện tại: **${partySize} người** → mỗi người dự kiến **${rewardEach} cống hiến** + **${tuViEach} tu vi**.`,
+    ];
+
+    if (mission.type === 'dungeon') {
+      lines.push('Sau giao chiến, đội trưởng chọn cách xử lý tàn tích để nhận tu vi, nguyên liệu, vật chứng hoặc Công Đức.');
+    } else if (mission.type === 'clean') {
+      lines.push('Nhiệm vụ nội tông: chọn chiến thuật để xử lý. Chỉ nhiệm vụ loại Giao chiến mới mở đánh theo lượt.');
+    } else {
+      lines.push('Sau giao chiến không rơi thẳng kiếm/giáp. Địch để lại tu vi, nguyên liệu craft, vật chứng hoặc tài nguyên rủi ro.');
+    }
+
+    return lines.join('\n');
+  }
+
+  function buildFirstMissionPayload(data = getMissionDataForToday(), tier = 'tap_dich', kind = null) {
+    const users = loadUsers();
+    const missions = getMissionsForTier(data, tier, kind);
+    const mission = missions[0];
+
+    if (!mission) {
+      return {
+        embeds: [buildMissionListEmbed(data, tier, kind)],
+        components: buildMissionListRows(data, tier, kind),
+      };
+    }
+
+    return {
+      embeds: [buildMissionDetailEmbed(mission, users)],
+      components: buildMissionDetailRows(mission),
+    };
   }
 
   function getMissionRealmTextFromLevel(level) {
@@ -2246,37 +7738,535 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     return `${TU_VI_REALMS[mission.requiredRealmIndex] ?? 'Phàm Nhân'} trở lên`;
   }
 
-  function getMissionPowerFromLevel(level) {
-    const info = getTuViByLevel(level);
-    const minorMultiplier = [1, 1.25, 1.5, 1.8][info.minorIndex] ?? 1;
-    return Math.floor(100 * Math.pow(3, info.realmIndex) * minorMultiplier);
+  function clampNumber(value, min, max) {
+    return Math.max(min, Math.min(max, Number(value) || 0));
   }
 
-  function getMissionMemberPower(userData) {
-    const info = getTuViFromExp(Number(userData.tuViExp) || 0);
-    return getMissionPowerFromLevel(info.level);
+  function softCapCombatPercent(percent) {
+    const value = Number(percent) || 0;
+    if (value <= COMBAT_LUC_CHIEN_SOFT_CAP) return value;
+    return COMBAT_LUC_CHIEN_SOFT_CAP + (value - COMBAT_LUC_CHIEN_SOFT_CAP) * COMBAT_LUC_CHIEN_SOFT_RATE;
+  }
+
+  function getMissionPowerFromLevel(level) {
+    const info = getTuViByLevel(level);
+    const minorMultiplier = MINOR_POWER_MULTIPLIERS[info.minorIndex] ?? 1;
+    return Math.max(1, Math.floor(100 * Math.pow(REALM_POWER_GROWTH, info.realmIndex) * minorMultiplier));
+  }
+
+  function getMissionDangerKey(source = {}, tier = 'tap_dich') {
+    const explicit = String(source.dangerKey || '').trim();
+    if (MISSION_DANGER_CONFIGS[explicit]) return explicit;
+    const normalizedTier = normalizeMissionTier(tier || source.tier || inferMissionTierFromTemplate(source));
+    const type = source.type === 'clean' ? 'clean' : 'hunt';
+    return MISSION_TIER_DANGER[normalizedTier]?.[type] ?? (type === 'clean' ? 'easy' : 'normal');
+  }
+
+  function getMissionDangerConfig(dangerKey) {
+    return MISSION_DANGER_CONFIGS[dangerKey] ?? MISSION_DANGER_CONFIGS.normal;
+  }
+
+  function getMissionStrategyConfig(key = 'balanced') {
+    return MISSION_STRATEGY_CONFIGS[String(key || '').trim()] || MISSION_STRATEGY_CONFIGS.balanced;
+  }
+
+  function getMissionStrategyText(key = 'balanced') {
+    const strategy = getMissionStrategyConfig(key);
+    return `${strategy.emoji} **${strategy.name}** · ${strategy.note}`;
+  }
+
+  function getMissionRoleConfig(roleKey) {
+    return MISSION_PARTY_ROLE_CONFIGS[roleKey] || MISSION_PARTY_ROLE_CONFIGS.ky_luc;
+  }
+
+  function getMissionRoleScore(userData, roleKey, mission = {}, memberId = '') {
+    const data = userData || createDefaultUserData();
+    const family = getSourceDefectFamily(mission.family || mission.defectFamily);
+    const profile = data.sourceProfile || {};
+    const direct = getUserDirectStats(data, null);
+    const daoNghe = normalizeDaoNgheData(data);
+    const targetStat = String(family?.targetStat || mission.targetStat || '').toLowerCase();
+    const targetProfile = targetStat.includes('runtime') ? Number(profile.runtime) || 0
+      : targetStat.includes('logic') ? Number(profile.logic) || 0
+        : targetStat.includes('integrity') ? Number(profile.integrity) || 0
+          : targetStat.includes('throughput') ? Number(profile.throughput) || 0
+            : targetStat.includes('stability') ? Number(profile.stability) || 0
+              : Number(profile.sourcePower) || 0;
+    const professionMatch = family?.professionKey && daoNghe.key === family.professionKey ? 5000 : 0;
+    const stableHash = deterministicScoreForKey(`role-jitter:${roleKey}`, `${mission.id || mission.name || 'mission'}:${memberId}`) % 97;
+
+    if (roleKey === 'do_mach') return professionMatch + targetProfile * 70 + getMissionSupportPower(data, null, mission) * 0.8 + stableHash;
+    if (roleKey === 'ho_phap') return getMissionMemberPower(data, null) * 1.1 + Math.max(0, Number(direct.lucChien) || 0) * 80 + stableHash;
+    if (roleKey === 'ky_luc') return Math.max(0, Number(direct.congHien) || 0) * 100 + (Number(daoNghe.exp) || 0) * 0.35 + (Number(profile.logic) || 0) * 55 + stableHash;
+    return getMissionSupportPower(data, null, mission) + stableHash;
+  }
+
+  function getMissionPartyRoleAssignments(users = {}, mission = {}) {
+    const party = Array.from(new Set((Array.isArray(mission.party) ? mission.party : []).map(String).filter(Boolean))).slice(0, MISSION_MAX_PARTY_SIZE);
+    const assignments = {};
+    if (party.length <= 0) return assignments;
+    if (party.length === 1) {
+      assignments[party[0]] = 'doc_hanh';
+      return assignments;
+    }
+
+    const leaderId = String(mission.leaderId || party[0]);
+    if (party.includes(leaderId)) assignments[leaderId] = 'chu_tri';
+
+    const pickBest = (roleKey) => {
+      const candidates = party.filter((memberId) => !assignments[memberId]);
+      if (!candidates.length) return null;
+      return candidates
+        .map((memberId) => ({ memberId, score: getMissionRoleScore(normalizeUserData(users[memberId] ?? createDefaultUserData()), roleKey, mission, memberId) }))
+        .sort((a, b) => b.score - a.score)[0]?.memberId || null;
+    };
+
+    for (const roleKey of ['do_mach', 'ho_phap', 'ky_luc']) {
+      const memberId = pickBest(roleKey);
+      if (memberId) assignments[memberId] = roleKey;
+    }
+
+    for (const memberId of party) {
+      if (!assignments[memberId]) assignments[memberId] = 'ky_luc';
+    }
+    return assignments;
+  }
+
+  function getMissionPartyRoleEffects(users = {}, mission = {}) {
+    const assignments = getMissionPartyRoleAssignments(users, mission);
+    const roleKeys = Object.values(assignments);
+    const uniqueRoles = new Set(roleKeys);
+    const effects = {
+      powerMult: 1,
+      chanceBonus: 0,
+      rewardMult: 1,
+      tuViMult: 1,
+      injuryMult: 1,
+      masteryBonus: 0,
+      materialBonus: 0,
+      lines: [],
+    };
+
+    for (const roleKey of roleKeys) {
+      if (roleKey === 'doc_hanh') { effects.chanceBonus += 0.03; effects.rewardMult *= 1.02; effects.injuryMult *= 0.95; }
+      if (roleKey === 'chu_tri') { effects.chanceBonus += 0.04; effects.powerMult *= 1.02; }
+      if (roleKey === 'do_mach') { effects.powerMult *= 1.06; effects.materialBonus += 1; }
+      if (roleKey === 'ho_phap') { effects.powerMult *= 1.03; effects.injuryMult *= 0.74; }
+      if (roleKey === 'ky_luc') { effects.rewardMult *= 1.08; effects.masteryBonus += 3; }
+    }
+
+    if (uniqueRoles.has('chu_tri') && uniqueRoles.has('do_mach') && uniqueRoles.has('ho_phap')) {
+      effects.chanceBonus += 0.03;
+      effects.lines.push('Cộng hưởng đội hình: Chủ Trì + Dò Mạch + Hộ Pháp → +3% tỉ lệ thành công.');
+    }
+    if (uniqueRoles.has('do_mach') && uniqueRoles.has('ky_luc')) {
+      effects.rewardMult *= 1.04;
+      effects.materialBonus += 1;
+      effects.lines.push('Chuỗi điều tra: Dò Mạch + Ký Lục → thêm vật chứng và cống hiến.');
+    }
+
+    effects.powerMult = Number(effects.powerMult.toFixed(3));
+    effects.rewardMult = Number(effects.rewardMult.toFixed(3));
+    effects.tuViMult = Number(effects.tuViMult.toFixed(3));
+    effects.injuryMult = Number(effects.injuryMult.toFixed(3));
+    return { assignments, effects };
+  }
+
+  function getMissionPartyRoleText(users = {}, mission = {}) {
+    const { assignments, effects } = getMissionPartyRoleEffects(users, mission);
+    const entries = Object.entries(assignments);
+    if (!entries.length) return 'Chưa có đội hình.';
+    const lines = entries.map(([memberId, roleKey]) => {
+      const role = getMissionRoleConfig(roleKey);
+      return `${role.emoji} <@${memberId}> · **${role.name}**`;
+    });
+    const bonus = [
+      `Sức đội x${effects.powerMult}`,
+      `${effects.chanceBonus >= 0 ? '+' : ''}${Math.round(effects.chanceBonus * 100)}% thành công`,
+      `Thưởng x${effects.rewardMult}`,
+      `Phạt thất bại x${effects.injuryMult}`,
+    ];
+    return [...lines, '', `Hiệu ứng: ${bonus.join(' · ')}`].join('\n').slice(0, 1024);
+  }
+
+  function getMissionMemberRoleText(users = {}, mission = {}, memberId = '') {
+    const assignments = getMissionPartyRoleAssignments(users, mission);
+    const roleKey = assignments[String(memberId)] || null;
+    if (!roleKey) return '';
+    const role = getMissionRoleConfig(roleKey);
+    return `${role.emoji} ${role.name}`;
+  }
+
+
+  function getDaoNgheCombatMultiplier(userData, source = 'general') {
+    const daoNghe = normalizeDaoNgheData(userData);
+    const def = getDaoNgheDefinition(daoNghe?.key);
+    if (!def) return 1;
+    const rankIndex = getDaoNgheRankIndex(daoNghe.exp);
+    const sourceKey = String(source || 'general');
+    const base = Math.min(0.18, 0.018 + rankIndex * 0.012);
+    const roleBonus = sourceKey === 'mission' || sourceKey === 'bicanh' ? 0.012 : 0;
+    return Number((1 + base + roleBonus).toFixed(3));
+  }
+
+  function getCombatPower(userData, member = null, source = 'general') {
+    const exp = Math.max(0, Number(userData?.tuViExp) || 0);
+    const level = member ? getCurrentTuViLevel(member, exp) : getLevelFromExp(exp);
+    const base = getMissionPowerFromLevel(level);
+    const quality = member ? getLinhCanQualityMultiplier(member).value : 1;
+    const classification = member ? getLinhCanClassificationMultiplier(member).value : 1;
+    const congPhap = member ? getCongPhapMultiplier(member).value : 1;
+    const masteryKey = member ? getMemberCongPhapKey(member) : 'system';
+    const mastery = userData ? getCongPhapProgress(userData, masteryKey) : { stage: 0 };
+    const masteryBonus = 1 + Math.min(0.28, (Number(mastery.stage) || 0) * 0.035);
+    const stats = getUserDirectStats(userData, member);
+    const lucChien = statMultiplier(softCapCombatPercent(stats.lucChien));
+    const tamMaPenalty = isTemporaryStatusActive(userData, 'Tâm Ma Quấn Thân') ? 0.8 : 1;
+    const tuLinhSupport = source === 'dauphap' ? Math.min(1.12, getTuLinhMultiplier(userData).value) : 1;
+    const daoNgheSupport = getDaoNgheCombatMultiplier(userData, source);
+    return Math.max(1, Math.floor(base * quality * classification * congPhap * masteryBonus * daoNgheSupport * lucChien * tamMaPenalty * tuLinhSupport));
+  }
+
+  function getMissionMemberPower(userData, member = null) {
+    return getCombatPower(userData, member, 'mission');
+  }
+
+  function getMissionSupportPower(userData, member = null, mission = {}) {
+    normalizeUserSourceState(userData);
+    const combatBase = getCombatPower(userData, member, 'mission');
+    const direct = getUserDirectStats(userData, member);
+    const profile = userData.sourceProfile || {};
+    const sourceScore =
+      (Number(profile.logic) || 0) * 1.45 +
+      (Number(profile.integrity) || 0) * 1.35 +
+      (Number(profile.stability) || 0) * 1.25 +
+      (Number(profile.throughput) || 0) * 1.05 +
+      (Number(profile.runtime) || 0) * 1.00 +
+      (Number(profile.sourcePower) || 0) * 0.75;
+    const directScore =
+      Math.max(0, Number(direct.congHien) || 0) * 1.25 +
+      Math.max(0, Number(direct.dotPha) || 0) * 1.05 +
+      Math.max(0, Number(direct.tuVi) || 0) * 0.85 +
+      Math.max(0, Number(direct.lucChien) || 0) * 0.45 +
+      Math.max(0, -(Number(direct.tamMaRisk) || 0)) * 1.15 +
+      Math.max(0, -(Number(direct.trongThuongDuration) || 0)) * 0.35;
+    const family = getSourceDefectFamily(mission.family || mission.defectFamily);
+    const daoNghe = normalizeDaoNgheData(userData);
+    const professionBonus = family?.professionKey && daoNghe.key === family.professionKey ? 1.10 : 1;
+    const riskPenalty = clampNumber(1 - ((Number(userData.technicalDebt) || 0) + (Number(userData.entropy) || 0) + (Number(userData.nghiepLuc) || 0)) * 0.004, 0.78, 1.05);
+    return Math.max(1, Math.floor((combatBase * 0.72 + sourceScore * 9 + directScore * 5) * professionBonus * riskPenalty));
+  }
+
+  async function getMissionPartySupportPower(guild, mission, users) {
+    let total = 0;
+    for (const memberId of mission.party) {
+      const userData = getOrCreateUser(users, memberId);
+      const member = guild ? await guild.members.fetch(memberId).catch(() => null) : null;
+      total += getMissionSupportPower(userData, member, mission);
+    }
+    const { effects } = getMissionPartyRoleEffects(users, mission);
+    const strategy = getMissionStrategyConfig(mission.strategyKey || 'balanced');
+    return Math.max(1, Math.floor(total * effects.powerMult * strategy.powerMult));
+  }
+
+  function getMonsterByKey(key) {
+    return CODE_TU_MONSTERS_360.find((monster) => monster.key === key) ?? null;
+  }
+
+  function getMissionMonster(mission = {}) {
+    if (mission.monsterKey) return getMonsterByKey(mission.monsterKey);
+    if (mission.enemyName) return CODE_TU_MONSTERS_360.find((monster) => monster.name === mission.enemyName) ?? null;
+    return null;
+  }
+
+  function getMonsterArchetype(monster = null) {
+    return MONSTER_ARCHETYPES[monster?.archetype] ?? MONSTER_ARCHETYPES.bugling;
+  }
+
+  function scaleMonsterSkill(skill, monster = null) {
+    const archetype = getMonsterArchetype(monster);
+    const family = monster?.family || 'bug';
+    const scaled = { ...skill };
+    const familyTwist = ITEM_FAMILY_COMBAT_BONUSES[family] || ITEM_FAMILY_COMBAT_BONUSES.bug;
+    if (familyTwist.dotPower && scaled.dotPower) scaled.dotPower = Number((scaled.dotPower + familyTwist.dotPower * 0.4).toFixed(3));
+    if (familyTwist.stunChance && scaled.stunChance) scaled.stunChance = Number((scaled.stunChance + familyTwist.stunChance * 0.35).toFixed(3));
+    if (familyTwist.critChance && scaled.critChance) scaled.critChance = Number((scaled.critChance + familyTwist.critChance * 0.35).toFixed(3));
+    scaled.power = Number(((Number(scaled.power) || 1) * Math.sqrt(Number(monster?.powerMultiplier) || Number(archetype.powerMult) || 1)).toFixed(3));
+    return scaled;
+  }
+
+  function getMonsterCombatSkills(monster = null, fallback = MONSTER_COMBAT_SKILLS) {
+    const archetype = getMonsterArchetype(monster);
+    const skills = Array.isArray(archetype.skills) && archetype.skills.length ? archetype.skills : fallback;
+    return skills.map((skill) => scaleMonsterSkill(skill, monster));
+  }
+
+  function getMonsterLootBias(monster = null) {
+    if (Array.isArray(monster?.lootBias) && monster.lootBias.length) return monster.lootBias;
+    const archetype = getMonsterArchetype(monster);
+    return Array.from(new Set([monster?.family, ...(archetype.lootBias || []), 'pill', 'talisman'].filter(Boolean)));
+  }
+
+  function getMonsterDisplayLine(monster = null) {
+    if (!monster) return 'Chưa rõ quái vật.';
+    const archetype = getMonsterArchetype(monster);
+    const family = getSourceDefectFamily(monster.family);
+    const visual = getSourceDefectVisual(monster.family);
+    const weak = monster.weakness ? ` · yếu với ${monster.weakness}` : '';
+    const resist = monster.resist ? ` · kháng ${monster.resist}` : '';
+    return `${monster.emoji || visual.emoji || archetype.emoji || '👾'} **${monster.name}** · ${family?.name || monster.sourceFamilyName || monster.family || archetype.label}${weak}${resist}`;
   }
 
   function getMissionEnemyPower(mission) {
+    const dangerKey = getMissionDangerKey(mission, mission.tier);
+    const danger = getMissionDangerConfig(dangerKey);
     const basePower = getMissionPowerFromLevel(mission.hiddenLevel);
-    return Math.floor(basePower * (mission.type === 'clean' ? 2.2 : 3));
+    return Math.max(1, Math.floor(basePower * danger.powerMult));
   }
 
-  function getMissionWinChance(ratio) {
-    if (ratio >= 2) return 0.9;
-    if (ratio >= 1.5) return 0.8;
-    if (ratio >= 1) return 0.65;
-    if (ratio >= 0.75) return 0.45;
-    if (ratio >= 0.5) return 0.3;
-    if (ratio >= 0.33) return 0.15;
-    return 0.05;
+  function getMissionWinChance(ratio, mode = 'pve') {
+    const safeRatio = Math.max(0.1, Number(ratio) || 0);
+    const base = 0.5 + Math.log2(safeRatio) * 0.22;
+    const min = mode === 'pvp' ? 0.1 : 0.05;
+    const max = mode === 'pvp' ? 0.9 : 0.95;
+    return clampNumber(base, min, max);
   }
 
   function getMissionEscapeChance(ratio) {
-    if (ratio >= 1.2) return 0.85;
-    if (ratio >= 0.8) return 0.65;
-    if (ratio >= 0.5) return 0.4;
-    return 0.2;
+    const safeRatio = Math.max(0.1, Number(ratio) || 0);
+    return clampNumber(0.42 + Math.log2(safeRatio) * 0.18, 0.12, 0.9);
+  }
+
+  async function resolveMissionSupport(guild, mission, users, ratio) {
+    const strategy = getMissionStrategyConfig(mission.strategyKey || 'balanced');
+    const { assignments, effects } = getMissionPartyRoleEffects(users, mission);
+    const chance = clampNumber(getMissionWinChance(ratio) + 0.08 + strategy.chanceBonus + effects.chanceBonus, 0.15, 0.98);
+    const success = rollPercent(chance);
+    const partySize = getMissionPartySize(mission);
+    const rewardEach = Math.max(1, Math.floor(((mission.rewardTotal || 0) / partySize) * strategy.rewardMult * effects.rewardMult));
+    const tuViEach = Math.max(1, Math.floor(((mission.tuViRewardTotal || 0) / partySize) * strategy.tuViMult * effects.tuViMult));
+    const masteryGain = Math.max(3, Math.floor(12 * strategy.masteryMult + effects.masteryBonus));
+    const family = getSourceDefectFamily(mission.family || mission.defectFamily);
+    const lines = [];
+
+    lines.push(`Nhiệm vụ: **${mission.actionName || mission.name}**`);
+    lines.push(`Chiến thuật: ${strategy.emoji} **${strategy.name}** · ${strategy.note}`);
+    lines.push(`Tỉ lệ thành công: **${Math.round(chance * 100)}%** · Sức đội so với độ khó: **${ratio.toFixed(2)}x**`);
+    if (family) lines.push(`Loại lỗi: **${family.name}** · ảnh hưởng chính: ${family.targetStat}.`);
+    const roleLines = Object.entries(assignments).map(([memberId, roleKey]) => {
+      const role = getMissionRoleConfig(roleKey);
+      return `${role.emoji} <@${memberId}>: ${role.name}`;
+    });
+    if (roleLines.length) {
+      lines.push('Vai trò đội: ' + roleLines.join(' · '));
+      if (effects.lines.length) lines.push(...effects.lines);
+    }
+
+    if (success) {
+      lines.push(`**Hoàn tất nhiệm vụ.** ${mission.successText || 'Tông môn ghi nhận kết quả xử lý.'}`);
+      lines.push(`Mỗi thành viên nhận: +${tuViEach} tu vi · +${rewardEach} cống hiến · +${masteryGain} thuần thục.`);
+      const dropLines = [];
+      const realmIndex = Math.floor((Number(mission.hiddenLevel) || 0) / MINOR_REALMS.length);
+      const materialBonus = Math.max(0, Number(strategy.materialBonus) || 0) + Math.max(0, Number(effects.materialBonus) || 0);
+      for (const memberId of mission.party) {
+        const userData = getOrCreateUser(users, memberId);
+        normalizeMissionUserData(userData);
+        addCongHien(userData, rewardEach);
+        addTuViExp(userData, tuViEach);
+        const masteryMember = guild ? await guild.members.fetch(memberId).catch(() => null) : null;
+        if (masteryMember) await grantCongPhapMastery(userData, masteryMember, masteryGain, `nhiemvu_${strategy.key}`);
+        const dropParts = [];
+        const dropSummary = grantCleanKyNgo(userData, mission, ratio < 1 || strategy.key === 'risky');
+        if (dropSummary) dropParts.push(dropSummary);
+        if (materialBonus > 0) {
+          const material = pickMissionCraftMaterial(mission.family || mission.defectFamily || family?.key || 'syntax', `${mission.id}:${memberId}:${strategy.key}`, Math.max(0, realmIndex - 1), strategy.key === 'safe' ? 'ổn định' : strategy.key === 'risky' ? 'vật chứng' : null);
+          if (material) {
+            const amount = Math.max(1, Math.floor(materialBonus));
+            addCraftMaterialToUser(userData, material.key, amount);
+            dropParts.push(formatMaterialGain(material, amount));
+          }
+          if (family && (strategy.key === 'risky' || effects.materialBonus >= 2)) {
+            const evidenceAmount = strategy.key === 'risky' ? 2 : 1;
+            addCraftMaterialToUser(userData, `vat_chung_${family.key}`, evidenceAmount);
+            dropParts.push(`Vật Chứng Dị Lỗi ${family.short} x${evidenceAmount}`);
+          }
+        }
+        if (dropParts.length) dropLines.push(`<@${memberId}> nhận: ${dropParts.filter(Boolean).slice(0, 4).join('; ')}`);
+        userData.lastMissionDate = getTodayString();
+        await syncMissionMemberRoles(guild, memberId, userData);
+      }
+      if (dropLines.length > 0) { lines.push(''); lines.push('**Thưởng phụ:**'); lines.push(...dropLines.slice(0, 8)); }
+      return { summary: lines.join('\n').slice(0, 3800), success: true };
+    }
+
+    const danger = getMissionDangerConfig(getMissionDangerKey(mission, mission.tier));
+    const injuryBase = getMissionInjury(
+      ratio,
+      Math.max(0.005, danger.injuryMin * 0.45),
+      Math.max(0.025, danger.injuryMax * 0.55),
+      Math.max(15 * 60 * 1000, Math.floor(danger.restMinMs * 0.45)),
+      Math.max(45 * 60 * 1000, Math.floor(danger.restMaxMs * 0.55)),
+    );
+    const injury = {
+      percent: clampNumber(injuryBase.percent * strategy.injuryMult * effects.injuryMult, 0.003, 0.25),
+      restMs: Math.floor(injuryBase.restMs * clampNumber(strategy.injuryMult * effects.injuryMult, 0.35, 1.8)),
+    };
+    lines.push(`**Xử lý thất bại.** ${mission.failText || 'Nhiễu phản hồi, đội cần đổi phương án.'}`);
+    lines.push(`Mỗi thành viên mất khoảng ${Math.round(injury.percent * 100)}% tu vi và tĩnh dưỡng ${getRemainingTimeText(injury.restMs)}.`);
+    for (const memberId of mission.party) {
+      const userData = getOrCreateUser(users, memberId);
+      applyMissionInjury(userData, injury.percent, injury.restMs, strategy.key === 'risky' ? 'Phạt thất bại do mạo hiểm' : 'Kiệt sức xử lý nhiệm vụ');
+      const masteryMember = guild ? await guild.members.fetch(memberId).catch(() => null) : null;
+      if (masteryMember) await grantCongPhapMastery(userData, masteryMember, Math.max(3, Math.floor(5 * strategy.masteryMult)), 'nhiemvu_xu_ly_that_bai');
+      userData.lastMissionDate = getTodayString();
+      await syncMissionMemberRoles(guild, memberId, userData);
+    }
+    return { summary: lines.join('\n').slice(0, 3800), success: false };
+  }
+
+  function createSkillCombatant({ id, label, userData = null, member = null, power = 1, skills = null, isMonster = false, hpMultiplier = 1, note = null }) {
+    const safePower = Math.max(1, Math.floor(Number(power) || 1));
+    const maxHp = Math.max(80, Math.floor(safePower * (isMonster ? 2.65 : 2.45) * Math.max(0.65, Number(hpMultiplier) || 1)));
+    return { id: id || label, label: label || id || 'Ẩn danh', userData, member, isMonster, power: safePower, maxHp, hp: maxHp, qi: 35, shield: 0, atkMod: 1, defMod: 1, dotDamage: 0, dotTurns: 0, stunTurns: 0, note, skills: skills && skills.length ? skills : (isMonster ? MONSTER_COMBAT_SKILLS : DEFAULT_COMBAT_SKILLS) };
+  }
+
+  function isCombatantAlive(combatant) { return combatant && combatant.hp > 0; }
+
+  function getCombatHpBar(combatant, size = 8) {
+    const total = Math.max(1, combatant.maxHp);
+    const current = Math.max(0, combatant.hp);
+    const filled = Math.max(0, Math.min(size, Math.round((current / total) * size)));
+    return `${'▰'.repeat(filled)}${'▱'.repeat(size - filled)} ${Math.max(0, Math.ceil(current))}/${total}`;
+  }
+
+
+  function normalizeCombatLogLine(line) {
+    let text = String(line || '').replace(/\s+/g, ' ').trim();
+    if (!text) return null;
+    if (/^__Lượt|^HP:|^\*\*.*Combat|^Phe ta:|^Địch:|^\*\*Kết quả/.test(text)) return null;
+    text = text.replace(/^[-•\s]+/, '• ');
+    text = text.replace(/\*\*/g, '');
+    text = text.replace(/  ↳ /g, '• ');
+    text = text.replace(/ bị bug đạo ăn mòn -\d+ HP\.?/i, ' chịu ăn mòn.');
+    text = text.replace(/ dính bug ăn mòn 2 lượt\.?/i, ' chịu ăn mòn.');
+    text = text.replace(/ đánh ([^:]+): -/i, ': -');
+    text = text.replace(/ \(giáp đỡ (\d+)\)/i, ' · giáp đỡ $1');
+    text = text.replace(/ · giáp đỡ \d+/i, '');
+    return uiTrim(text, 150);
+  }
+
+  function compactPokemonCombatLog(lines, maxLines = 4) {
+    const source = Array.isArray(lines) ? lines : String(lines || '').split('\n');
+    const normalized = [];
+    const seen = new Set();
+    for (const raw of source) {
+      const line = normalizeCombatLogLine(raw);
+      if (!line) continue;
+      const statusKey = line.replace(/-\d+ HP/g, '-X HP').replace(/\d+/g, '#');
+      if (/ăn mòn|khống chế|phá phòng|Công thế|Phòng thủ|tạo giáp|hồi/.test(line)) {
+        if (seen.has(statusKey)) continue;
+        seen.add(statusKey);
+      }
+      normalized.push(line);
+    }
+    const picked = normalized.slice(-Math.max(1, maxLines));
+    return picked.length ? picked.join('\n') : 'Chưa có diễn biến đáng chú ý.';
+  }
+
+  function summarizePokemonCombatResult(success, lines) {
+    const lead = success ? 'Chiến thắng.' : 'Thất bại.';
+    return `${lead}\n${compactPokemonCombatLog(lines, 4)}`;
+  }
+
+  function chooseTurnSkill(actor) {
+    const available = actor.skills.filter((skill) => (Number(skill.qiCost) || 0) <= actor.qi);
+    const pool = available.length ? available : [actor.skills[0] || DEFAULT_COMBAT_SKILLS[0]];
+    const hpRatio = actor.hp / Math.max(1, actor.maxHp);
+    const defensive = pool.filter((skill) => skill.healPct || skill.shieldPct || skill.defBuff);
+    if (hpRatio < 0.42 && defensive.length > 0 && Math.random() < 0.42) return defensive[Math.floor(Math.random() * defensive.length)];
+    const ultimate = pool.filter((skill) => (Number(skill.qiCost) || 0) >= 38);
+    if (actor.qi >= 70 && ultimate.length > 0 && Math.random() < 0.55) return ultimate[Math.floor(Math.random() * ultimate.length)];
+    const weighted = [];
+    for (const skill of pool) {
+      const weight = Math.max(1, Math.round((Number(skill.power) || 1) * 5 + (Number(skill.accuracy) || 0.9) * 4 + (skill.priority || 0)));
+      for (let i = 0; i < weight; i += 1) weighted.push(skill);
+    }
+    return weighted[Math.floor(Math.random() * weighted.length)] || pool[0];
+  }
+
+  function applyTurnStartEffects(actor, lines) {
+    if (!isCombatantAlive(actor)) return false;
+    if (actor.dotTurns > 0 && actor.dotDamage > 0) {
+      const dot = Math.min(actor.hp, Math.max(1, Math.floor(actor.dotDamage)));
+      actor.hp = Math.max(0, actor.hp - dot);
+      actor.dotTurns -= 1;
+      lines.push(`• ${actor.label} bị bug đạo ăn mòn **-${dot} HP**.`);
+      if (!isCombatantAlive(actor)) return false;
+    }
+    if (actor.stunTurns > 0) {
+      actor.stunTurns -= 1;
+      actor.qi = Math.min(100, actor.qi + 10);
+      lines.push(`• ${actor.label} bị khống chế, mất lượt.`);
+      return false;
+    }
+    return true;
+  }
+
+  function applySkillEffect(actor, target, skill, lines) {
+    if (skill.healPct) { const heal = Math.max(1, Math.floor(actor.maxHp * skill.healPct)); actor.hp = Math.min(actor.maxHp, actor.hp + heal); lines.push(`  ↳ ${actor.label} hồi **+${heal} HP**.`); }
+    if (skill.shieldPct) { const shield = Math.max(1, Math.floor(actor.maxHp * skill.shieldPct)); actor.shield = Math.min(Math.floor(actor.maxHp * 0.55), actor.shield + shield); lines.push(`  ↳ ${actor.label} tạo giáp **+${shield}**.`); }
+    if (skill.atkBuff) { actor.atkMod = Math.min(1.7, actor.atkMod + skill.atkBuff); lines.push(`  ↳ Công thế của ${actor.label} tăng.`); }
+    if (skill.defBuff) { actor.defMod = Math.min(1.65, actor.defMod + skill.defBuff); lines.push(`  ↳ Phòng thủ của ${actor.label} tăng.`); }
+    if (target && skill.targetDefDebuff) { target.defMod = Math.max(0.68, target.defMod - skill.targetDefDebuff); lines.push(`  ↳ ${target.label} bị phá phòng.`); }
+    if (target && skill.dotPower) { target.dotDamage = Math.max(target.dotDamage, Math.floor(actor.power * skill.dotPower)); target.dotTurns = Math.max(target.dotTurns, 2); lines.push(`  ↳ ${target.label} dính bug ăn mòn 2 lượt.`); }
+    if (target && skill.stunChance && Math.random() < skill.stunChance) { target.stunTurns = Math.max(target.stunTurns, 1); lines.push(`  ↳ ${target.label} bị khống chế lượt sau.`); }
+  }
+
+  function resolveSkillAction(actor, enemies, lines) {
+    if (!applyTurnStartEffects(actor, lines)) return;
+    const livingEnemies = enemies.filter(isCombatantAlive);
+    if (livingEnemies.length === 0) return;
+    const skill = chooseTurnSkill(actor);
+    actor.qi = Math.max(0, actor.qi - (Number(skill.qiCost) || 0));
+    actor.qi = Math.min(100, actor.qi + (Number(skill.qiGain) || 10));
+    const target = livingEnemies.sort((a, b) => (a.hp / a.maxHp) - (b.hp / b.maxHp))[0];
+    const accuracy = clampNumber(Number(skill.accuracy) || 0.9, 0.45, 1);
+    if (Math.random() > accuracy) { lines.push(`• ${actor.label} dùng ${skill.emoji || '✦'} **${skill.name}** nhưng hụt.`); return; }
+    const crit = skill.critChance && Math.random() < skill.critChance;
+    const variance = 0.86 + Math.random() * 0.28;
+    const ratioPressure = Math.sqrt(actor.power / Math.max(1, target.power));
+    let damage = Math.floor(actor.power * 0.28 * (Number(skill.power) || 1) * actor.atkMod / Math.max(0.55, target.defMod) * variance * clampNumber(ratioPressure, 0.62, 1.55));
+    if (crit) damage = Math.floor(damage * 1.55);
+    damage = Math.max(1, damage);
+    let shieldAbsorb = 0;
+    if (target.shield > 0) { shieldAbsorb = Math.min(target.shield, damage); target.shield -= shieldAbsorb; damage -= shieldAbsorb; }
+    target.hp = Math.max(0, target.hp - damage);
+    lines.push(`• ${actor.label} dùng ${skill.emoji || '✦'} **${skill.name}** đánh ${target.label}${crit ? ' chí mạng' : ''}: **-${damage} HP**${shieldAbsorb ? ` (giáp đỡ ${shieldAbsorb})` : ''}.`);
+    applySkillEffect(actor, target, skill, lines);
+  }
+
+  function runTurnBasedCombat({ allies = [], enemies = [], maxTurns = 8, title = 'Turn-based Combat' }) {
+    const lines = [`**${title}**`, `Phe ta: ${allies.map((unit) => `${unit.label} ${getCombatHpBar(unit, 5)}`).join(' · ')}`, `Địch: ${enemies.map((unit) => `${unit.label} ${getCombatHpBar(unit, 5)}`).join(' · ')}`];
+    let turnsUsed = 0;
+    for (let turn = 1; turn <= maxTurns; turn += 1) {
+      if (!allies.some(isCombatantAlive) || !enemies.some(isCombatantAlive)) break;
+      turnsUsed = turn;
+      lines.push(`__Lượt ${turn}__`);
+      const actors = [...allies, ...enemies].filter(isCombatantAlive).sort((a, b) => (b.power * (0.92 + Math.random() * 0.16) + (chooseTurnSkill(b).priority || 0) * 15) - (a.power * (0.92 + Math.random() * 0.16) + (chooseTurnSkill(a).priority || 0) * 15));
+      for (const actor of actors) {
+        if (!isCombatantAlive(actor)) continue;
+        resolveSkillAction(actor, allies.includes(actor) ? enemies : allies, lines);
+        if (!allies.some(isCombatantAlive) || !enemies.some(isCombatantAlive)) break;
+      }
+      lines.push(`HP: ${allies.map((unit) => `${unit.label} ${getCombatHpBar(unit, 4)}`).join(' · ')} | ${enemies.map((unit) => `${unit.label} ${getCombatHpBar(unit, 4)}`).join(' · ')}`);
+    }
+    const allyAlive = allies.some(isCombatantAlive);
+    const enemyAlive = enemies.some(isCombatantAlive);
+    const allyHpRatio = allies.reduce((sum, unit) => sum + Math.max(0, unit.hp), 0) / Math.max(1, allies.reduce((sum, unit) => sum + unit.maxHp, 0));
+    const enemyHpRatio = enemies.reduce((sum, unit) => sum + Math.max(0, unit.hp), 0) / Math.max(1, enemies.reduce((sum, unit) => sum + unit.maxHp, 0));
+    const success = enemyAlive && allyAlive ? allyHpRatio >= enemyHpRatio : allyAlive && !enemyAlive;
+    lines.push(success ? '**Kết quả: Phe ta thắng.**' : '**Kết quả: Phe ta bại trận.**');
+    return { success, turnsUsed, allyHpRatio, enemyHpRatio, lines, summary: lines.slice(0, 26).join('\n') };
   }
 
   function rollPercent(probability) {
@@ -2295,6 +8285,13 @@ const AUTO_DISCIPLE_THRESHOLDS = [
 
   function isMissionResting(userData) {
     return (Number(userData.restingUntil) || 0) > Date.now();
+  }
+
+  // Alias dùng chung cho hệ trạng thái/ticket. Bản trước gọi isResting()
+  // nhưng chỉ còn isMissionResting(), nên runtime văng ReferenceError.
+  function isResting(userData) {
+    normalizeMissionUserData(userData);
+    return isMissionResting(userData);
   }
 
   function normalizeMissionUserData(userData) {
@@ -2320,27 +8317,24 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     normalizeMissionUserData(userData);
 
     if (mission.status !== MISSION_STATUS_OPEN) {
-      return { ok: false, message: 'Nhiệm vụ này đã chạm trán hoặc đã kết thúc.' };
+      return { ok: false, message: 'Nhiệm vụ đã chạm trán hoặc kết thúc.' };
     }
 
-    if (hasUsedMissionToday(userData)) {
-      return { ok: false, message: 'Hôm nay đạo hữu đã tham gia một vụ, không thể nhận thêm.' };
-    }
-
-    if (isMissionResting(userData)) {
-      return { ok: false, message: `Đạo hữu đang tĩnh dưỡng. Còn lại: ${getRemainingTimeText(userData.restingUntil - Date.now())}.` };
+    const statusBlock = getMissionStatusBlock(userData);
+    if (statusBlock.blockJoin) {
+      return { ok: false, message: statusBlock.message };
     }
 
     const activeMission = findActiveMissionOfUser(data, userId);
 
     if (activeMission && activeMission.id !== mission.id) {
-      return { ok: false, message: `Đạo hữu đang ở tiểu đội nhiệm vụ **${activeMission.name}**.` };
+      return { ok: false, message: `Đang ở tiểu đội **${activeMission.name}**.` };
     }
 
     const tuVi = getTuViFromExp(Number(userData.tuViExp) || 0);
 
     if (tuVi.realmIndex < mission.requiredRealmIndex) {
-      return { ok: false, message: `Tu vi tối thiểu để nhận nhiệm vụ này là **${getMissionRequiredText(mission)}**.` };
+      return { ok: false, message: `Cần tối thiểu **${getMissionRequiredText(mission)}**.` };
     }
 
     if (mission.party.length >= MISSION_MAX_PARTY_SIZE && !mission.party.includes(userId)) {
@@ -2350,181 +8344,2119 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     return { ok: true };
   }
 
-  function buildMissionListEmbed(data) {
-    const lines = data.missions.map((mission, index) => [
-      `**${index + 1}. ${mission.name}**`,
-      `Loại: ${getMissionTypeText(mission.type)}`,
-      `Khí tức dò được: ${mission.aura}`,
-      `Yêu cầu: ${getMissionRequiredText(mission)}`,
-      `Tình trạng: ${getMissionStatusText(mission)}`,
-    ].join('\n'));
+  function getMissionStatusBlock(userData) {
+    normalizeMissionUserData(userData);
 
-    return new EmbedBuilder()
-      .setColor(GOLD)
-      .setTitle('Trảm Yêu Bảng Hôm Nay')
-      .setDescription([
-        `Ngày: **${data.date}**`,
-        `Số nhiệm vụ mở: **${data.missions.length}/${data.openLimit}**`,
-        'Mỗi đạo hữu chỉ được tham gia **1 vụ/ngày**.',
-        'Tu vi thật của quái/uế khí sẽ bị che giấu đến khi tiểu đội xuất phát.',
-        '',
-        lines.join('\n\n') || 'Hôm nay chưa mở nhiệm vụ.',
-      ].join('\n'))
-      .setFooter({ text: 'Chọn nhiệm vụ bằng menu bên dưới để lập đội, tham gia hoặc xuất phát.' });
+    if (isMissionResting(userData)) {
+      return {
+        blockJoin: true,
+        blockStart: true,
+        blockFight: true,
+        message: `Đang trọng thương/tĩnh dưỡng: ${getRemainingTimeText(userData.restingUntil - Date.now())}.`,
+      };
+    }
+
+    if (isTemporaryStatusActive(userData)) {
+      const statusName = String(userData.temporaryStatus || '');
+      const lower = statusName.toLowerCase();
+      if (statusName.includes('Tâm Ma') || lower.includes('tam ma')) {
+        return {
+          blockJoin: true,
+          blockStart: true,
+          blockFight: true,
+          message: `Đang bị **${statusName}**, không thể tham gia nhiệm vụ.`,
+        };
+      }
+
+      if (statusName.includes('Trọng thương') || statusName.includes('Bị thương')) {
+        return {
+          blockJoin: true,
+          blockStart: true,
+          blockFight: true,
+          message: `Đang bị **${statusName}**, chưa thể xuất chiến.`,
+        };
+      }
+    }
+
+    return { blockJoin: false, blockStart: false, blockFight: false, message: null };
   }
 
-  function buildMissionSelectRow(data) {
-    const options = data.missions.slice(0, 25).map((mission, index) => ({
-      label: `${index + 1}. ${mission.name}`.slice(0, 100),
-      description: `${getMissionTypeText(mission.type)} • ${mission.aura}`.slice(0, 100),
+  function getMissionPartyStatusBlock(mission, users) {
+    const blocked = [];
+
+    for (const memberId of mission.party) {
+      const userData = getOrCreateUser(users, memberId);
+      const status = getMissionStatusBlock(userData);
+      if (status.blockStart || status.blockFight) {
+        blocked.push(`<@${memberId}>: ${status.message}`);
+      }
+    }
+
+    return blocked;
+  }
+
+  function getMissionTicketTopic(mission) {
+    return `MISSION_TICKET:${mission.id}`;
+  }
+
+  function getMissionTicketName(mission) {
+    const raw = `nv-${mission.id}-${mission.name || 'nhiem-vu'}`;
+    return raw
+      .normalize('NFD')
+      .replace(/[\\u0300-\\u036f]/g, '')
+      .toLowerCase()
+      .replace(/đ/g, 'd')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 90) || `nv-${mission.id}`;
+  }
+
+  async function ensureMissionTicketChannel(interaction, mission, users) {
+    const guild = interaction.guild;
+    let channel = null;
+
+    if (mission.ticketChannelId) {
+      channel = await guild.channels.fetch(mission.ticketChannelId).catch(() => null);
+    }
+
+    if (!channel) {
+      const cached = guild.channels.cache.find((item) =>
+        item?.type === ChannelType.GuildText &&
+        item.topic === getMissionTicketTopic(mission)
+      );
+      channel = cached || null;
+    }
+
+    const everyoneId = guild.roles.everyone.id;
+    const overwrites = [
+      {
+        id: everyoneId,
+        deny: [PermissionFlagsBits.ViewChannel],
+      },
+      {
+        id: client.user.id,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory,
+          PermissionFlagsBits.ManageChannels,
+        ],
+      },
+      ...mission.party.map((memberId) => ({
+        id: memberId,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory,
+        ],
+      })),
+    ];
+
+    if (!channel) {
+      channel = await guild.channels.create({
+        name: getMissionTicketName(mission),
+        type: ChannelType.GuildText,
+        topic: getMissionTicketTopic(mission),
+        parent: interaction.channel?.parentId || null,
+        permissionOverwrites: overwrites,
+        reason: 'Tao ticket tam thoi cho to doi nhiem vu.',
+      });
+      mission.ticketCreatedAt = Date.now();
+    } else {
+      await channel.permissionOverwrites.set(overwrites, 'Cap nhat thanh vien ticket nhiem vu.').catch(() => null);
+    }
+
+    mission.ticketChannelId = channel.id;
+    return channel;
+  }
+
+  async function updateMissionTicketMessage(interaction, mission, users, notice = null) {
+    const channel = await ensureMissionTicketChannel(interaction, mission, users);
+
+    const payload = {
+      content: notice ? `${notice}\\n${mission.party.map((id) => `<@${id}>`).join(' ')}`.trim() : mission.party.map((id) => `<@${id}>`).join(' '),
+      embeds: [buildMissionDetailEmbed(mission, users)],
+      components: buildMissionDetailRows(mission),
+    };
+
+    let message = null;
+    if (mission.ticketMessageId) {
+      message = await channel.messages.fetch(mission.ticketMessageId).catch(() => null);
+    }
+
+    if (message) {
+      await message.edit(payload).catch(() => null);
+    } else {
+      message = await channel.send(payload);
+      mission.ticketMessageId = message.id;
+    }
+
+    return channel;
+  }
+
+
+  async function deleteChannelAfterDelay(channel, reason, delayMs) {
+    if (!channel?.delete) return;
+    const safeDelay = Math.max(3000, Number(delayMs) || 12000);
+    const timer = setTimeout(async () => {
+      await channel.delete(reason).catch((error) => {
+        console.error('Khong the tu dong dong ticket:', error);
+      });
+    }, safeDelay);
+    if (typeof timer.unref === 'function') timer.unref();
+  }
+
+  async function scheduleMissionTicketCleanup(context, mission, data, notice = 'Nhiệm vụ đã kết thúc. Ticket tự đóng sau vài giây.') {
+    if (!mission) return;
+    const guild = context?.guild || null;
+    const users = loadUsers();
+    await finalizeMissionTicketAndCleanup(context, mission, data, users, notice);
+    if (!guild && data) saveMissionData(data);
+  }
+
+  async function scheduleRequestTicketAutoClose(channel, notice = 'Ticket đã xử lý xong. Tự đóng sau vài giây.') {
+    if (!channel?.send) return;
+    await channel.send({ content: notice }).catch(() => null);
+    await deleteChannelAfterDelay(channel, 'Tu dong dong ticket sau khi xu ly.', REQUEST_TICKET_DELETE_DELAY_MS);
+  }
+
+  async function scheduleOnboardingTicketAutoClose(channel, notice = 'Động Phủ Nhập Môn đã hoàn tất. Tự đóng sau vài giây.') {
+    if (!channel?.send) return;
+    await channel.send({ content: notice }).catch(() => null);
+    await deleteChannelAfterDelay(channel, 'Tu dong dong phu nhap mon sau khi hoan tat.', ONBOARDING_TICKET_DELETE_DELAY_MS);
+  }
+
+  function canOpenManagedTicket(userId, topicPrefix, cooldownMs) {
+    const key = `${topicPrefix}:${userId}`;
+    const now = Date.now();
+    const lastOpenedAt = Number(TICKET_OPEN_COOLDOWNS.get(key)) || 0;
+    const remaining = cooldownMs - (now - lastOpenedAt);
+    if (remaining > 0) {
+      return { ok: false, message: `Vừa mở/đóng ticket gần đây. Chờ thêm **${formatDuration(remaining)}** rồi thử lại.` };
+    }
+    TICKET_OPEN_COOLDOWNS.set(key, now);
+    return { ok: true };
+  }
+
+  async function cleanupStaleManagedTickets(activeClient) {
+    const guilds = activeClient.guilds?.cache ? [...activeClient.guilds.cache.values()] : [];
+    if (guilds.length === 0) return;
+
+    const now = Date.now();
+    const data = getMissionDataForToday();
+    let missionDataChanged = false;
+
+    for (const guild of guilds) {
+      const channels = await guild.channels.fetch().catch(() => null);
+      if (!channels) continue;
+
+      for (const channel of channels.values()) {
+        if (!channel || channel.type !== ChannelType.GuildText) continue;
+        const topic = String(channel.topic || '');
+        const age = now - Number(channel.createdTimestamp || 0);
+
+        if (topic.startsWith('MISSION_TICKET:')) {
+          const missionId = topic.slice('MISSION_TICKET:'.length).trim();
+          const mission = getMissionById(data, missionId);
+          if (!mission) {
+            await scheduleGenericChannelClose(channel, 'Ticket nhiệm vụ không còn dữ liệu. Tự đóng sau vài giây.', MISSION_TICKET_DELETE_DELAY_MS, 'Don ticket nhiem vu khong con du lieu.');
+            continue;
+          }
+
+          if (mission.status === MISSION_STATUS_COMPLETED || mission.party.length === 0 || mission.ticketClosedAt) {
+            mission.ticketChannelId = null;
+            mission.ticketMessageId = null;
+            mission.ticketClosedAt = mission.ticketClosedAt || now;
+            missionDataChanged = true;
+            await scheduleGenericChannelClose(channel, 'Ticket nhiệm vụ đã hết hạn. Tự đóng sau vài giây.', MISSION_TICKET_DELETE_DELAY_MS, 'Don ticket nhiem vu da het han.');
+            continue;
+          }
+
+          if (!mission.ticketChannelId) {
+            mission.ticketChannelId = channel.id;
+            missionDataChanged = true;
+          }
+          continue;
+        }
+
+        if (topic.startsWith(TICKET_TOPIC_PREFIX) && age > STALE_ONBOARDING_TICKET_MS) {
+          await scheduleGenericChannelClose(channel, 'Động Phủ Nhập Môn quá 24 giờ không hoàn tất. Tự đóng để tránh rác ticket.', ONBOARDING_TICKET_DELETE_DELAY_MS, 'Don Dong Phu Nhap Mon qua han.');
+          continue;
+        }
+
+        if ((topic.startsWith(THU_NHAN_TOPIC_PREFIX) || topic.startsWith(BAI_SU_TOPIC_PREFIX)) && age > STALE_REQUEST_TICKET_MS) {
+          await scheduleGenericChannelClose(channel, 'Ticket xét duyệt quá 24 giờ không xử lý. Tự đóng để tránh rác ticket.', REQUEST_TICKET_DELETE_DELAY_MS, 'Don ticket xet duyet qua han.');
+        }
+      }
+    }
+
+    if (missionDataChanged) saveMissionData(data);
+  }
+
+  async function scheduleGenericChannelClose(channel, notice, delayMs, reason) {
+    if (!channel?.send) return;
+    await channel.send({ content: notice }).catch(() => null);
+    await deleteChannelAfterDelay(channel, reason || 'Tu dong don ticket cu.', delayMs);
+  }
+
+  async function removeMissionTicketMember(interaction, mission, memberId) {
+    if (!mission.ticketChannelId) return;
+    const channel = await interaction.guild.channels.fetch(mission.ticketChannelId).catch(() => null);
+    if (!channel?.permissionOverwrites) return;
+
+    if (mission.party.includes(memberId)) return;
+    await channel.permissionOverwrites.delete(memberId, 'Thanh vien roi khoi to doi nhiem vu.').catch(() => null);
+  }
+
+  async function finalizeMissionTicketAndCleanup(context, mission, data, users, notice = 'Nhiệm vụ đã kết thúc.') {
+    if (!mission) return;
+
+    const combatId = mission.combat?.id || mission.activeCombatId;
+    if (combatId && MISSION_COMBAT_TIMEOUTS.has(combatId)) {
+      clearTimeout(MISSION_COMBAT_TIMEOUTS.get(combatId));
+      MISSION_COMBAT_TIMEOUTS.delete(combatId);
+    }
+
+    mission.combat = null;
+    mission.activeCombatId = null;
+
+    const guild = context?.guild || null;
+    if (!guild || !mission.ticketChannelId) {
+      if (data) saveMissionData(data);
+      return;
+    }
+
+    const channel = await guild.channels.fetch(mission.ticketChannelId).catch(() => null);
+    if (!channel) {
+      mission.ticketChannelId = null;
+      mission.ticketMessageId = null;
+      if (data) saveMissionData(data);
+      return;
+    }
+
+    const finalNotice = `${notice || 'Nhiệm vụ đã kết thúc.'}\nTicket tự đóng sau ${Math.round(MISSION_TICKET_DELETE_DELAY_MS / 1000)} giây.`;
+    const payload = {
+      content: finalNotice,
+      embeds: [buildMissionDetailEmbed(mission, users || loadUsers())],
+      components: [],
+    };
+
+    let message = null;
+    if (mission.ticketMessageId && channel.messages?.fetch) {
+      message = await channel.messages.fetch(mission.ticketMessageId).catch(() => null);
+    }
+
+    if (message) {
+      await message.edit(payload).catch(() => null);
+    } else if (channel.send) {
+      message = await channel.send(payload).catch(() => null);
+      if (message?.id) mission.ticketMessageId = message.id;
+    }
+
+    await channel.permissionOverwrites?.set?.([
+      {
+        id: guild.roles.everyone.id,
+        deny: [PermissionFlagsBits.ViewChannel],
+      },
+      {
+        id: client.user.id,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ReadMessageHistory,
+          PermissionFlagsBits.ManageChannels,
+        ],
+      },
+    ], 'Khoa ticket nhiem vu da ket thuc.').catch(() => null);
+
+    const oldChannelId = mission.ticketChannelId;
+    mission.ticketChannelId = null;
+    mission.ticketMessageId = null;
+    mission.ticketClosedAt = Date.now();
+    if (data) saveMissionData(data);
+
+    await deleteChannelAfterDelay(channel, `Tu dong dong ticket nhiem vu ${mission.id || oldChannelId}.`, MISSION_TICKET_DELETE_DELAY_MS);
+  }
+
+  function buildMissionListEmbed(data, tier = 'tap_dich', kind = null) {
+    const config = getMissionTierConfig(tier);
+    const missions = getMissionsForTier(data, config.key, kind);
+    const minRequiredRealm = missions.length > 0
+      ? Math.min(...missions.map((mission) => mission.requiredRealmIndex))
+      : config.minRealmIndex;
+
+    return new EmbedBuilder()
+      .setColor(config.color)
+      .setTitle(`Nhiệm Vụ Nội Tông · ${config.label}`)
+      .setDescription([
+        `Ngày: **${data.date}**`,
+        `Mở: **${missions.length}/5** nhiệm vụ`,
+        kind ? `Loại xem: **${kind === 'don' ? 'Nội Tông Đơn' : 'Bảng Công Đức'}**` : null,
+        `Yêu cầu: **${getMissionTierRequirementText(config.key)}**`,
+        `Tu vi: **${TU_VI_REALMS[minRequiredRealm] ?? 'Phàm Nhân'}+**`,
+      ].join('\n'))
+      .setFooter({ text: 'Chọn nhiệm vụ trong menu.' });
+  }
+
+
+  function buildMissionSelectRow(data, tier = 'tap_dich', kind = null) {
+    const missions = getMissionsForTier(data, tier, kind);
+    const options = missions.slice(0, 25).map((mission, index) => ({
+      label: `${index + 1}. ${getMissionSelectEmoji(mission)} ${mission.name}`.slice(0, 100),
+      description: getMissionSelectDescription(mission),
       value: mission.id,
     }));
 
     return new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId(MISSION_SELECT_CUSTOM_ID)
-        .setPlaceholder('Chọn một nhiệm vụ hôm nay')
+        .setPlaceholder(`Chọn ${getMissionTierConfig(tier).shortLabel}`)
         .setMinValues(1)
         .setMaxValues(1)
         .addOptions(options),
     );
   }
 
-  function buildMissionListRows(data) {
+
+  function buildMissionListRows(data, tier = 'tap_dich', kind = null) {
     const rows = [];
+    const missions = getMissionsForTier(data, tier, kind);
 
-    if (data.missions.length > 0) {
-      rows.push(buildMissionSelectRow(data));
+    if (missions.length > 0) {
+      rows.push(buildMissionSelectRow(data, tier, kind));
+      rows.push(
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`${MISSION_NAV_BUTTON_PREFIX}${missions[0].id}:stay:${normalizeMissionTier(tier)}`)
+            .setLabel('Xem nhiệm vụ đầu')
+            .setStyle(ButtonStyle.Primary),
+          new ButtonBuilder()
+            .setCustomId(MISSION_MY_STATUS_BUTTON)
+            .setLabel('Trạng thái của ta')
+            .setStyle(ButtonStyle.Secondary),
+        ),
+      );
+    } else {
+      rows.push(
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`${MISSION_REFRESH_BUTTON_PREFIX}${normalizeMissionTier(tier)}`)
+            .setLabel('Làm mới bảng')
+            .setStyle(ButtonStyle.Secondary),
+        ),
+      );
     }
-
-    rows.push(
-      new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(MISSION_REFRESH_BUTTON)
-          .setLabel('Làm mới bảng')
-          .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-          .setCustomId(MISSION_MY_STATUS_BUTTON)
-          .setLabel('Trạng thái của ta')
-          .setStyle(ButtonStyle.Primary),
-      ),
-    );
 
     return rows;
   }
 
+
+
   function buildMissionDetailEmbed(mission, users) {
     const isRevealed = mission.status !== MISSION_STATUS_OPEN;
+    const partySize = getMissionPartySize(mission);
     const partyLines = mission.party.length > 0
       ? mission.party.map((memberId, index) => {
         const userData = normalizeUserData(users[memberId] ?? createDefaultUserData());
         const tuVi = getTuViFromExp(Number(userData.tuViExp) || 0);
         const leaderMark = mission.leaderId === memberId ? 'Đội trưởng' : 'Thành viên';
-
-        return `${index + 1}. <@${memberId}> — ${tuVi.realm} ${tuVi.minor} (${leaderMark})`;
+        const roleMark = getMissionMemberRoleText(users, mission, memberId);
+        return `${index + 1}. <@${memberId}> · ${tuVi.realm} ${tuVi.minor} · ${leaderMark}${roleMark ? ` · ${roleMark}` : ''}`;
       })
-      : ['Chưa có ai trong tiểu đội.'];
+      : ['Chưa có đội.'];
 
+    const missionIcon = mission.type === 'clean' ? '📜' : mission.type === 'dungeon' ? '⛩️' : '⚔️';
+    const tierConfig = getMissionTierConfig(mission.tier);
     const fields = [
-      { name: 'Loại', value: getMissionTypeText(mission.type), inline: true },
-      { name: 'Khí tức dò được', value: mission.aura, inline: true },
-      { name: 'Yêu cầu', value: getMissionRequiredText(mission), inline: true },
-      { name: 'Tu vi thật', value: isRevealed ? getMissionRealmTextFromLevel(mission.hiddenLevel) : '???', inline: true },
-      { name: 'Thưởng dự kiến', value: `${mission.rewardTotal} cống hiến tổng, chia 3 phần.\nMỗi thành viên nhận khoảng ${Math.floor(mission.rewardTotal / 3)} nếu thành công.`, inline: false },
-      { name: 'Tiểu đội', value: partyLines.join('\n'), inline: false },
+      { name: 'Thông tin nhanh', value: [
+        `Bảng: **${tierConfig.shortLabel}**`,
+        `Loại: **${getMissionTypeText(mission.type)}**`,
+        `Yêu cầu: **${getMissionRequiredText(mission)}**`,
+        `Trạng thái: **${getMissionStatusText(mission)}**`,
+      ].join('\n'), inline: false },
+      { name: 'Mục tiêu dễ hiểu', value: clampEmbedFieldValue(getMissionObjectiveText(mission), 900), inline: false },
+      { name: 'Thưởng dự kiến', value: getMissionRewardText(mission), inline: false },
+      { name: 'Đội tham gia', value: `${partySize}/${MISSION_MAX_PARTY_SIZE}\n${partyLines.join('\n')}`.slice(0, 1024), inline: false },
     ];
 
-    if (mission.status === MISSION_STATUS_COMPLETED && mission.resultText) {
-      fields.push({ name: 'Kết quả', value: mission.resultText.slice(0, 1024), inline: false });
+    if (mission.type === 'clean' && mission.party.length > 0) {
+      const strategyKey = mission.strategyKey || 'balanced';
+      fields.push({ name: 'Kế hoạch xử lý', value: getMissionStrategyText(strategyKey), inline: false });
+      fields.push({ name: 'Vai trò tự động', value: getMissionPartyRoleText(users, mission), inline: false });
+    }
+
+    if (isRevealed) {
+      fields.splice(2, 0, {
+        name: mission.type === 'clean' ? 'Việc cần xử lý' : 'Gặp địch',
+        value: [
+          `${mission.type === 'clean' ? 'Vướng mắc' : 'Địch'}: **${mission.enemyName || getMissionEnemyText(mission.type)}**`,
+          mission.type !== 'clean' && getMissionMonster(mission) ? `Dạng Dị Lỗi: ${getMonsterDisplayLine(getMissionMonster(mission))}` : null,
+          `Cấp ẩn: **${getMissionRealmTextFromLevel(mission.hiddenLevel)}**`,
+          mission.bicanhSituationName ? `Ghi chú: **${mission.bicanhSituationName}**` : null,
+        ].filter(Boolean).join('\n'),
+        inline: false,
+      });
     }
 
     if (mission.status === MISSION_STATUS_REVEALED) {
-      fields.push(
-        { name: 'Lực chiến tiểu đội', value: `${mission.partyPower || 'Chưa tính'}`, inline: true },
-        { name: `Lực chiến ${getMissionEnemyText(mission.type)}`, value: `${mission.enemyPower || getMissionEnemyPower(mission)}`, inline: true },
-        { name: 'Tỉ lệ thắng ước tính', value: mission.winChance ? `${Math.round(mission.winChance * 100)}%` : 'Chưa tính', inline: true },
-      );
+      fields.push({
+        name: mission.type === 'clean' ? 'Tỉ lệ xử lý' : 'Lực chiến',
+        value: [
+          `Sức đội: **${mission.partyPower || 'Chưa tính'}**`,
+          `${mission.type === 'clean' ? 'Độ khó' : 'Địch'}: **${mission.enemyPower || getMissionEnemyPower(mission)}**`,
+          `Tỉ lệ thành công: **${mission.winChance ? `${Math.round(mission.winChance * 100)}%` : 'Chưa tính'}**`,
+        ].join('\n'),
+        inline: false,
+      });
+    }
+
+    if (mission.ticketChannelId) {
+      fields.push({ name: 'Ticket tổ đội', value: `<#${mission.ticketChannelId}>`, inline: false });
+    }
+
+    if (mission.awaitingLootChoice && mission.resultText) {
+      fields.push({ name: 'Sau giao chiến', value: mission.resultText.slice(0, 900), inline: false });
+      fields.push({ name: 'Chọn cách xử lý tàn tích', value: '🔥 **Hấp Tu Vi**: nhiều tu vi hơn, tăng rủi ro.\n🕊️ **Phong Ấn**: Công Đức, nguyên liệu sạch, ổn định.\n⚔️ **Trảm Sát**: thêm nguyên liệu craft và vật chứng đổi cống hiến.', inline: false });
+    } else if (mission.status === MISSION_STATUS_COMPLETED && mission.resultText) {
+      fields.push({ name: 'Kết quả', value: mission.resultText.slice(0, 900), inline: false });
     }
 
     return new EmbedBuilder()
-      .setColor(mission.type === 'clean' ? 0x4ade80 : 0xef4444)
-      .setTitle(`${mission.type === 'clean' ? 'Dọn Bí Cảnh' : 'Trảm Yêu Lệnh'} — ${mission.name}`)
+      .setColor(tierConfig.color)
+      .setTitle(`${missionIcon} ${mission.name}`)
       .setDescription(
-        mission.status === MISSION_STATUS_OPEN
-          ? 'Tu vi thật đang bị che giấu. Hãy lập tiểu đội rồi xuất phát.'
-          : mission.status === MISSION_STATUS_REVEALED
-            ? `Đã chạm trán **${getMissionEnemyText(mission.type)}**. Đội trưởng chọn hành động tiếp theo.`
-            : 'Nhiệm vụ đã kết thúc.',
+        mission.awaitingLootChoice
+          ? 'Địch đã gục. Đội trưởng chọn cách xử lý tàn tích.'
+          : mission.status === MISSION_STATUS_OPEN
+            ? 'Nhận nhiệm vụ hoặc lập đội.'
+            : mission.status === MISSION_STATUS_REVEALED
+              ? (mission.type === 'clean' ? 'Đội trưởng chọn chiến thuật xử lý.' : 'Đội trưởng chọn hành động giao chiến.')
+              : 'Nhiệm vụ đã kết thúc.',
       )
       .addFields(...fields)
-      .setFooter({ text: 'Quái/uế khí được cân bằng mạnh xấp xỉ 3 tu sĩ cùng cảnh giới.' });
+      .setFooter({ text: getMissionPageLabel(mission.id, getMissionDataForToday(), normalizeMissionTier(mission.tier)) });
+  }
+
+
+  function buildMissionNavRow(missionId) {
+    const data = getMissionDataForToday();
+    const mission = data.missions.find((entry) => entry.id === missionId);
+    const tier = normalizeMissionTier(mission?.tier);
+    const pageLabel = getMissionPageLabel(missionId, data, tier);
+
+    return new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`${MISSION_NAV_BUTTON_PREFIX}${missionId}:prev:${tier}`)
+        .setLabel('◀ Trước')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(`${MISSION_NAV_BUTTON_PREFIX}${missionId}:stay:${tier}`)
+        .setLabel(pageLabel)
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(true),
+      new ButtonBuilder()
+        .setCustomId(`${MISSION_NAV_BUTTON_PREFIX}${missionId}:next:${tier}`)
+        .setLabel('Sau ▶')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(`${MISSION_REFRESH_BUTTON_PREFIX}${tier}`)
+        .setLabel('Mục lục')
+        .setStyle(ButtonStyle.Secondary),
+    );
+  }
+
+
+
+  function buildMissionCloseTicketButton(mission) {
+    return new ButtonBuilder()
+      .setCustomId(`${MISSION_CLOSE_TICKET_PREFIX}${mission.id}`)
+      .setLabel('Đóng Ticket')
+      .setStyle(ButtonStyle.Secondary);
   }
 
   function buildMissionDetailRows(mission) {
+    const rows = [];
+
+    if (mission.awaitingLootChoice) {
+      const actionRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`${MISSION_LOOT_CHOICE_PREFIX}${mission.id}:absorb`)
+          .setLabel('Hấp Tu Vi')
+          .setStyle(ButtonStyle.Danger),
+        new ButtonBuilder()
+          .setCustomId(`${MISSION_LOOT_CHOICE_PREFIX}${mission.id}:seal`)
+          .setLabel('Phong Ấn')
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId(`${MISSION_LOOT_CHOICE_PREFIX}${mission.id}:kill`)
+          .setLabel('Trảm Sát')
+          .setStyle(ButtonStyle.Primary),
+      );
+      if (mission.ticketChannelId) actionRow.addComponents(buildMissionCloseTicketButton(mission));
+      rows.push(actionRow, buildMissionNavRow(mission.id));
+      return rows;
+    }
+
     if (mission.status === MISSION_STATUS_COMPLETED) {
-      return [
-        new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId(MISSION_REFRESH_BUTTON)
-            .setLabel('Về Trảm Yêu Bảng')
-            .setStyle(ButtonStyle.Secondary),
-        ),
-      ];
+      if (mission.ticketChannelId) {
+        rows.push(new ActionRowBuilder().addComponents(buildMissionCloseTicketButton(mission)));
+      }
+      rows.push(buildMissionNavRow(mission.id));
+      return rows;
     }
 
     if (mission.status === MISSION_STATUS_REVEALED) {
-      return [
-        new ActionRowBuilder().addComponents(
+      const actionRow = new ActionRowBuilder();
+      if (mission.type === 'clean') {
+        actionRow.addComponents(
+          new ButtonBuilder().setCustomId(`${MISSION_STRATEGY_PREFIX}${mission.id}:safe`).setLabel('An Toàn').setStyle(ButtonStyle.Success),
+          new ButtonBuilder().setCustomId(`${MISSION_STRATEGY_PREFIX}${mission.id}:balanced`).setLabel('Cân Bằng').setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId(`${MISSION_STRATEGY_PREFIX}${mission.id}:risky`).setLabel('Mạo Hiểm').setStyle(ButtonStyle.Danger),
+          new ButtonBuilder().setCustomId(`${MISSION_ESCAPE_PREFIX}${mission.id}`).setLabel('Rút lui').setStyle(ButtonStyle.Secondary),
+        );
+      } else {
+        actionRow.addComponents(
           new ButtonBuilder()
             .setCustomId(`${MISSION_FIGHT_PREFIX}${mission.id}`)
             .setLabel(getMissionActionText(mission.type))
-            .setStyle(mission.type === 'clean' ? ButtonStyle.Primary : ButtonStyle.Danger),
+            .setStyle(ButtonStyle.Danger),
           new ButtonBuilder()
             .setCustomId(`${MISSION_ESCAPE_PREFIX}${mission.id}`)
-            .setLabel('Chạy trốn')
+            .setLabel('Rút lui')
             .setStyle(ButtonStyle.Secondary),
-          new ButtonBuilder()
-            .setCustomId(MISSION_REFRESH_BUTTON)
-            .setLabel('Về bảng')
-            .setStyle(ButtonStyle.Secondary),
-        ),
-      ];
+        );
+      }
+
+      if (mission.ticketChannelId) {
+        actionRow.addComponents(buildMissionCloseTicketButton(mission));
+      }
+
+      rows.push(actionRow, buildMissionNavRow(mission.id));
+      return rows;
     }
+
+    const actionRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`${MISSION_CREATE_PARTY_PREFIX}${mission.id}`)
+        .setLabel('Đăng ký lập đội')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(`${MISSION_JOIN_PARTY_PREFIX}${mission.id}`)
+        .setLabel('Gia nhập tiểu đội')
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(`${MISSION_LEAVE_PARTY_PREFIX}${mission.id}`)
+        .setLabel('Rời đội')
+        .setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder()
+        .setCustomId(`${MISSION_START_PREFIX}${mission.id}`)
+        .setLabel('Xuất phát')
+        .setStyle(ButtonStyle.Danger),
+    );
+
+    if (mission.ticketChannelId) {
+      actionRow.addComponents(buildMissionCloseTicketButton(mission));
+    }
+
+    rows.push(actionRow, buildMissionNavRow(mission.id));
+    return rows;
+  }
+
+
+
+  async function handleMissionNavigate(interaction) {
+    const payload = interaction.customId.slice(MISSION_NAV_BUTTON_PREFIX.length);
+    const [missionId, direction, customTier] = payload.split(':');
+    const data = getMissionDataForToday();
+    const users = loadUsers();
+    const currentMission = getMissionById(data, missionId);
+    const tier = normalizeMissionTier(customTier || currentMission?.tier);
+    const missions = getMissionsForTier(data, tier);
+    const currentIndex = missions.findIndex((mission) => mission.id === missionId);
+
+    if (currentIndex < 0 || missions.length === 0) {
+      await interaction.reply({ content: 'Không tìm thấy nhiệm vụ này trong bảng hôm nay.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (!hasMissionTierAccess(interaction.member, tier)) {
+      await interaction.reply({ content: getMissionTierAccessMessage(tier, interaction.member), flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const delta = direction === 'prev' ? -1 : direction === 'next' ? 1 : 0;
+    const nextIndex = (currentIndex + delta + missions.length) % missions.length;
+    const mission = missions[nextIndex];
+
+    await interaction.update({
+      embeds: [buildMissionDetailEmbed(mission, users)],
+      components: buildMissionDetailRows(mission),
+    });
+  }
+
+
+
+  async function sendMissionBoardToChannel(interaction, tier) {
+    const data = getMissionDataForToday();
+    const recentMessages = await interaction.channel.messages.fetch({ limit: 30 }).catch(() => null);
+    const tierLabel = getMissionTierConfig(tier).label;
+
+    if (recentMessages) {
+      const oldPanel = recentMessages.find((message) => {
+        const title = message.embeds?.[0]?.title ?? '';
+        return message.author.id === client.user.id && title.includes(tierLabel);
+      });
+
+      if (oldPanel) {
+        await oldPanel.delete().catch(() => null);
+      }
+    }
+
+    await interaction.channel.send({
+      embeds: [buildMissionListEmbed(data, tier)],
+      components: buildMissionListRows(data, tier),
+    });
+  }
+
+  async function refreshMissionBoardMessages(channel, tier, data = null) {
+    if (!channel?.messages?.fetch || !client.user?.id) {
+      return;
+    }
+
+    const missionData = data ?? getMissionDataForToday();
+    const config = getMissionTierConfig(tier);
+    const recentMessages = await channel.messages.fetch({ limit: 50 }).catch(() => null);
+
+    if (!recentMessages) {
+      return;
+    }
+
+    const panels = recentMessages.filter((message) => {
+      const title = message.embeds?.[0]?.title ?? '';
+      return message.author?.id === client.user.id && title.includes(config.label);
+    });
+
+    for (const message of panels.values()) {
+      await message.edit({
+        embeds: [buildMissionListEmbed(missionData, config.key)],
+        components: buildMissionListRows(missionData, config.key),
+      }).catch(() => null);
+    }
+  }
+
+  async function handleBangNhiemVu(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Bảng nhiệm vụ chỉ dựng được trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({ content: 'Chỉ chưởng quản tông môn mới được dựng bảng nhiệm vụ cố định.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const tier = getMissionTierFromInteraction(interaction, 'tap_dich');
+    await sendMissionBoardToChannel(interaction, tier);
+    await interaction.reply({ content: `Đã dựng **bảng công khai ${getMissionTierLabel(tier)}** tại kênh này. Lệnh này chỉ đăng bảng, không tạo/reset nhiệm vụ.`, flags: MessageFlags.Ephemeral });
+  }
+
+  async function handleSetupBangNhiemVu(interaction) {
+    await handleBangNhiemVu(interaction);
+  }
+
+
+  // ===== Bí Cảnh Ngày · data helpers =====
+  function ensureBicanhFile() {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+
+    if (!fs.existsSync(BICANH_FILE)) {
+      fs.writeFileSync(BICANH_FILE, `${JSON.stringify({ weekKey: null }, null, 2)}\n`, 'utf8');
+    }
+  }
+
+  function loadBicanhData() {
+    ensureBicanhFile();
+
+    try {
+      const raw = fs.readFileSync(BICANH_FILE, 'utf8');
+      const parsed = raw.trim() ? JSON.parse(raw) : {};
+      return normalizeWeeklyBicanhData(parsed);
+    } catch (error) {
+      console.error('Khong the doc data/bicanh_weekly.json:', error);
+      return normalizeWeeklyBicanhData({});
+    }
+  }
+
+  function saveBicanhData(data) {
+    ensureBicanhFile();
+    fs.writeFileSync(BICANH_FILE, `${JSON.stringify(normalizeWeeklyBicanhData(data), null, 2)}\n`, 'utf8');
+  }
+
+  function getWeeklyBicanhTemplate(weekKey = getWeekKey()) {
+    const index = deterministicScoreForKey('weekly-bicanh-template', weekKey) % Math.max(1, DUNGEON_TEMPLATES.length);
+    return DUNGEON_TEMPLATES[index] ?? DUNGEON_TEMPLATES[0];
+  }
+
+  // Daily bí cảnh implementation is defined near the end of the file. Old weekly-map handlers were removed to avoid duplicate hoisted functions.
+
+  function scheduleWeeklyBicanhAutoResolve() {
+    setInterval(async () => {
+      try {
+        await autoResolveExpiredWeeklyBicanh();
+      } catch (error) {
+        console.error('Loi auto resolve bi canh:', error);
+      }
+    }, 15 * 60 * 1000);
+  }
+
+  // Legacy setup/phoban handlers are defined in the daily bí cảnh section.
+
+  async function handleDungeonRefresh(interaction) {
+    await handleBicanhRefresh(interaction);
+  }
+
+  async function handleDungeonSelect(interaction) {
+    await handlePhoBan(interaction);
+  }
+
+  async function handleDungeonNavigate(interaction) {
+    await handleBicanhRefresh(interaction);
+  }
+
+  async function handleDungeonOpen(interaction) {
+    await handleBicanhRefresh(interaction);
+  }
+
+
+
+  function buildDungeonListEmbed() {
+    return new EmbedBuilder()
+      .setColor(0x8b5cf6)
+      .setTitle('Bí Cảnh Tông Môn - Mục Lục')
+      .setDescription([
+        'Chọn bí cảnh trong menu bên dưới để mở **trang riêng**.',
+        'Không nhồi toàn bộ danh sách dài vào embed nữa.',
+        '',
+        '**Luật solo:** có thể khai mở và đi một mình. Boss/uế khí hiện scale theo **tổng lực chiến tổ đội** và tier bí cảnh, solo vẫn mạo hiểm nhưng không còn cố định x3.',
+      ].join('\n'))
+      .setFooter({ text: 'Số trang nằm trên nút điều hướng của từng bí cảnh.' });
+  }
+
+
+  function buildDungeonListRows() {
+    const options = DUNGEON_TEMPLATES.slice(0, 25).map((dungeon, index) => ({
+      label: `${index + 1}. ${dungeon.name}`.slice(0, 100),
+      description: `${getMissionTypeText(dungeon.type)} • ${TU_VI_REALMS[dungeon.minRealmIndex] ?? 'Phàm Nhân'}+ • ${dungeon.floors} tầng`.slice(0, 100),
+      value: dungeon.key,
+    }));
 
     return [
       new ActionRowBuilder().addComponents(
+        new StringSelectMenuBuilder()
+          .setCustomId(DUNGEON_SELECT_CUSTOM_ID)
+          .setPlaceholder('Chọn bí cảnh muốn khai mở')
+          .setMinValues(1)
+          .setMaxValues(1)
+          .addOptions(options),
+      ),
+      new ActionRowBuilder().addComponents(
         new ButtonBuilder()
-          .setCustomId(`${MISSION_CREATE_PARTY_PREFIX}${mission.id}`)
-          .setLabel('Lập tiểu đội')
-          .setStyle(ButtonStyle.Primary),
-        new ButtonBuilder()
-          .setCustomId(`${MISSION_JOIN_PARTY_PREFIX}${mission.id}`)
-          .setLabel('Tham gia')
-          .setStyle(ButtonStyle.Success),
-        new ButtonBuilder()
-          .setCustomId(`${MISSION_LEAVE_PARTY_PREFIX}${mission.id}`)
-          .setLabel('Rời đội')
+          .setCustomId(DUNGEON_REFRESH_BUTTON)
+          .setLabel('Làm mới bí cảnh')
           .setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder()
-          .setCustomId(`${MISSION_START_PREFIX}${mission.id}`)
-          .setLabel('Xuất phát')
-          .setStyle(ButtonStyle.Danger),
       ),
     ];
   }
 
+
+  function buildDungeonDetailEmbed(dungeon) {
+    return new EmbedBuilder()
+      .setColor(dungeon.type === 'clean' ? 0x22c55e : 0xa855f7)
+      .setTitle(`⛩️ ${dungeon.name}`)
+      .setDescription(dungeon.description)
+      .addFields(
+        { name: 'Loại', value: getMissionTypeText(dungeon.type), inline: true },
+        { name: 'Yêu cầu tu vi', value: `${TU_VI_REALMS[dungeon.minRealmIndex] ?? 'Phàm Nhân'} trở lên`, inline: true },
+        { name: 'Yêu cầu thân phận', value: getMissionTierRequirementText(getDungeonTier(dungeon)), inline: true },
+        { name: 'Số tầng', value: `${dungeon.floors}`, inline: true },
+        { name: dungeon.type === 'clean' ? 'Uế khí cuối bí cảnh' : 'Boss cuối bí cảnh', value: '??? — chỉ lộ diện sau khi xuất phát', inline: false },
+        { name: 'Phần thưởng', value: `Khoảng **x${dungeon.rewardMultiplier}** so với nhiệm vụ thường cùng cảnh giới. Có thể rơi linh thạch, pháp bảo hoặc vật phẩm bí cảnh.`, inline: false },
+        { name: 'Cảnh báo solo', value: 'Có thể khai mở và xuất phát **một mình**. Boss/uế khí scale theo **tổng lực chiến tổ đội** và tier bí cảnh, nên solo vẫn mạo hiểm cao nhưng không còn cố định x3.', inline: false },
+        { name: 'Luật', value: 'Khai mở sẽ tạo một nhiệm vụ bí cảnh trong Nhiệm Vụ Nội Tông hôm nay. Tiểu đội tối đa 3 người, không bắt buộc đủ 3.', inline: false },
+      )
+      .setFooter({ text: `Trang ${getDungeonPageLabel(dungeon.key)} nằm ở nút điều hướng bên dưới.` });
+  }
+
+
+
+  function buildDungeonDetailRows(dungeon) {
+    return [
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`${DUNGEON_OPEN_PREFIX}${dungeon.key}`)
+          .setLabel('Khai mở bí cảnh')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId(DUNGEON_REFRESH_BUTTON)
+          .setLabel('Mục lục')
+          .setStyle(ButtonStyle.Secondary),
+      ),
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(`${DUNGEON_NAV_BUTTON_PREFIX}${dungeon.key}:prev`)
+          .setLabel('◀ Trước')
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId(`${DUNGEON_NAV_BUTTON_PREFIX}${dungeon.key}:stay`)
+          .setLabel(getDungeonPageLabel(dungeon.key))
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(true),
+        new ButtonBuilder()
+          .setCustomId(`${DUNGEON_NAV_BUTTON_PREFIX}${dungeon.key}:next`)
+          .setLabel('Sau ▶')
+          .setStyle(ButtonStyle.Primary),
+      ),
+    ];
+  }
+
+
+
+  function getSourceFamilyByKey(key) {
+    return SOURCE_DEFECT_FAMILIES.find((entry) => entry.key === key) || SOURCE_DEFECT_FAMILIES[0];
+  }
+
+  function addCraftMaterialToUser(userData, materialKey, amount) {
+    const daoNghe = normalizeDaoNgheData(userData);
+    const key = String(materialKey || '').trim();
+    if (!key) return 0;
+    daoNghe.materials[key] = Math.max(0, (Number(daoNghe.materials[key]) || 0) + Math.max(0, Number(amount) || 0));
+    return daoNghe.materials[key];
+  }
+
+  function pickMissionCraftMaterial(familyKey, seedText = '', minTier = 0, role = null) {
+    const family = String(familyKey || 'syntax');
+    let pool = CRAFT_MATERIAL_CATALOG.filter((entry) => entry.family === family && entry.tierIndex >= Math.max(0, Number(minTier) || 0));
+    if (role) {
+      const rolePool = pool.filter((entry) => String(entry.materialRole || '').includes(role));
+      if (rolePool.length > 0) pool = rolePool;
+    }
+    if (pool.length === 0) pool = CRAFT_MATERIAL_CATALOG.filter((entry) => entry.family === family);
+    if (pool.length === 0) pool = CRAFT_MATERIAL_CATALOG;
+    const index = deterministicScoreForKey(`combat-material:${family}:${seedText}:${role || 'any'}`, getTodayString()) % Math.max(1, pool.length);
+    return pool[index] || null;
+  }
+
+  function formatMaterialGain(material, amount) {
+    if (!material) return null;
+    return `${material.name} x${Math.max(1, Number(amount) || 1)}`;
+  }
+
+  function addSourceProfile(userData, patch = {}) {
+    normalizeUserSourceState(userData);
+    for (const key of ['sourcePower', 'runtime', 'integrity', 'logic', 'throughput', 'stability']) {
+      userData.sourceProfile[key] = Math.max(0, (Number(userData.sourceProfile[key]) || 0) + Math.max(0, Number(patch[key]) || 0));
+    }
+  }
+
+  function getMissionLootChoiceText(choice) {
+    if (choice === 'absorb') return 'Hấp Tu Vi';
+    if (choice === 'seal') return 'Phong Ấn';
+    return 'Trảm Sát';
+  }
+
+  function applyMissionPostCombatReward(userData, mission, choice, pending, memberId) {
+    normalizeMissionUserData(userData);
+    normalizeUserSourceState(userData);
+    const family = getSourceFamilyByKey(mission.lootFamily || mission.family || mission.defectFamily || 'syntax');
+    const realmIndex = Math.max(0, Math.floor((Number(mission.hiddenLevel) || 0) / MINOR_REALMS.length));
+    const baseTuVi = Math.max(1, Number(pending?.tuViEach) || Math.floor((Number(mission.tuViRewardTotal) || 0) / getMissionPartySize(mission)) || 1);
+    const baseCongHien = Math.max(0, Number(pending?.rewardEach) || Math.floor((Number(mission.rewardTotal) || 0) / getMissionPartySize(mission)) || 0);
+    const seed = `${mission.id}:${memberId}:${choice}`;
+    const gains = [];
+
+    if (choice === 'absorb') {
+      const tuViGain = Math.floor(baseTuVi * 1.35);
+      const congHienGain = Math.floor(baseCongHien * 0.18);
+      addTuViExp(userData, tuViGain);
+      addCongHien(userData, congHienGain);
+      userData.nghiepLuc += 2 + Math.floor(realmIndex / 2);
+      userData.entropy += 2 + Math.floor(realmIndex / 3);
+      userData.technicalDebt += 1 + Math.floor(realmIndex / 4);
+      addSourcePathPoints(userData, 'force_push', 2 + Math.floor(realmIndex / 2));
+      addWeeklyContribution(userData, 2 + Math.floor(realmIndex / 2), 'nhiệm vụ hấp tu vi');
+      addSourceProfile(userData, { sourcePower: 1 + Math.floor(realmIndex / 2), runtime: family.key === 'runtime' ? 2 : 0 });
+      const tainted = pickMissionCraftMaterial(family.key, seed, Math.max(0, realmIndex - 1), 'tà đạo') || pickMissionCraftMaterial(family.key, seed, Math.max(0, realmIndex - 1));
+      if (tainted) {
+        const amount = 1 + Math.floor(realmIndex / 3);
+        addCraftMaterialToUser(userData, tainted.key, amount);
+        gains.push(formatMaterialGain(tainted, amount));
+      }
+      gains.unshift(`+${tuViGain} tu vi`, `+${congHienGain} cống hiến`, `+${2 + Math.floor(realmIndex / 2)} Nghiệp Lực`, `+${2 + Math.floor(realmIndex / 3)} hỗn loạn`);
+    } else if (choice === 'seal') {
+      const tuViGain = Math.floor(baseTuVi * 0.55);
+      const congHienGain = Math.floor(baseCongHien * 0.85);
+      const congDucGain = 8 + realmIndex * 2;
+      addTuViExp(userData, tuViGain);
+      addCongHien(userData, congHienGain);
+      userData.congDucSource += congDucGain;
+      userData.nghiepLuc = Math.max(0, userData.nghiepLuc - 1);
+      addSourcePathPoints(userData, 'commit', 2 + Math.floor(realmIndex / 2));
+      addWeeklyContribution(userData, 3 + Math.floor(realmIndex / 2), 'nhiệm vụ phong ấn');
+      addSourceProfile(userData, { integrity: 1 + Math.floor(realmIndex / 2), stability: 1 + Math.floor(realmIndex / 3) });
+      const clean = pickMissionCraftMaterial(family.key, seed, Math.max(0, realmIndex - 1), 'chính đạo') || pickMissionCraftMaterial(family.key, seed, Math.max(0, realmIndex - 1), 'ổn định');
+      if (clean) {
+        const amount = 1 + Math.floor(realmIndex / 4);
+        addCraftMaterialToUser(userData, clean.key, amount);
+        gains.push(formatMaterialGain(clean, amount));
+      }
+      const evidenceKey = `vat_chung_${family.key}`;
+      addCraftMaterialToUser(userData, evidenceKey, 1);
+      gains.unshift(`+${tuViGain} tu vi`, `+${congHienGain} cống hiến`, `+${congDucGain} Công Đức Source`, `Vật Chứng Dị Lỗi ${family.short} x1`);
+    } else {
+      const tuViGain = Math.floor(baseTuVi * 0.85);
+      const congHienGain = Math.floor(baseCongHien * 0.55);
+      addTuViExp(userData, tuViGain);
+      addCongHien(userData, congHienGain);
+      if (realmIndex >= 2) userData.nghiepLuc += 1;
+      addSourcePathPoints(userData, 'neutral', 2 + Math.floor(realmIndex / 3));
+      addWeeklyContribution(userData, 2 + Math.floor(realmIndex / 3), 'nhiệm vụ trấn áp');
+      addSourceProfile(userData, { throughput: 1 + Math.floor(realmIndex / 3), logic: family.key === 'syntax' || family.key === 'hallucination' ? 1 : 0 });
+      const materialA = pickMissionCraftMaterial(family.key, `${seed}:a`, Math.max(0, realmIndex - 1));
+      const materialB = pickMissionCraftMaterial(family.key, `${seed}:b`, Math.max(0, realmIndex), 'boss');
+      if (materialA) {
+        const amount = 2 + Math.floor(realmIndex / 3);
+        addCraftMaterialToUser(userData, materialA.key, amount);
+        gains.push(formatMaterialGain(materialA, amount));
+      }
+      if (materialB && materialB.key !== materialA?.key && realmIndex >= 2) {
+        addCraftMaterialToUser(userData, materialB.key, 1);
+        gains.push(formatMaterialGain(materialB, 1));
+      }
+      const evidenceAmount = 1 + Math.floor(realmIndex / 4);
+      addCraftMaterialToUser(userData, `vat_chung_${family.key}`, evidenceAmount);
+      gains.unshift(`+${tuViGain} tu vi`, `+${congHienGain} cống hiến`, `Vật Chứng Dị Lỗi ${family.short} x${evidenceAmount}`);
+    }
+
+    if (mission.kyNgoBonus?.directStats) {
+      setTemporaryStatus(userData, 'Kỳ Ngộ Gia Thân', Math.max(1, Number(mission.kyNgoBonus.hours) || 4) * 60 * 60 * 1000, { directStats: mission.kyNgoBonus.directStats });
+    }
+    userData.lastMissionDate = getTodayString();
+    return gains.filter(Boolean).slice(0, 8).join('; ');
+  }
+
+  async function handleMissionLootChoice(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const raw = interaction.customId.slice(MISSION_LOOT_CHOICE_PREFIX.length);
+    const [missionId, choiceRaw] = raw.split(':');
+    const choice = ['absorb', 'seal', 'kill'].includes(choiceRaw) ? choiceRaw : 'kill';
+    const data = getMissionDataForToday();
+    const users = loadUsers();
+    const mission = getMissionById(data, missionId);
+    if (!mission || !mission.awaitingLootChoice) {
+      await interaction.reply({ content: 'Không còn tàn tích combat để xử lý.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    if (mission.leaderId !== interaction.user.id) {
+      await interaction.reply({ content: 'Chỉ đội trưởng mới được chọn cách xử lý tàn tích.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const lines = [`**${getMissionLootChoiceText(choice)}** hoàn tất.`];
+    const pending = mission.pendingLoot || {};
+    for (const memberId of mission.party) {
+      const userData = getOrCreateUser(users, memberId);
+      const summary = applyMissionPostCombatReward(userData, mission, choice, pending, memberId);
+      const masteryMember = await interaction.guild.members.fetch(memberId).catch(() => null);
+      if (masteryMember) await grantCongPhapMastery(userData, masteryMember, choice === 'seal' ? 14 : choice === 'absorb' ? 12 : 16, choice === 'seal' ? 'nhiemvu_phong_an' : choice === 'absorb' ? 'nhiemvu_hap_tu_vi' : 'nhiemvu_tram_sat');
+      await syncMissionMemberRoles(interaction.guild, memberId, userData);
+      lines.push(`<@${memberId}>: ${summary}`);
+    }
+
+    mission.awaitingLootChoice = false;
+    mission.pendingLoot = null;
+    mission.lootChoice = choice;
+    mission.status = MISSION_STATUS_COMPLETED;
+    mission.completedAt = Date.now();
+    mission.outcome = 'success';
+    mission.completedById = interaction.user.id;
+    mission.completedByName = interaction.member?.displayName || interaction.user.username;
+    mission.completedPartySize = getMissionPartySize(mission);
+    mission.completionTitle = `${getMissionLootChoiceText(choice)} · ${getMissionCompletionTitle(mission, interaction.member)}`;
+    mission.resultText = lines.join('\n').slice(0, 3800);
+    saveUsers(users);
+    saveMissionData(data);
+
+    await interaction.update({ embeds: [buildMissionDetailEmbed(mission, users)], components: buildMissionDetailRows(mission) }).catch(() => null);
+    await finalizeMissionTicketAndCleanup(interaction, mission, data, users, 'Nhiệm vụ đã kết thúc sau khi xử lý tàn tích.').catch(() => null);
+  }
+
+
+  function getTodayHubBicanhStatus(data, run, userId) {
+    if (run && !['completed', 'failed', 'abandoned'].includes(String(run.status))) return `đang chạy · ${getDailyBicanhProgressLine(run).replace(/\*\*/g, '')}`;
+    if (data?.dailyUses?.[userId] === data.weekKey) return 'đã dùng lượt hôm nay';
+    return 'còn 1 lượt';
+  }
+
+  function getXuatSonDailyLimit(userData, member = null) {
+    const maxRank = getMemberXuatSonMaxRank(member);
+    if (maxRank >= 9) return 6;
+    if (maxRank >= 7) return 5;
+    if (maxRank >= 5) return 4;
+    if (maxRank >= 3) return 3;
+    return 2;
+  }
+
+  function normalizeXuatSonDailyCounter(userData) {
+    normalizeUserSourceState(userData);
+    const today = getTodayString();
+    if (userData.lastXuatSonDate !== today) {
+      userData.lastXuatSonDate = today;
+      userData.dailyXuatSonCount = 0;
+    }
+    userData.dailyXuatSonCount = Math.max(0, Number(userData.dailyXuatSonCount) || 0);
+    return userData;
+  }
+
+  function getXuatSonRemaining(userData, member = null) {
+    normalizeXuatSonDailyCounter(userData);
+    const limit = getXuatSonDailyLimit(userData, member);
+    return { limit, used: Math.max(0, Number(userData.dailyXuatSonCount) || 0), remaining: Math.max(0, limit - (Number(userData.dailyXuatSonCount) || 0)) };
+  }
+
+  function createXuatSonFlowToken() {
+    return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  function normalizeActiveXuatSonState(userData) {
+    normalizeUserSourceState(userData);
+    const active = userData.activeXuatSon;
+    if (!active || typeof active !== 'object' || !active.id) {
+      if (active) userData.activeXuatSon = null;
+      return null;
+    }
+
+    const mission = getXuatSonById(active.id);
+    const today = getTodayString();
+    const now = Date.now();
+    const acceptedAt = Math.max(0, Number(active.acceptedAt) || 0);
+    const acceptedDate = typeof active.acceptedDate === 'string' && active.acceptedDate ? active.acceptedDate : (acceptedAt ? new Date(acceptedAt).toISOString().slice(0, 10) : null);
+    const expired = (acceptedDate && acceptedDate !== today) || (acceptedAt && now - acceptedAt > XUAT_SON_ACTIVE_TTL_MS) || (!acceptedAt && active.flowVersion !== XUAT_SON_FLOW_VERSION);
+
+    if (!mission || expired) {
+      userData.activeXuatSon = null;
+      return null;
+    }
+
+    active.name = mission.name;
+    active.family = mission.family;
+    active.rank = mission.rank;
+    active.acceptedAt = acceptedAt || now;
+    active.acceptedDate = acceptedDate || today;
+    active.flowVersion = XUAT_SON_FLOW_VERSION;
+    active.token = typeof active.token === 'string' && active.token ? active.token : createXuatSonFlowToken();
+    active.prep = getXuatSonPrepConfig(active.prep) ? active.prep : null;
+    active.step = active.prep ? 'resolve' : 'prepare';
+    userData.activeXuatSon = active;
+    return active;
+  }
+
+  function createActiveXuatSonState(mission) {
+    return {
+      id: mission.id,
+      name: mission.name,
+      family: mission.family,
+      rank: mission.rank,
+      prep: null,
+      step: 'prepare',
+      acceptedAt: Date.now(),
+      acceptedDate: getTodayString(),
+      flowVersion: XUAT_SON_FLOW_VERSION,
+      token: createXuatSonFlowToken(),
+    };
+  }
+
+  function buildXuatSonPickButtonId(userId, index) {
+    return `${XUAT_SON_PICK_BUTTON_PREFIX}${userId || 'self'}:${getTodayString()}:${index}`;
+  }
+
+  function parseXuatSonPickIndex(customId, userId) {
+    const raw = String(customId || '').slice(XUAT_SON_PICK_BUTTON_PREFIX.length);
+    const parts = raw.split(':');
+    if (parts.length >= 3) {
+      const [ownerId, date, indexText] = parts;
+      if (ownerId !== String(userId)) return { ok: false, reason: 'Nút Nhận này không thuộc về đạo hữu. Mở `/xuatson` của riêng mình, đừng bấm ké công án như nhặt ví trong chợ.' };
+      if (date !== getTodayString()) return { ok: false, reason: 'Nút Nhận này đã cũ. Bấm `/xuatson` để làm mới danh sách hôm nay.' };
+      const index = Number(indexText);
+      return Number.isInteger(index) && index >= 0 ? { ok: true, index } : { ok: false, reason: 'Nút Nhận không hợp lệ. Bấm `/xuatson` để làm mới.' };
+    }
+    const legacyIndex = Number(raw);
+    return Number.isInteger(legacyIndex) && legacyIndex >= 0 ? { ok: true, index: legacyIndex } : { ok: false, reason: 'Nút Nhận không hợp lệ. Bấm `/xuatson` để làm mới.' };
+  }
+
+  function buildXuatSonPrepButtonId(userId, active, prepKey) {
+    return `${XUAT_SON_PREP_BUTTON_PREFIX}${userId || 'self'}:${active?.token || 'old'}:${prepKey}`;
+  }
+
+  function buildXuatSonMethodButtonId(userId, active, methodKey) {
+    return `${XUAT_SON_METHOD_BUTTON_PREFIX}${userId || 'self'}:${active?.token || 'old'}:${methodKey}`;
+  }
+
+  function parseXuatSonStageButton(customId, prefix, userId) {
+    const raw = String(customId || '').slice(prefix.length);
+    const parts = raw.split(':');
+    if (parts.length >= 3) {
+      const [ownerId, token, ...rest] = parts;
+      if (ownerId !== String(userId)) return { ok: false, reason: 'Nút này không thuộc về đạo hữu. Mở `/xuatson` của riêng mình, khỏi cướp tay lái công án người khác.' };
+      const key = rest.join(':');
+      return key ? { ok: true, token, key } : { ok: false, reason: 'Nút Xuất Sơn bị thiếu dữ liệu. Bấm `/xuatson` để làm mới.' };
+    }
+    // Legacy button from an older message. Accept only when current active state still permits it.
+    return raw ? { ok: true, token: null, key: raw, legacy: true } : { ok: false, reason: 'Nút Xuất Sơn không hợp lệ. Bấm `/xuatson` để làm mới.' };
+  }
+
+  function validateXuatSonStageToken(active, parsed) {
+    if (!active?.id) return { ok: false, reason: 'Chưa nhận Xuất Sơn Lệnh nào. Bấm **Nhận #** trước.' };
+    if (parsed?.token && parsed.token !== active.token) return { ok: false, reason: 'Nút này thuộc về trạng thái Xuất Sơn cũ. Bấm `/xuatson` để lấy giao diện mới.' };
+    return { ok: true };
+  }
+
+  function getXuatSonPrepConfig(key) {
+    return {
+      clue: { key: 'clue', name: 'Dò manh mối', button: 'Dò manh mối', chanceBonus: 0.12, rewardMult: 0.92, note: 'Tăng tỉ lệ thành công, thưởng thấp hơn một chút.' },
+      gear: { key: 'gear', name: 'Mang pháp bảo', button: 'Mang pháp bảo', chanceBonus: 0.06, rewardMult: 1.00, note: 'Dựa vào trang bị đang mặc, ổn định khi đi lệnh khó.' },
+      ally: { key: 'ally', name: 'Gọi đồng môn hỗ trợ', button: 'Gọi đồng môn', chanceBonus: 0.09, rewardMult: 0.90, note: 'An toàn hơn, cống hiến tốt hơn, chia công cho tông môn.' },
+      rush: { key: 'rush', name: 'Đi thẳng', button: 'Đi thẳng', chanceBonus: -0.04, rewardMult: 1.08, note: 'Nhanh hơn, lời hơn, rủi ro cũng biết cười.' },
+    }[String(key)] || null;
+  }
+
+  function getXuatSonMethodConfig(method) {
+    return {
+      commit: { key: 'commit', name: 'An toàn', chanceBonus: 0.10, rewardMult: 0.90, failRisk: 0.55, path: 'commit' },
+      va_tam: { key: 'va_tam', name: 'Cân bằng', chanceBonus: 0.00, rewardMult: 1.00, failRisk: 0.85, path: 'neutral' },
+      force_push: { key: 'force_push', name: 'Mạo hiểm', chanceBonus: -0.13, rewardMult: 1.35, failRisk: 1.25, path: 'force_push' },
+    }[String(method)] || null;
+  }
+
+  function getXuatSonSuccessChance(userData, member, mission, method, prepKey) {
+    normalizeUserSourceState(userData);
+    const methodConfig = getXuatSonMethodConfig(method) || getXuatSonMethodConfig('commit');
+    const prep = getXuatSonPrepConfig(prepKey) || getXuatSonPrepConfig('rush');
+    const profile = userData.sourceProfile || {};
+    const sourceScore = ['sourcePower', 'runtime', 'integrity', 'logic', 'throughput', 'stability']
+      .reduce((sum, key) => sum + (Number(profile[key]) || 0), 0);
+    const equipmentScore = getEquippedGearKeys(userData).length * 0.015;
+    const profession = getUserDaoNgheDefinition(userData);
+    const professionBonus = profession?.key && profession.key === mission.professionKey ? 0.08 : 0;
+    const pressure = Math.max(0, Number(mission.rank) || 1) * 0.035;
+    const debtPenalty = Math.min(0.16, ((Number(userData.entropy) || 0) + (Number(userData.technicalDebt) || 0) + (Number(userData.nghiepLuc) || 0)) / 900);
+    const gearPrepBonus = prep.key === 'gear' ? Math.min(0.10, equipmentScore + sourceScore / 900) : 0;
+    return Math.max(0.18, Math.min(0.96, 0.74 - pressure + methodConfig.chanceBonus + prep.chanceBonus + sourceScore / 1200 + professionBonus + gearPrepBonus - debtPenalty));
+  }
+
+  function getXuatSonStepText(userData, member = null) {
+    const active = normalizeActiveXuatSonState(userData);
+    const quota = getXuatSonRemaining(userData, member);
+    if (!active?.id) return `Bước 1/3: **chọn và nhận công án**. Lượt hôm nay: **${quota.used}/${quota.limit}** đã dùng · còn **${quota.remaining}**.`;
+    const prep = getXuatSonPrepConfig(active.prep);
+    if (!prep) return `Đã nhận công án. Bước 2/3: chọn **chuẩn bị**. Chưa được xử lý/kết thúc ở bước này.`;
+    return `Đã chuẩn bị: **${prep.name}**. Bước 3/3: chọn cách xử lý.`;
+  }
+
+  function getRecommendedMissionsForToday(member, count = 3) {
+    const data = getMissionDataForToday();
+    const missions = (data.missions || [])
+      .filter((mission) => String(mission.status) !== MISSION_STATUS_COMPLETED)
+      .filter((mission) => hasMissionTierAccess(member, mission.tier))
+      .sort((a, b) => {
+        const aClean = a.type === 'clean' ? 0 : 1;
+        const bClean = b.type === 'clean' ? 0 : 1;
+        return aClean - bClean || (Number(a.requiredRealmIndex) || 0) - (Number(b.requiredRealmIndex) || 0);
+      });
+    return missions.slice(0, Math.max(1, count));
+  }
+
+  const SOURCE_PATH_DEFINITIONS = {
+    commit: { key: 'commit', label: 'Chính Đạo / Commit Sạch', short: 'Chính Đạo', icon: '🟢', next: [30, 60, 100, 160], bonus: 'giảm Tâm Ma, tăng Công Đức, xử lý ổn định' },
+    neutral: { key: 'neutral', label: 'Trung Đạo / Vá Tạm', short: 'Trung Đạo', icon: '🟡', next: [30, 60, 100, 160], bonus: 'craft ổn định, vá lỗi linh hoạt, ít mất nguyên liệu' },
+    force_push: { key: 'force_push', label: 'Tà Đạo / Force Push', short: 'Tà Đạo', icon: '🔴', next: [30, 60, 100, 160], bonus: 'drop hiếm và tu vi nhanh hơn, đổi bằng Tâm Ma/Nghiệp' },
+  };
+
+  function addSourcePathPoints(userData, pathKey, amount = 1) {
+    normalizeUserSourceState(userData);
+    const key = SOURCE_PATH_DEFINITIONS[pathKey] ? pathKey : 'neutral';
+    const value = Math.max(0, Number(amount) || 0);
+    userData.sourcePathPoints[key] = Math.max(0, Number(userData.sourcePathPoints[key]) || 0) + value;
+    const top = Object.entries(userData.sourcePathPoints).sort((a, b) => b[1] - a[1])[0];
+    if (top) userData.sourcePath = top[0];
+    return userData.sourcePathPoints[key];
+  }
+
+  function getSourcePathLabel(userData) {
+    normalizeUserSourceState(userData);
+    const def = SOURCE_PATH_DEFINITIONS[userData.sourcePath] || SOURCE_PATH_DEFINITIONS.neutral;
+    const points = Number(userData.sourcePathPoints?.[def.key]) || 0;
+    return `${def.label} · ${points} điểm`;
+  }
+
+  function getSourcePathProgressText(userData) {
+    normalizeUserSourceState(userData);
+    const points = userData.sourcePathPoints || {};
+    const entries = Object.values(SOURCE_PATH_DEFINITIONS)
+      .map((def) => `${def.icon} ${def.short}: **${Math.floor(Number(points[def.key]) || 0)}**`)
+      .join(' · ');
+    const active = SOURCE_PATH_DEFINITIONS[userData.sourcePath] || SOURCE_PATH_DEFINITIONS.neutral;
+    const activePoints = Math.floor(Number(points[active.key]) || 0);
+    const nextMilestone = active.next.find((value) => value > activePoints) || active.next[active.next.length - 1];
+    const need = Math.max(0, nextMilestone - activePoints);
+    return `${entries}
+Đang thiên về **${active.label}**. ${need > 0 ? `Còn **${need} điểm** tới mốc ${nextMilestone}: ${active.bonus}.` : `Đã vượt mốc lớn: ${active.bonus}.`}`;
+  }
+
+  function getPathChoicePreview(userData, pathKey, amount = 2) {
+    const def = SOURCE_PATH_DEFINITIONS[pathKey] || SOURCE_PATH_DEFINITIONS.neutral;
+    return `${def.icon} ${def.short} +${amount}`;
+  }
+
+  function getWeeklyGoalKey(date = new Date()) {
+    const d = new Date(date);
+    const day = d.getUTCDay() || 7;
+    d.setUTCDate(d.getUTCDate() + 4 - day);
+    const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+    const week = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+    return `${d.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+  }
+
+  function addWeeklyContribution(userData, amount = 1, reason = 'hoạt động') {
+    normalizeUserSourceState(userData);
+    const key = getWeeklyGoalKey();
+    const entry = userData.weeklyContribution[key] && typeof userData.weeklyContribution[key] === 'object' ? userData.weeklyContribution[key] : { points: 0, reasons: {} };
+    entry.points = Math.max(0, Number(entry.points) || 0) + Math.max(0, Number(amount) || 0);
+    entry.reasons = entry.reasons && typeof entry.reasons === 'object' ? entry.reasons : {};
+    entry.reasons[reason] = Math.max(0, Number(entry.reasons[reason]) || 0) + Math.max(0, Number(amount) || 0);
+    userData.weeklyContribution[key] = entry;
+    return entry.points;
+  }
+
+  function getWeeklySectGoalStatus(users = loadUsers()) {
+    const key = getWeeklyGoalKey();
+    const total = Object.values(users || {}).reduce((sum, userData) => {
+      const entry = userData?.weeklyContribution?.[key];
+      return sum + Math.max(0, Number(entry?.points) || 0);
+    }, 0);
+    const target = 420;
+    const pct = Math.min(100, Math.floor(total * 100 / target));
+    const tier = pct >= 100 ? 'Hoàn tất · tuần sau toàn tông nhận buff' : pct >= 70 ? 'Gần phong ấn xong' : pct >= 35 ? 'Đang ổn định' : 'Mới mở phong ấn';
+    return { key, total, target, pct, tier, text: `Source Incident tuần **${key}**: **${total}/${target}** điểm (${pct}%) · ${tier}.` };
+  }
+
+  function getBestNextCraftTarget(userData, member = null) {
+    const dao = getUserDaoNgheDefinition(userData);
+    const daoNghe = normalizeDaoNgheData(userData);
+    const rankIndex = getDaoNgheRankIndex(daoNghe.exp);
+    const profile = userData.sourceProfile || {};
+    const statKeyMap = { source: 'sourcePower', sourcepower: 'sourcePower', runtime: 'runtime', integrity: 'integrity', logic: 'logic', throughput: 'throughput', stability: 'stability' };
+    const topFamily = SOURCE_DEFECT_FAMILIES
+      .map((family) => [family.key, Number(profile[statKeyMap[String(family.targetStat || '').toLowerCase()] || 'sourcePower']) || 0])
+      .sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+    let recipes = CRAFT_RECIPE_CATALOG
+      .filter((recipe) => !dao || recipe.professionKey === dao.key)
+      .filter((recipe) => recipe.minRankIndex <= rankIndex + 1)
+      .filter((recipe) => !recipe.requiresBlueprint || daoNghe.knownBlueprints.includes(recipe.key))
+      .slice(0, 300);
+    if (!recipes.length) recipes = CRAFT_RECIPE_CATALOG.filter((recipe) => !dao || recipe.professionKey === dao.key).slice(0, 120);
+    const scored = recipes.map((recipe) => {
+      const costs = getAdjustedCraftCosts(recipe, userData);
+      const missing = costs.map((cost) => ({ ...cost, have: getCraftMaterialAmount(userData, cost.key), missing: Math.max(0, Number(cost.amount) - getCraftMaterialAmount(userData, cost.key)) }));
+      const missingTotal = missing.reduce((sum, item) => sum + item.missing, 0);
+      const haveCount = missing.reduce((sum, item) => sum + Math.min(item.have, item.amount), 0);
+      const costTotal = missing.reduce((sum, item) => sum + item.amount, 0);
+      const fit = (dao && recipe.professionKey === dao.key ? 28 : 0) + (topFamily && recipe.family === topFamily ? 12 : 0) + Math.min(30, recipe.tierIndex * 6) - missingTotal * 4 + haveCount;
+      return { recipe, missing, missingTotal, costTotal, fit };
+    }).sort((a, b) => b.fit - a.fit || a.missingTotal - b.missingTotal);
+    const best = scored[0] || null;
+    if (!best) return null;
+    const missingLines = best.missing.filter((item) => item.missing > 0).slice(0, 3).map((item) => `${item.name}: **${item.have}/${item.amount}**`);
+    const sourceHint = best.missing.find((item) => item.missing > 0);
+    return {
+      ...best,
+      reason: `Tăng hướng build ${getPlayerBuildIdentity(userData, member)}; hợp nghề/Source hơn đồ ngẫu nhiên trong shop.`,
+      missingText: missingLines.length ? missingLines.join('\n') : 'Đã đủ nguyên liệu, chỉ cần vào `/chetao` để thử vận may.',
+      farmHint: sourceHint ? `Farm thiếu **${sourceHint.name}** qua Xuất Sơn/Nhiệm vụ hệ **${best.recipe.sourceFamilyName || best.recipe.family}** hoặc Bí Cảnh lối Ngộ Đạo/Dị Bảo.` : 'Đủ nguyên liệu, khỏi đi nhặt rác thêm.',
+    };
+  }
+
+  function getPersonalGoalLines(member, userData, users = loadUsers()) {
+    const tuVi = getTuViFromExp(Number(userData.tuViExp) || 0);
+    const nextNeed = getExpNeededForBreakthrough(Number(userData.tuViExp) || 0, tuVi.level);
+    const craft = getBestNextCraftTarget(userData, member);
+    const weekly = getWeeklySectGoalStatus(users);
+    const lines = [];
+    lines.push(nextNeed > 0 ? `🔥 Đột phá: còn **${nextNeed} tu vi** tới mốc kế.` : '🔥 Đột phá: đủ tu vi, kiểm tra Tâm Ma rồi `/dotpha`.');
+    if (craft) lines.push(`🔨 Craft kế tiếp: **${craft.recipe.outputName}** · thiếu ${craft.missingTotal}/${craft.costTotal} nguyên liệu.`);
+    lines.push(`🧬 Đạo Lộ: ${getSourcePathLabel(userData)}.`);
+    lines.push(`🏯 Mục tiêu tuần: ${weekly.text}`);
+    return lines;
+  }
+
+
+  function getPlayerBuildIdentity(userData, member = null) {
+    normalizeUserSourceState(userData);
+    const dao = getUserDaoNgheDefinition(userData);
+    const profile = userData.sourceProfile || {};
+    const entries = [
+      ['sourcePower', 'Sức Source'], ['runtime', 'Nhịp vận hành'], ['integrity', 'Độ toàn vẹn'],
+      ['logic', 'Đọc lỗi'], ['throughput', 'Hiệu suất'], ['stability', 'Ổn định'],
+    ].sort((a, b) => (Number(profile[b[0]]) || 0) - (Number(profile[a[0]]) || 0));
+    const top = entries[0];
+    if (dao?.name) return `${dao.name} · thiên ${top?.[1] || 'cân bằng'}`;
+    return `Tán tu Source · thiên ${top?.[1] || 'cân bằng'}`;
+  }
+
+  function buildGoiYEmbed(member, userData) {
+    normalizeUserSourceState(userData);
+    const tuVi = getTuViFromExp(Number(userData.tuViExp) || 0);
+    const nextNeed = getExpNeededForBreakthrough(Number(userData.tuViExp) || 0, tuVi.level);
+    const dao = getUserDaoNgheDefinition(userData);
+    const equipped = getEquippedGearKeys(userData).map((key) => getShopItemByKey(key)?.name || key);
+    const shopItems = getDailyShopUnlockedItems(member)
+      .filter((item) => item && (item.professionKey === dao?.key || ['pill', 'talisman', 'tool', 'artifact', 'weapon', 'armor'].includes(item.type)))
+      .slice(0, 4);
+    const missionHints = getRecommendedMissionsForToday(member, 3);
+    const craft = getBestNextCraftTarget(userData, member);
+    const riskScore = Number(userData.entropy || 0) + Number(userData.technicalDebt || 0) + Number(userData.nghiepLuc || 0);
+    const risk = isTemporaryStatusActive(userData, 'Tâm Ma Quấn Thân') ? 'Đang có Tâm Ma: ưu tiên hóa giải trước khi đột phá hoặc đi Mạo Hiểm.'
+      : riskScore > 40
+        ? `Nhiễu Source **${riskScore}**: nên chọn An toàn/Cân bằng 1-2 lượt để hạ rủi ro.`
+        : 'Rủi ro ổn. Có thể chọn Cân bằng; Mạo hiểm chỉ nên dùng khi đang cần drop hiếm.';
+
+    const fields = [
+      { name: 'Build hiện tại', value: [
+        `**${getPlayerBuildIdentity(userData, member)}**`,
+        `Cảnh giới: **${tuVi.realm} ${tuVi.minor}**`,
+        nextNeed > 0 ? `Còn **${nextNeed} tu vi** tới mốc kế tiếp.` : 'Đã đủ tu vi cho mốc kế tiếp.',
+        dao ? `Nghề: **${dao.name}**` : 'Chưa chọn nghề: dùng `/nghenghiep hanhdong:chon` để mở hướng build.',
+        `Đạo Lộ Source: **${getSourcePathLabel(userData)}**`,
+        getSourcePathProgressText(userData),
+      ].join('\n'), inline: false },
+      { name: 'Mục tiêu cá nhân gần nhất', value: getPersonalGoalLines(member, userData).join('\n'), inline: false },
+      { name: 'Nên làm tiếp', value: [
+        nextNeed > 0 ? `Kiếm thêm **${Math.min(nextNeed, 500)} tu vi** qua /homnay → bí cảnh/nhiệm vụ/xuất sơn.` : 'Đủ tu vi: cân nhắc `/dotpha` nếu rủi ro ổn.',
+        missionHints.length ? `Nhiệm vụ hợp: ${missionHints.map((m) => `**${m.name}**`).join(' · ').slice(0, 500)}` : 'Chưa có nhiệm vụ hợp quyền hạn hôm nay.',
+        risk,
+      ].join('\n'), inline: false },
+      { name: 'Craft kế tiếp', value: craft ? [
+        `**${craft.recipe.outputName}** · ${craft.recipe.note}`,
+        craft.reason,
+        `Thiếu/đủ nguyên liệu:\n${craft.missingText}`,
+        craft.farmHint,
+      ].join('\n').slice(0, 1000) : 'Chưa tìm được món craft hợp lý. Có thể do chưa chọn nghề hoặc thiếu bản vẽ, vì tất nhiên game nào cũng cần một chút giấy tờ để làm khổ người chơi.', inline: false },
+      { name: 'Trang bị / shop gợi ý', value: [
+        equipped.length ? `Đang mặc: ${equipped.slice(0, 5).join(' · ')}` : 'Chưa có trang bị rõ ràng: ưu tiên vũ khí/pháp bảo/giáp giá thấp.',
+        shopItems.length ? `Shop nên xem: ${shopItems.map((item) => `\`${item.key}\` ${item.name}`).join('\n')}` : 'Shop hôm nay chưa có món nổi bật theo build.',
+      ].join('\n'), inline: false },
+    ];
+
+    return new EmbedBuilder()
+      .setColor(0x14b8a6)
+      .setTitle('Gợi Ý Build & Việc Nên Làm')
+      .setDescription('Bảng này trả lời câu quan trọng: thiếu gì, farm ở đâu, và lựa chọn nào đang đẩy đạo lộ của ngươi đi xa hơn.')
+      .addFields(...fields)
+      .setFooter({ text: 'Gợi ý dựa trên cảnh giới, nghề, Đạo Lộ Source, trang bị, craft và bảng hôm nay.' });
+  }
+
+  function buildHomNayEmbed(member, userData) {
+    normalizeXuatSonDailyCounter(userData);
+    const users = loadUsers();
+    const data = repairWeeklyBicanhData(getWeeklyBicanhData());
+    const run = getDailyBicanhRun(data, member?.id || '');
+    const quota = getXuatSonRemaining(userData, member);
+    const missions = getRecommendedMissionsForToday(member, 3);
+    const today = getTodayString();
+    const activeXs = userData.activeXuatSon?.id ? getXuatSonById(userData.activeXuatSon.id) : null;
+    const craft = getBestNextCraftTarget(userData, member);
+    const weekly = getWeeklySectGoalStatus(users);
+    const lines = [
+      userData.lastCheckInDate === today ? '✅ Điểm danh: đã nhận.' : '⏳ Điểm danh: chưa nhận `/diemdanh`.',
+      userData.githubVerified ? (userData.lastGithubRewardDate === today ? '✅ GitHub: đã luyện commit hôm nay.' : '⏳ GitHub: có thể `/checkcommit`.') : '⚪ GitHub: chưa liên kết, bỏ qua nếu không cần.',
+      `⏳ Bí cảnh: ${getTodayHubBicanhStatus(data, run, member?.id || '')}.`,
+      activeXs ? `🧭 Xuất Sơn: đang nhận **${activeXs.name}** · ${getXuatSonStepText(userData, member)}` : `🧭 Xuất Sơn: còn **${quota.remaining}/${quota.limit}** lượt.`,
+      missions.length ? `📜 Nhiệm vụ hợp: ${missions.map((m) => `**${m.name}**`).join(' · ').slice(0, 650)}` : '📜 Nhiệm vụ: chưa thấy nhiệm vụ hợp quyền hạn.',
+      craft ? `🔨 Craft nên nhắm: **${craft.recipe.outputName}** · thiếu **${craft.missingTotal}/${craft.costTotal}** nguyên liệu.` : '🔨 Craft: chưa có mục tiêu rõ, cần chọn nghề/bản vẽ.',
+      isTemporaryStatusActive(userData, 'Tâm Ma Quấn Thân') ? '⚠️ Tâm Ma: đang có, nên hóa giải trước khi liều.' : '✅ Tâm Ma: không có trạng thái xấu lớn.',
+    ];
+
+    return new EmbedBuilder()
+      .setColor(0x22c55e)
+      .setTitle('Hôm Nay Nên Làm Gì?')
+      .setDescription(lines.join('\n'))
+      .addFields(
+        { name: 'Mục tiêu gần nhất', value: getPersonalGoalLines(member, userData, users).join('\n'), inline: false },
+        { name: 'Đạo Lộ Source', value: getSourcePathProgressText(userData), inline: false },
+        { name: 'Mục tiêu tuần tông môn', value: `${weekly.text}\nGóp điểm bằng: Xuất Sơn, Nhiệm Vụ, Bí Cảnh, hạ boss. Tức là chơi game cũng có KPI, vì nhân loại không thể thoát khỏi quản trị.`, inline: false },
+        { name: 'Build nhanh', value: `**${getPlayerBuildIdentity(userData, member)}**\nDùng nút **Gợi ý build** để xem món craft kế tiếp và nguồn farm.`, inline: false },
+      )
+      .setFooter({ text: 'Daily Hub · mục tiêu cá nhân + mục tiêu tuần + việc còn lại trong ngày.' });
+  }
+
+  function buildHomNayRows(userId) {
+    return [new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`${HOMNAY_NAV_BUTTON_PREFIX}${userId}:bicanh`).setLabel('Bí cảnh').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`${HOMNAY_NAV_BUTTON_PREFIX}${userId}:xuatson`).setLabel('Xuất Sơn').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`${HOMNAY_NAV_BUTTON_PREFIX}${userId}:nhiemvu`).setLabel('Nhiệm vụ').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`${HOMNAY_NAV_BUTTON_PREFIX}${userId}:goiy`).setLabel('Gợi ý build').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`${HOMNAY_NAV_BUTTON_PREFIX}${userId}:shop`).setLabel('Shop gợi ý').setStyle(ButtonStyle.Secondary),
+    )];
+  }
+
+  async function handleHomNay(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Daily Hub chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => interaction.member);
+    normalizeXuatSonDailyCounter(userData);
+    saveUsers(users);
+    await interaction.reply({ embeds: [buildHomNayEmbed(member, userData)], components: buildHomNayRows(interaction.user.id), flags: MessageFlags.Ephemeral });
+  }
+
+  async function handleGoiY(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Gợi ý build chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => interaction.member);
+    await interaction.reply({ embeds: [buildGoiYEmbed(member, userData)], components: buildHomNayRows(interaction.user.id), flags: MessageFlags.Ephemeral });
+  }
+
+  async function handleHomNayNavButton(interaction) {
+    if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate().catch(async () => interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => null));
+    const raw = String(interaction.customId || '').slice(HOMNAY_NAV_BUTTON_PREFIX.length);
+    const [ownerId, view] = raw.split(':');
+    if (ownerId && ownerId !== interaction.user.id) {
+      await interaction.followUp?.({ content: 'Bảng hôm nay này không phải của đạo hữu. Dùng `/homnay` để mở bảng riêng.', flags: MessageFlags.Ephemeral }).catch(() => null);
+      return;
+    }
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => interaction.member);
+    if (view === 'xuatson') {
+      normalizeXuatSonDailyCounter(userData);
+      saveUsers(users);
+      await interaction.editReply({ embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData), content: null }).catch(() => null);
+      return;
+    }
+    if (view === 'bicanh') {
+      const data = repairWeeklyBicanhData(getWeeklyBicanhData());
+      const run = getDailyBicanhRun(data, interaction.user.id);
+      await interaction.editReply({ embeds: [run ? buildDailyBicanhRunEmbed(data, run) : buildWeeklyBicanhEmbed(data)], components: ['choice', 'event_choice'].includes(String(run?.status)) ? buildDailyEventActionRows(data, run) : buildWeeklyBicanhPanelRows(data, run), content: null }).catch(() => null);
+      return;
+    }
+    if (view === 'nhiemvu') {
+      const data = getMissionDataForToday();
+      const tier = getMissionTierForMember(member);
+      await interaction.editReply({ embeds: [buildMissionListEmbed(data, tier)], components: buildMissionListRows(data, tier), content: null }).catch(() => null);
+      return;
+    }
+    if (view === 'shop') {
+      await interaction.editReply({ embeds: [buildShopEmbed(userData, 0, member)], components: buildShopPageRows(interaction.user.id, 0, member), content: null }).catch(() => null);
+      return;
+    }
+    await interaction.editReply({ embeds: [buildGoiYEmbed(member, userData)], components: buildHomNayRows(interaction.user.id), content: null }).catch(() => null);
+  }
+
+  function getMemberXuatSonMaxRank(member) {
+    const sect = getMemberSectPosition(member);
+    if (sect && ['Trưởng Lão', 'Chấp Sự', 'Đường Chủ', 'Chấp Pháp Sứ', 'Chấp Pháp Trưởng Lão', 'Đại Trưởng Lão', 'Phó Tông Chủ', 'Tông Chủ', 'Thái Thượng Trưởng Lão', 'Đạo Tổ'].includes(sect)) return 10;
+    const rank = getMemberDiscipleRank(member);
+    if (rank === 'Tán Tu' || rank === 'Ký Danh Đệ Tử') return 2;
+    if (rank === 'Tạp Dịch Đệ Tử') return 3;
+    if (rank === 'Ngoại Môn Đệ Tử') return 4;
+    if (rank === 'Nội Môn Đệ Tử') return 5;
+    if (rank === 'Chân Truyền Đệ Tử') return 6;
+    if (rank === 'Thân Truyền Đệ Tử') return 7;
+    if (rank === 'Thánh Tử' || rank === 'Thánh Nữ') return 8;
+    return 2;
+  }
+
+  function getDailyXuatSonChoices(member, count = 6) {
+    const maxRank = getMemberXuatSonMaxRank(member);
+    const pool = XUAT_SON_CATALOG.filter((entry) => entry.rank <= maxRank);
+    const seed = `${getTodayString()}:${member?.id || 'anon'}:xuatson`;
+    return [...pool]
+      .sort((a, b) => deterministicScoreForKey(a.id, seed) - deterministicScoreForKey(b.id, seed))
+      .slice(0, Math.max(1, count));
+  }
+
+  const DISCORD_EMBED_FIELD_VALUE_LIMIT = 1024;
+  const SAFE_EMBED_FIELD_VALUE_LIMIT = 950;
+
+  function clampEmbedFieldValue(value, maxLength = SAFE_EMBED_FIELD_VALUE_LIMIT) {
+    const text = String(value || 'Không có dữ liệu.');
+    if (text.length <= maxLength) return text;
+    return `${text.slice(0, Math.max(0, maxLength - 24)).trimEnd()}\n… đã rút gọn`;
+  }
+
+  function buildCompactXuatSonLine(entry, index) {
+    return [
+      `**${index + 1}. ${entry.actionName}** · ${entry.rankLabel}`,
+      `Mã: \`${entry.id}\``,
+      `Hệ: ${entry.familyName} · Rủi ro: **${entry.risk}**`,
+    ].join('\n');
+  }
+
+  function getXuatSonCaseState(userData, mission) {
+    normalizeUserSourceState(userData);
+    const key = mission?.id || 'unknown';
+    const current = userData.xuatSonCases[key] && typeof userData.xuatSonCases[key] === 'object' ? userData.xuatSonCases[key] : {};
+    const stage = Math.max(0, Math.min(4, Number(current.stage) || 0));
+    return { key, stage, clues: Math.max(0, Number(current.clues) || 0), resolved: Boolean(current.resolved) };
+  }
+
+  function getXuatSonStageLabel(stage) {
+    if (stage <= 0) return 'Vụ 1/3 · Dò dấu vết';
+    if (stage === 1) return 'Vụ 2/3 · Truy nguồn';
+    if (stage === 2) return 'Vụ 3/3 · Kết án';
+    return 'Chuỗi đã phá án · có thể farm hậu truyện';
+  }
+
+  function getXuatSonCaseText(userData, mission) {
+    if (!mission) return 'Chưa nhận công án.';
+    const state = getXuatSonCaseState(userData, mission);
+    const family = getSourceFamilyByKey(mission.family);
+    const stageNote = state.stage <= 0
+      ? `Mục tiêu: thu manh mối **${family.short}** để mở nhánh truy nguồn.`
+      : state.stage === 1
+        ? 'Mục tiêu: truy đúng nguồn nhiễu. Dò manh mối giúp giảm rủi ro, Đi thẳng dễ bỏ sót chứng tích.'
+        : state.stage === 2
+          ? 'Mục tiêu: kết án/phong ấn. Lựa chọn Đạo Lộ sẽ để lại hậu quả dài hạn.'
+          : 'Công án đã thành hồ sơ tông môn. Làm lại để farm vật chứng, nhưng thưởng chuỗi lớn đã nhận rồi.';
+    return `${getXuatSonStageLabel(state.stage)} · Manh mối ${state.clues}/3
+${stageNote}`;
+  }
+
+  function previewXuatSonMethods(userData, member, mission) {
+    if (!mission) return 'Chưa có công án để xem trước.';
+    const prepKey = userData?.activeXuatSon?.prep || 'rush';
+    return ['commit', 'va_tam', 'force_push'].map((methodKey) => {
+      const method = getXuatSonMethodConfig(methodKey);
+      const chance = getXuatSonSuccessChance(userData, member, mission, method.key, prepKey);
+      const risk = method.key === 'commit' ? 'rủi ro thấp' : method.key === 'force_push' ? 'rủi ro cao' : 'rủi ro vừa';
+      const pathGain = method.key === 'commit' ? getPathChoicePreview(userData, 'commit', 3) : method.key === 'force_push' ? getPathChoicePreview(userData, 'force_push', 4) : getPathChoicePreview(userData, 'neutral', 3);
+      return `**${method.name}**: ${Math.round(chance * 100)}% · thưởng x${method.rewardMult.toFixed(2)} · ${risk} · ${pathGain}`;
+    }).join('\n');
+  }
+
+  function buildXuatSonEmbed(member, userData) {
+    const active = normalizeActiveXuatSonState(userData);
+    const choices = getDailyXuatSonChoices(member, 6);
+    const embed = new EmbedBuilder()
+      .setColor(0x0ea5e9)
+      .setTitle('Xuất Sơn Lệnh · Công Án Ngoài Tông')
+      .setDescription([
+        'Luồng chuẩn: **1) Nhận công án → 2) Chọn chuẩn bị → 3) Chọn cách xử lý**.',
+        'Nếu chưa nhận lệnh thì chỉ được thấy danh sách **Nhận #**. Không có chuyện chưa cầm hồ sơ đã được “dò manh mối”, thiên đạo chưa tuyệt vọng tới mức đó.',
+        getXuatSonStepText(userData, member),
+      ].join('\n'));
+
+    if (active?.id) {
+      const mission = getXuatSonById(active.id);
+      const prep = getXuatSonPrepConfig(active.prep);
+      embed.addFields(
+        {
+          name: 'Công án đang nhận',
+          value: mission
+            ? `${buildCompactXuatSonLine(mission, 0).replace(/^`#1` /, '')}\n${getXuatSonCaseText(userData, mission)}`
+            : 'Công án cũ không còn hợp lệ. Bấm Hủy rồi nhận lại.',
+          inline: false,
+        },
+        {
+          name: 'Trạng thái hiện tại',
+          value: prep
+            ? `Đã chuẩn bị: **${prep.name}**. Bây giờ mới được chọn **An toàn / Cân bằng / Mạo hiểm**.`
+            : 'Chưa chọn chuẩn bị. Hãy chọn **Dò manh mối / Mang pháp bảo / Gọi đồng môn / Đi thẳng**.',
+          inline: false,
+        },
+      );
+      if (mission && prep) {
+        embed.addFields({ name: 'Xem trước trước khi bấm xử lý', value: previewXuatSonMethods(userData, member, mission), inline: false });
+      }
+      embed.setFooter({ text: 'Đang có công án active nên danh sách Nhận # bị ẩn để tránh nhận nhầm/reroll.' });
+      return embed;
+    }
+
+    if (choices.length <= 0) {
+      embed.addFields({ name: 'Lệnh khả dụng hôm nay', value: 'Không có lệnh.', inline: false });
+    } else {
+      const chunkSize = 2;
+      for (let offset = 0; offset < choices.length; offset += chunkSize) {
+        const chunk = choices.slice(offset, offset + chunkSize);
+        const value = chunk
+          .map((entry, localIndex) => buildCompactXuatSonLine(entry, offset + localIndex))
+          .join('\n\n');
+        embed.addFields({
+          name: offset === 0 ? 'Lệnh khả dụng hôm nay' : `Lệnh khả dụng ${offset + 1}-${offset + chunk.length}`,
+          value: clampEmbedFieldValue(value, DISCORD_EMBED_FIELD_VALUE_LIMIT),
+          inline: false,
+        });
+      }
+      embed.addFields({
+        name: 'Sau khi nhận mới mở hành động',
+        value: 'Bước 2 sẽ hiện 4 cách chuẩn bị. Bước 3 mới hiện 3 cách xử lý. UI không nhảy cóc nữa, vì cuối cùng nó đã học đi bộ.',
+        inline: false,
+      });
+    }
+
+    embed.setFooter({ text: 'Bấm Nhận # để bắt đầu. Slash command cũ vẫn dùng được nhưng không được bỏ qua bước chuẩn bị.' });
+    return embed;
+  }
+
+  function buildXuatSonRows(member, userData) {
+    const userId = member?.id || 'self';
+    const active = normalizeActiveXuatSonState(userData);
+    if (active?.id) {
+      const prep = getXuatSonPrepConfig(active.prep);
+      if (!prep) {
+        return [new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(buildXuatSonPrepButtonId(userId, active, 'clue')).setLabel('Dò manh mối').setStyle(ButtonStyle.Success),
+          new ButtonBuilder().setCustomId(buildXuatSonPrepButtonId(userId, active, 'gear')).setLabel('Mang pháp bảo').setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId(buildXuatSonPrepButtonId(userId, active, 'ally')).setLabel('Gọi đồng môn').setStyle(ButtonStyle.Primary),
+          new ButtonBuilder().setCustomId(buildXuatSonPrepButtonId(userId, active, 'rush')).setLabel('Đi thẳng').setStyle(ButtonStyle.Danger),
+          new ButtonBuilder().setCustomId(buildXuatSonMethodButtonId(userId, active, 'huy')).setLabel('Hủy').setStyle(ButtonStyle.Secondary),
+        )];
+      }
+      return [new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(buildXuatSonMethodButtonId(userId, active, 'commit')).setLabel('An toàn').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(buildXuatSonMethodButtonId(userId, active, 'va_tam')).setLabel('Cân bằng').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(buildXuatSonMethodButtonId(userId, active, 'force_push')).setLabel('Mạo hiểm').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId(buildXuatSonPrepButtonId(userId, active, 'reset')).setLabel('Đổi chuẩn bị').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(buildXuatSonMethodButtonId(userId, active, 'huy')).setLabel('Hủy').setStyle(ButtonStyle.Secondary),
+      )];
+    }
+    const quota = getXuatSonRemaining(userData, member);
+    if (quota.remaining <= 0) {
+      return [new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`${HOMNAY_NAV_BUTTON_PREFIX}${userId}:goiy`).setLabel('Xem gợi ý khác').setStyle(ButtonStyle.Secondary),
+      )];
+    }
+    const choices = getDailyXuatSonChoices(member, 6);
+    const rows = [];
+    for (let offset = 0; offset < choices.length; offset += 3) {
+      const row = new ActionRowBuilder();
+      for (const [localIndex, entry] of choices.slice(offset, offset + 3).entries()) {
+        const index = offset + localIndex;
+        const label = `Nhận #${index + 1}`;
+        const style = Number(entry.rank) >= 7 ? ButtonStyle.Danger : Number(entry.rank) >= 4 ? ButtonStyle.Primary : ButtonStyle.Success;
+        row.addComponents(new ButtonBuilder().setCustomId(buildXuatSonPickButtonId(userId, index)).setLabel(label).setStyle(style));
+      }
+      if (row.components.length) rows.push(row);
+    }
+    return rows.slice(0, 2);
+  }
+
+  function buildXuatSonResultEmbed(mission, normalizedMethod, summary) {
+    const methodText = normalizedMethod === 'force_push' ? 'Mạo hiểm' : normalizedMethod === 'va_tam' ? 'Cân bằng' : 'An toàn';
+    const detailText = normalizedMethod === 'force_push'
+      ? 'Thưởng cao hơn, tăng rủi ro Nghiệp Lực/Nợ kỹ thuật.'
+      : normalizedMethod === 'va_tam'
+        ? 'Thưởng vừa, có chút Nợ kỹ thuật.'
+        : 'Ổn định nhất, tăng Công Đức Source và chỉ số bền.';
+    return new EmbedBuilder()
+      .setColor(normalizedMethod === 'force_push' ? 0xef4444 : normalizedMethod === 'commit' ? 0x22c55e : 0xf59e0b)
+      .setTitle(`Xuất Sơn hoàn tất · ${methodText}`)
+      .setDescription(`**${mission.name}**\n${mission.lore}`)
+      .addFields(
+        { name: 'Cách xử lý', value: detailText, inline: false },
+        { name: 'Thu hoạch', value: summary.slice(0, 1000), inline: false },
+      );
+  }
+
+  function getXuatSonById(id) {
+    return XUAT_SON_CATALOG.find((entry) => entry.id === id) || null;
+  }
+
+  function applyXuatSonResolution(userData, mission, method, options = {}) {
+    normalizeUserSourceState(userData);
+    const member = options.member || null;
+    const prepKey = options.prep || userData.activeXuatSon?.prep || 'rush';
+    const prep = getXuatSonPrepConfig(prepKey) || getXuatSonPrepConfig('rush');
+    const methodConfig = getXuatSonMethodConfig(method) || getXuatSonMethodConfig('commit');
+    const family = getSourceFamilyByKey(mission.family);
+    const caseState = getXuatSonCaseState(userData, mission);
+    const stageBonus = caseState.stage === 1 ? 0.05 : caseState.stage === 2 ? 0.02 : 0;
+    const scale = Number(mission.base) || 1;
+    const chance = Math.max(0.18, Math.min(0.96, getXuatSonSuccessChance(userData, member, mission, methodConfig.key, prep.key) + stageBonus));
+    const success = rollPercent(chance);
+    const great = success && rollPercent(Math.max(0.05, Math.min(0.28, chance - 0.58)));
+    const rewardMult = methodConfig.rewardMult * prep.rewardMult * (great ? 1.25 : success ? 1 : 0.32);
+    const material = pickMissionCraftMaterial(family.key, `xuatson:${mission.id}:${methodConfig.key}:${prep.key}`, Math.max(0, mission.rank - 2), methodConfig.key === 'commit' ? 'chính đạo' : methodConfig.key === 'force_push' ? 'tà đạo' : null);
+    let tuVi = 0;
+    let congHien = 0;
+    const lines = [];
+    lines.push(`${getXuatSonStageLabel(caseState.stage)}.`);
+    lines.push(`Chuẩn bị: **${prep.name}** · Cách xử lý: **${methodConfig.name}**.`);
+    lines.push(`Tỉ lệ thành công đã roll: **${Math.round(chance * 100)}%** · Kết quả: **${great ? 'Thành công lớn' : success ? 'Thành công' : 'Trục trặc'}**.`);
+
+    if (methodConfig.key === 'commit') {
+      tuVi = Math.floor(70 * scale * rewardMult);
+      congHien = Math.floor(30 * scale * rewardMult);
+      userData.congDucSource += Math.floor((success ? 12 : 4) * scale);
+      userData.sourcePath = 'commit';
+      addSourcePathPoints(userData, 'commit', success ? (great ? 5 : 3) : 1);
+      addSourceProfile(userData, success ? { integrity: 1 + Math.floor(scale), stability: 1 + Math.floor(scale / 2), logic: great ? 1 : 0 } : { stability: 1 });
+      lines.push(`+${Math.floor((success ? 12 : 4) * scale)} Công Đức Source`, success ? '+Độ toàn vẹn/Ổn định' : '+Ổn định nhẹ');
+    } else if (methodConfig.key === 'force_push') {
+      tuVi = Math.floor(135 * scale * rewardMult);
+      congHien = Math.floor(16 * scale * rewardMult);
+      const riskMult = success ? 1 : methodConfig.failRisk;
+      userData.nghiepLuc += Math.ceil((2 + Math.floor(scale)) * riskMult);
+      userData.entropy += Math.ceil((2 + Math.floor(scale)) * riskMult);
+      userData.technicalDebt += Math.ceil((1 + Math.floor(scale / 2)) * riskMult);
+      userData.sourcePath = 'force_push';
+      addSourcePathPoints(userData, 'force_push', success ? (great ? 6 : 4) : 2);
+      addSourceProfile(userData, { sourcePower: 1 + Math.floor(scale) + (great ? 1 : 0) });
+      lines.push(`+${Math.ceil((2 + Math.floor(scale)) * riskMult)} Nghiệp Lực`, `+${Math.ceil((2 + Math.floor(scale)) * riskMult)} Độ hỗn loạn`, '+Sức Source');
+      if (!success) setTemporaryStatus(userData, 'Tâm Ma Quấn Thân', 2 * 60 * 60 * 1000, { dotPhaPenalty: true, directStats: { tamMaRisk: 8, dotPha: -2 } });
+    } else {
+      tuVi = Math.floor(95 * scale * rewardMult);
+      congHien = Math.floor(24 * scale * rewardMult);
+      userData.technicalDebt += success ? 1 : 2;
+      if (userData.sourcePath !== 'force_push') userData.sourcePath = 'neutral';
+      addSourcePathPoints(userData, 'neutral', success ? (great ? 4 : 3) : 1);
+      addSourceProfile(userData, success ? { runtime: 1, throughput: 1 } : { runtime: 1 });
+      lines.push(success ? '+1 Nợ kỹ thuật · +Nhịp vận hành/Hiệu suất' : '+2 Nợ kỹ thuật · +Nhịp vận hành');
+    }
+
+    if (prep.key === 'ally') {
+      congHien = Math.floor(congHien * 1.1);
+      lines.push('Đồng môn hỗ trợ: cống hiến +10%.');
+    } else if (prep.key === 'gear') {
+      const gearCount = getEquippedGearKeys(userData).length;
+      if (gearCount > 0) lines.push(`Pháp bảo phát huy: ${gearCount} món trang bị được tính vào tỉ lệ.`);
+    }
+
+    addTuViExp(userData, Math.max(0, tuVi));
+    addCongHien(userData, Math.max(0, congHien));
+    if (success && material) {
+      const amount = 1 + Math.floor(mission.rank / 4) + (great ? 1 : 0);
+      addCraftMaterialToUser(userData, material.key, amount);
+      lines.push(`${material.name} x${amount}`);
+    } else if (!success) {
+      lines.push('Không thu được vật chứng sạch. Ít nhất công án không nổ tung hoàn toàn, một tiêu chuẩn thấp nhưng thực tế.');
+    }
+    const nextCase = { ...caseState };
+    if (success) {
+      nextCase.clues = Math.min(3, Number(nextCase.clues || 0) + (prep.key === 'clue' ? 2 : 1) + (great ? 1 : 0));
+      if (nextCase.clues >= 3 || great) {
+        nextCase.stage = Math.min(3, Number(nextCase.stage || 0) + 1);
+        nextCase.clues = 0;
+        lines.push(nextCase.stage >= 3 ? 'Công án dây chuyền đã kết án xong: mở thưởng hồ sơ tông môn.' : `Mở tiếp: **${getXuatSonStageLabel(nextCase.stage)}**.`);
+      }
+    } else if (methodConfig.key === 'force_push') {
+      lines.push('Dấu vết bị bẻ nhánh: lần sau công án này khó sạch hơn, nhưng Tà Đạo lại rất hài lòng. Thật đáng ngại.');
+    }
+    if (nextCase.stage >= 3 && !nextCase.resolved) {
+      nextCase.resolved = true;
+      const chainBonus = Math.floor(80 * scale);
+      addTuViExp(userData, chainBonus);
+      addCongHien(userData, Math.floor(40 * scale));
+      addCraftMaterialToUser(userData, `vat_chung_${family.key}`, 2);
+      addWeeklyContribution(userData, 12 + Math.floor(scale * 2), 'phá công án chuỗi');
+      lines.push(`Thưởng phá án chuỗi: +${chainBonus} tu vi · +${Math.floor(40 * scale)} cống hiến · Vật Chứng ${family.short} x2.`);
+    } else {
+      addWeeklyContribution(userData, success ? (great ? 6 : 4) : 1, 'xuất sơn');
+    }
+    userData.xuatSonCases[caseState.key] = nextCase;
+    userData.lastXuatSonDate = getTodayString();
+    userData.dailyXuatSonCount = Number(userData.dailyXuatSonCount || 0) + 1;
+    userData.activeXuatSon = null;
+    return [`+${Math.max(0, tuVi)} tu vi`, `+${Math.max(0, congHien)} cống hiến`, ...lines].join('\n');
+  }
+
+  async function handleXuatSon(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Xuất Sơn chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const action = interaction.options.getString('hanhdong', false) || 'xem';
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    normalizeUserSourceState(userData);
+    const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => interaction.member);
+    normalizeXuatSonDailyCounter(userData);
+    normalizeActiveXuatSonState(userData);
+
+    if (action === 'xem') {
+      saveUsers(users);
+      await interaction.reply({ embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData), flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (action === 'nhan') {
+      if (userData.activeXuatSon?.id) {
+        saveUsers(users);
+        await interaction.reply({ content: 'Đang có công án chưa xử lý. Hoàn tất hoặc `/xuatson hanhdong:huy` trước khi nhận cái mới.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData), flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const quota = getXuatSonRemaining(userData, member);
+      if (quota.remaining <= 0 && !userData.activeXuatSon?.id) {
+        saveUsers(users);
+        await interaction.reply({ content: `Hôm nay đã dùng hết **${quota.limit}** lượt Xuất Sơn. Dùng /homnay để xem việc khác, vì spam công án cũng không làm thiên đạo kính trọng hơn.`, embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData), flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const id = interaction.options.getString('ma', false);
+      const choices = getDailyXuatSonChoices(member, 6);
+      const selected = id ? getXuatSonById(id) : choices[0];
+      if (!selected || !choices.some((entry) => entry.id === selected.id)) {
+        await interaction.reply({ content: 'Mã Xuất Sơn không nằm trong danh sách khả dụng hôm nay của đạo hữu.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      userData.activeXuatSon = createActiveXuatSonState(selected);
+      saveUsers(users);
+      await interaction.reply({ content: `Đã nhận **${selected.name}**. Bước tiếp theo: chọn **chuẩn bị**.`, embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData), flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (action === 'huy') {
+      userData.activeXuatSon = null;
+      saveUsers(users);
+      await interaction.reply({ content: 'Đã hủy Xuất Sơn Lệnh đang nhận.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData), flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (action === 'canthiep') {
+      if (!userData.activeXuatSon?.id) {
+        await interaction.reply({ content: 'Đạo hữu chưa nhận Xuất Sơn Lệnh nào.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      normalizeActiveXuatSonState(userData);
+      if (!getXuatSonPrepConfig(userData.activeXuatSon?.prep)) {
+        saveUsers(users);
+        await interaction.reply({ content: 'Chưa chọn bước **chuẩn bị** nên chưa thể xử lý. Chọn Dò manh mối / Mang pháp bảo / Gọi đồng môn / Đi thẳng trước.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData), flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const mission = getXuatSonById(userData.activeXuatSon.id);
+      if (!mission) {
+        userData.activeXuatSon = null;
+        saveUsers(users);
+        await interaction.reply({ content: 'Xuất Sơn Lệnh cũ đã lệch catalog, đã hủy để nhận lại.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const method = interaction.options.getString('cach', false) || 'commit';
+      const normalizedMethod = method === 'force_push' ? 'force_push' : method === 'va_tam' ? 'va_tam' : 'commit';
+      const summary = applyXuatSonResolution(userData, mission, normalizedMethod, { member, prep: userData.activeXuatSon?.prep || 'rush' });
+      await syncMissionMemberRoles(interaction.guild, interaction.user.id, userData).catch(() => null);
+      saveUsers(users);
+      const embed = buildXuatSonResultEmbed(mission, normalizedMethod, summary);
+      await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    await interaction.reply({ embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData), flags: MessageFlags.Ephemeral });
+  }
+
+  async function handleXuatSonPickButton(interaction) {
+    if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate().catch(async () => interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => null));
+    if (!interaction.inGuild()) {
+      await interaction.editReply({ content: 'Xuất Sơn chỉ dùng trong tông môn.', embeds: [], components: [] }).catch(() => null);
+      return;
+    }
+    const parsedPick = parseXuatSonPickIndex(interaction.customId, interaction.user.id);
+    if (!parsedPick.ok) {
+      await interaction.editReply({ content: parsedPick.reason, embeds: [], components: [] }).catch(() => null);
+      return;
+    }
+    const index = parsedPick.index;
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    normalizeUserSourceState(userData);
+    const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => interaction.member);
+    normalizeXuatSonDailyCounter(userData);
+    normalizeActiveXuatSonState(userData);
+    if (userData.activeXuatSon?.id) {
+      saveUsers(users);
+      await interaction.editReply({ content: 'Đang có công án chưa xử lý. Hoàn tất hoặc bấm **Hủy** trước khi nhận cái mới, khỏi reroll số phận như người chơi gacha tuyệt vọng.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
+      return;
+    }
+    const quota = getXuatSonRemaining(userData, member);
+    if (quota.remaining <= 0 && !userData.activeXuatSon?.id) {
+      saveUsers(users);
+      await interaction.editReply({ content: `Hôm nay đã dùng hết **${quota.limit}** lượt Xuất Sơn.`, embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
+      return;
+    }
+    const choices = getDailyXuatSonChoices(member, 6);
+    const selected = choices[index] || null;
+    if (!selected) {
+      await interaction.editReply({ content: 'Lệnh này không còn trong danh sách hôm nay. Bấm `/xuatson` để làm mới.', embeds: [], components: [] }).catch(() => null);
+      return;
+    }
+    userData.activeXuatSon = createActiveXuatSonState(selected);
+    saveUsers(users);
+    await interaction.editReply({ content: `Đã nhận **${selected.name}**. Chọn bước chuẩn bị bên dưới.`, embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
+  }
+
+  async function handleXuatSonPrepButton(interaction) {
+    if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate().catch(async () => interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => null));
+    if (!interaction.inGuild()) {
+      await interaction.editReply({ content: 'Xuất Sơn chỉ dùng trong tông môn.', embeds: [], components: [] }).catch(() => null);
+      return;
+    }
+    const parsedPrep = parseXuatSonStageButton(interaction.customId, XUAT_SON_PREP_BUTTON_PREFIX, interaction.user.id);
+    if (!parsedPrep.ok) {
+      await interaction.editReply({ content: parsedPrep.reason, embeds: [], components: [] }).catch(() => null);
+      return;
+    }
+    const prepKey = parsedPrep.key;
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    normalizeXuatSonDailyCounter(userData);
+    const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => interaction.member);
+    const active = normalizeActiveXuatSonState(userData);
+    const tokenCheck = validateXuatSonStageToken(active, parsedPrep);
+    if (!tokenCheck.ok) {
+      saveUsers(users);
+      await interaction.editReply({ content: tokenCheck.reason, embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
+      return;
+    }
+    if (!userData.activeXuatSon?.id) {
+      saveUsers(users);
+      await interaction.editReply({ content: 'Chưa nhận Xuất Sơn Lệnh nào. Bấm **Nhận #** trước.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
+      return;
+    }
+    if (prepKey === 'reset') {
+      userData.activeXuatSon.prep = null;
+      userData.activeXuatSon.step = 'prepare';
+      saveUsers(users);
+      await interaction.editReply({ content: 'Đã quay lại bước chọn chuẩn bị.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
+      return;
+    }
+    const prep = getXuatSonPrepConfig(prepKey);
+    if (!prep) {
+      await interaction.editReply({ content: 'Cách chuẩn bị không hợp lệ. Bấm /xuatson để làm mới.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
+      return;
+    }
+    userData.activeXuatSon.prep = prep.key;
+    userData.activeXuatSon.step = 'resolve';
+    saveUsers(users);
+    await interaction.editReply({ content: `Đã chọn chuẩn bị: **${prep.name}**. ${prep.note} Bây giờ chọn cách xử lý.`, embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
+  }
+
+  async function handleXuatSonMethodButton(interaction) {
+    if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate().catch(async () => interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => null));
+    if (!interaction.inGuild()) {
+      await interaction.editReply({ content: 'Xuất Sơn chỉ dùng trong tông môn.', embeds: [], components: [] }).catch(() => null);
+      return;
+    }
+    const parsedMethod = parseXuatSonStageButton(interaction.customId, XUAT_SON_METHOD_BUTTON_PREFIX, interaction.user.id);
+    if (!parsedMethod.ok) {
+      await interaction.editReply({ content: parsedMethod.reason, embeds: [], components: [] }).catch(() => null);
+      return;
+    }
+    const method = parsedMethod.key;
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    normalizeUserSourceState(userData);
+    const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => interaction.member);
+    normalizeXuatSonDailyCounter(userData);
+    const active = normalizeActiveXuatSonState(userData);
+    if (method !== 'huy') {
+      const tokenCheck = validateXuatSonStageToken(active, parsedMethod);
+      if (!tokenCheck.ok) {
+        saveUsers(users);
+        await interaction.editReply({ content: tokenCheck.reason, embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
+        return;
+      }
+    } else if (parsedMethod.token && active?.token && parsedMethod.token !== active.token) {
+      saveUsers(users);
+      await interaction.editReply({ content: 'Nút Hủy này thuộc về trạng thái Xuất Sơn cũ. Bấm `/xuatson` để làm mới rồi hủy nếu còn cần.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
+      return;
+    }
+
+    if (method === 'huy') {
+      userData.activeXuatSon = null;
+      saveUsers(users);
+      await interaction.editReply({ content: 'Đã hủy Xuất Sơn Lệnh đang nhận.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
+      return;
+    }
+
+    if (!userData.activeXuatSon?.id) {
+      await interaction.editReply({ content: 'Chưa nhận Xuất Sơn Lệnh nào. Bấm **Nhận #** trước, khỏi nhập mã tay.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
+      return;
+    }
+
+    if (!getXuatSonPrepConfig(userData.activeXuatSon.prep)) {
+      saveUsers(users);
+      await interaction.editReply({ content: 'Còn thiếu bước **chuẩn bị**. Chọn Dò manh mối / Mang pháp bảo / Gọi đồng môn / Đi thẳng trước.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
+      return;
+    }
+
+    const mission = getXuatSonById(userData.activeXuatSon.id);
+    if (!mission) {
+      userData.activeXuatSon = null;
+      saveUsers(users);
+      await interaction.editReply({ content: 'Xuất Sơn Lệnh cũ đã lệch catalog, đã hủy để nhận lại.', embeds: [buildXuatSonEmbed(member, userData)], components: buildXuatSonRows(member, userData) }).catch(() => null);
+      return;
+    }
+    const normalizedMethod = method === 'force_push' ? 'force_push' : method === 'va_tam' ? 'va_tam' : 'commit';
+    const summary = applyXuatSonResolution(userData, mission, normalizedMethod, { member, prep: userData.activeXuatSon?.prep || 'rush' });
+    await syncMissionMemberRoles(interaction.guild, interaction.user.id, userData).catch(() => null);
+    saveUsers(users);
+    await interaction.editReply({ content: null, embeds: [buildXuatSonResultEmbed(mission, normalizedMethod, summary)], components: [] }).catch(() => null);
+  }
+
+  async function handleDoiCongHien(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Đổi cống hiến chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const key = interaction.options.getString('vatpham', true).trim();
+    const amount = Math.max(1, interaction.options.getInteger('soluong', false) || 1);
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    const daoNghe = normalizeDaoNgheData(userData);
+    const current = Math.max(0, Number(daoNghe.materials[key]) || 0);
+    if (current < amount) {
+      await interaction.reply({ content: `Không đủ nguyên liệu/vật chứng \`${key}\`. Hiện có **${current}**.`, flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const material = getCraftMaterialByKey(key);
+    const isEvidence = key.startsWith('vat_chung_');
+    const tierValue = material ? (2 + Math.max(0, Number(material.tierIndex) || 0) * 2) : isEvidence ? 8 : 2;
+    const gain = Math.min(200, tierValue * amount);
+    daoNghe.materials[key] = current - amount;
+    addCongHien(userData, gain);
+    userData.lastDoiCongHienDate = getTodayString();
+    userData.dailyDoiCongHien = Math.min(9999, (Number(userData.dailyDoiCongHien) || 0) + gain);
+    saveUsers(users);
+    await interaction.reply({ content: `Đã đổi **${amount}x ${material?.name || key}** lấy **+${gain} cống hiến**. Tông môn nhận vật chứng, còn bot thì nhận thêm việc, quá công bằng.`, flags: MessageFlags.Ephemeral });
+  }
+
+
   async function handleNhiemVu(interaction) {
     if (!interaction.inGuild()) {
-      await interaction.reply({ content: 'Trảm Yêu Bảng chỉ mở trong tông môn.', flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: 'Nhiệm Vụ Nội Tông chỉ mở trong tông môn.', flags: MessageFlags.Ephemeral });
       return;
     }
 
     const data = getMissionDataForToday();
-    await interaction.reply({
-      embeds: [buildMissionListEmbed(data)],
-      components: buildMissionListRows(data),
-    });
+    const tier = getMissionTierFromInteraction(interaction);
+    const kind = interaction.options?.getString?.('loai', false) || null;
+    if (!hasMissionTierAccess(interaction.member, tier)) {
+      await interaction.reply({ content: getMissionTierAccessMessage(tier, interaction.member), flags: MessageFlags.Ephemeral });
+      return;
+    }
+    await interaction.reply(buildFirstMissionPayload(data, tier, kind));
   }
+
 
   async function handleSetupNhiemVu(interaction) {
     if (!interaction.inGuild()) {
@@ -2533,17 +10465,19 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     }
 
     if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
-      await interaction.reply({ content: 'Chỉ chưởng quản tông môn mới được chỉnh Trảm Yêu Bảng.', flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: 'Chỉ chưởng quản tông môn mới được tạo lại nhiệm vụ hôm nay.', flags: MessageFlags.Ephemeral });
       return;
     }
 
-    const amount = interaction.options.getInteger('soluong', true);
+    const amount = interaction.options.getInteger('soluong', false) ?? MISSION_DEFAULT_OPEN_LIMIT;
+    const tier = getMissionTierFromInteraction(interaction, 'tap_dich');
     const openLimit = Math.max(MISSION_MIN_OPEN_LIMIT, Math.min(MISSION_MAX_OPEN_LIMIT, amount));
-    const data = generateDailyMissions(openLimit, getTodayString());
+    const currentData = getMissionDataForToday();
+    const data = regenerateMissionTier(currentData, tier, openLimit);
     saveMissionData(data);
 
     await interaction.reply({
-      content: `Đã mở lại **${openLimit}** nhiệm vụ cho Trảm Yêu Bảng hôm nay.`,
+      content: `Đã tạo lại **${openLimit}** nhiệm vụ cho **${getMissionTierLabel(tier)}** hôm nay. Dùng \`/setupbangnhiemvu\` để đăng bảng công khai ở kênh cần hiển thị.`,
       flags: MessageFlags.Ephemeral,
     });
   }
@@ -2564,18 +10498,33 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       return;
     }
 
-    await interaction.update({
+    if (!hasMissionTierAccess(interaction.member, mission.tier)) {
+      await interaction.reply({ content: getMissionTierAccessMessage(mission.tier, interaction.member), flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    await interaction.reply({
       embeds: [buildMissionDetailEmbed(mission, users)],
       components: buildMissionDetailRows(mission),
+      flags: MessageFlags.Ephemeral,
     });
   }
 
+
   async function handleMissionRefresh(interaction) {
     const data = getMissionDataForToday();
+    const tier = interaction.customId.startsWith(MISSION_REFRESH_BUTTON_PREFIX)
+      ? normalizeMissionTier(interaction.customId.slice(MISSION_REFRESH_BUTTON_PREFIX.length))
+      : getHighestMissionTierForMember(interaction.member);
+
+    if (!hasMissionTierAccess(interaction.member, tier)) {
+      await interaction.reply({ content: getMissionTierAccessMessage(tier, interaction.member), flags: MessageFlags.Ephemeral });
+      return;
+    }
 
     await interaction.update({
-      embeds: [buildMissionListEmbed(data)],
-      components: buildMissionListRows(data),
+      embeds: [buildMissionListEmbed(data, tier)],
+      components: buildMissionListRows(data, tier),
     });
   }
 
@@ -2627,6 +10576,11 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       return;
     }
 
+    if (action !== 'leave' && !hasMissionTierAccess(interaction.member, mission.tier)) {
+      await interaction.reply({ content: getMissionTierAccessMessage(mission.tier, interaction.member), flags: MessageFlags.Ephemeral });
+      return;
+    }
+
     if (action === 'leave') {
       if (!mission.party.includes(interaction.user.id)) {
         await interaction.reply({ content: 'Đạo hữu chưa ở trong tiểu đội này.', flags: MessageFlags.Ephemeral });
@@ -2635,11 +10589,23 @@ const AUTO_DISCIPLE_THRESHOLDS = [
 
       mission.party = mission.party.filter((memberId) => memberId !== interaction.user.id);
       mission.leaderId = mission.party[0] ?? null;
-      saveMissionData(data);
+      await removeMissionTicketMember(interaction, mission, interaction.user.id);
+      if (mission.party.length === 0) {
+        await scheduleMissionTicketCleanup(interaction, mission, data, 'Tiểu đội đã giải tán. Ticket tự đóng sau vài giây.').catch(() => null);
+      } else {
+        saveMissionData(data);
+      }
+
       await interaction.update({
         embeds: [buildMissionDetailEmbed(mission, users)],
         components: buildMissionDetailRows(mission),
       });
+
+      if (mission.ticketChannelId) {
+        await updateMissionTicketMessage(interaction, mission, users, `<@${interaction.user.id}> đã rời tiểu đội.`).catch(() => null);
+      }
+
+      await refreshMissionBoardMessages(interaction.channel, mission.tier, data);
       return;
     }
 
@@ -2652,7 +10618,7 @@ const AUTO_DISCIPLE_THRESHOLDS = [
 
     if (action === 'create') {
       if (mission.party.length > 0 && mission.leaderId !== interaction.user.id) {
-        await interaction.reply({ content: 'Nhiệm vụ này đã có tiểu đội. Hãy bấm **Tham gia**.', flags: MessageFlags.Ephemeral });
+        await interaction.reply({ content: 'Nhiệm vụ đã có tiểu đội. Hãy bấm **Gia nhập**.', flags: MessageFlags.Ephemeral });
         return;
       }
 
@@ -2673,6 +10639,15 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       }
     }
 
+    const ticket = await updateMissionTicketMessage(
+      interaction,
+      mission,
+      users,
+      action === 'create'
+        ? `<@${interaction.user.id}> đã lập tiểu đội.`
+        : `<@${interaction.user.id}> đã gia nhập tiểu đội.`,
+    );
+
     saveMissionData(data);
     saveUsers(users);
 
@@ -2680,7 +10655,70 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       embeds: [buildMissionDetailEmbed(mission, users)],
       components: buildMissionDetailRows(mission),
     });
+    await refreshMissionBoardMessages(interaction.channel, mission.tier, data);
+
+    await interaction.followUp({
+      content: `Ticket tiểu đội: ${ticket}`,
+      flags: MessageFlags.Ephemeral,
+    }).catch(() => null);
   }
+
+
+  async function handleMissionCloseTicket(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const missionId = getMissionIdFromCustomId(interaction.customId, MISSION_CLOSE_TICKET_PREFIX);
+    const data = getMissionDataForToday();
+    const users = loadUsers();
+    const mission = getMissionById(data, missionId);
+
+    if (!mission) {
+      await interaction.reply({ content: 'Không tìm thấy nhiệm vụ này.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const isPartyMember = mission.party.includes(interaction.user.id);
+    const isLeader = mission.leaderId === interaction.user.id;
+    const canCloseFinished = mission.status === MISSION_STATUS_COMPLETED && isPartyMember;
+    const canCancelActive = isLeader || isStaff(interaction.member);
+
+    if (!canCloseFinished && !canCancelActive) {
+      await interaction.reply({ content: 'Chỉ đội trưởng, thành viên nhiệm vụ đã xong hoặc staff mới được đóng ticket nhiệm vụ.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    if (mission.status !== MISSION_STATUS_COMPLETED && canCancelActive) {
+      const combatId = mission.combat?.id || mission.activeCombatId;
+      if (combatId && MISSION_COMBAT_TIMEOUTS.has(combatId)) {
+        clearTimeout(MISSION_COMBAT_TIMEOUTS.get(combatId));
+        MISSION_COMBAT_TIMEOUTS.delete(combatId);
+      }
+
+      mission.status = MISSION_STATUS_OPEN;
+      mission.party = [];
+      mission.leaderId = null;
+      mission.revealedAt = 0;
+      mission.partyPower = 0;
+      mission.enemyPower = 0;
+      mission.winChance = null;
+      mission.combat = null;
+      mission.activeCombatId = null;
+      mission.resultText = `Tiểu đội đã hủy nhiệm vụ và đóng ticket bởi <@${interaction.user.id}>.`;
+    }
+
+    await scheduleMissionTicketCleanup(interaction, mission, data, mission.status === MISSION_STATUS_COMPLETED
+      ? 'Nhiệm vụ đã hoàn tất. Ticket tự đóng sau vài giây.'
+      : 'Nhiệm vụ đã được hủy. Ticket tự đóng sau vài giây.');
+
+    await interaction.editReply('Đã lên lịch đóng ticket nhiệm vụ.').catch(() => null);
+    await refreshMissionBoardMessages(interaction.channel, mission.tier, data).catch(() => null);
+  }
+
 
   async function handleMissionStart(interaction) {
     if (!interaction.inGuild()) {
@@ -2698,6 +10736,11 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       return;
     }
 
+    if (!hasMissionTierAccess(interaction.member, mission.tier)) {
+      await interaction.reply({ content: getMissionTierAccessMessage(mission.tier, interaction.member), flags: MessageFlags.Ephemeral });
+      return;
+    }
+
     if (mission.leaderId !== interaction.user.id) {
       await interaction.reply({ content: 'Chỉ đội trưởng mới được xuất phát.', flags: MessageFlags.Ephemeral });
       return;
@@ -2708,25 +10751,518 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       return;
     }
 
+    const blocked = getMissionPartyStatusBlock(mission, users);
+    if (blocked.length > 0) {
+      await interaction.reply({
+        content: `Không thể xuất phát vì có thành viên chưa đủ trạng thái:\\n${blocked.join('\\n')}`.slice(0, 1900),
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
     mission.status = MISSION_STATUS_REVEALED;
     mission.revealedAt = Date.now();
+    if (mission.type === 'clean') mission.strategyKey = mission.strategyKey || 'balanced';
+    mission.partyRoleSnapshot = getMissionPartyRoleAssignments(users, mission);
+    decorateMissionEncounter(mission);
+    if (mission.type === 'clean') {
+      mission.enemyName = getMissionObstacleText(mission);
+      mission.monsterKey = null;
+      mission.monsterArchetype = null;
+    }
     mission.enemyPower = getMissionEnemyPower(mission);
-    mission.partyPower = getMissionPartyPower(mission, users);
-    mission.winChance = getMissionWinChance(mission.partyPower / Math.max(1, mission.enemyPower));
+    if (mission.enemyPowerMultiplier) {
+      const encounterMultiplier = clampNumber(Number(mission.enemyPowerMultiplier) || 1, 0.75, 1.35);
+      mission.enemyPower = Math.max(1, Math.floor(mission.enemyPower * encounterMultiplier));
+    }
+    mission.partyPower = mission.type === 'clean'
+      ? await getMissionPartySupportPower(interaction.guild, mission, users)
+      : getMissionPartyPower(mission, users);
+    if (mission.type === 'clean') {
+      const { effects } = getMissionPartyRoleEffects(users, mission);
+      const strategy = getMissionStrategyConfig(mission.strategyKey || 'balanced');
+      mission.winChance = clampNumber(getMissionWinChance(mission.partyPower / Math.max(1, mission.enemyPower)) + 0.08 + effects.chanceBonus + strategy.chanceBonus, 0.15, 0.98);
+    } else {
+      mission.winChance = getMissionWinChance(mission.partyPower / Math.max(1, mission.enemyPower));
+    }
 
+    await updateMissionTicketMessage(interaction, mission, users, 'Tiểu đội đã xuất phát.');
     saveMissionData(data);
 
     await interaction.update({
       embeds: [buildMissionDetailEmbed(mission, users)],
       components: buildMissionDetailRows(mission),
     });
+    await refreshMissionBoardMessages(interaction.channel, mission.tier, data);
   }
 
-  function getMissionPartyPower(mission, users) {
+
+  function getMissionPartyPower(mission, users, membersMap = {}) {
     return mission.party.reduce((total, memberId) => {
       const userData = getOrCreateUser(users, memberId);
-      return total + getMissionMemberPower(userData);
+      return total + getMissionMemberPower(userData, membersMap[memberId] || null);
     }, 0);
+  }
+
+  async function buildMissionCombatants(guild, mission, users) {
+    const membersMap = {};
+    const allies = [];
+    for (const memberId of mission.party) {
+      const userData = getOrCreateUser(users, memberId);
+      const member = guild ? await guild.members.fetch(memberId).catch(() => null) : null;
+      if (member) membersMap[memberId] = member;
+      const power = getMissionMemberPower(userData, member);
+      allies.push(createSkillCombatant({ id: memberId, label: member?.displayName || `<@${memberId}>`, userData, member, power, skills: getCombatSkillBookForUser(member, userData) }));
+    }
+    return { allies, membersMap };
+  }
+
+
+  const MISSION_COMBAT_TIMEOUTS = new Map();
+  const MISSION_TURN_TIMEOUT_MS = 60 * 1000;
+
+  function findMissionCombatSession(data, combatId) {
+    const id = String(combatId || '');
+    const mission = (data.missions || []).find((entry) => entry?.combat?.id === id);
+    return { mission: mission || null, combat: mission?.combat || null };
+  }
+
+  function getMissionCombatCurrentActor(combat) {
+    return getBicanhCombatCurrentActor(combat);
+  }
+
+  function getMissionCombatEnemy(combat) {
+    return getBicanhCombatEnemy(combat);
+  }
+
+  function getMissionCombatStatusText(combat) {
+    const current = getMissionCombatCurrentActor(combat);
+    const parts = [];
+    if (current) parts.push(`Lượt: <@${current.id}>`);
+    parts.push(`Hạn: ${formatTimestamp(combat.timeoutAt)}`);
+    return parts.join(' · ');
+  }
+
+  function getDifficultyLabel(ratio) {
+    const value = Number(ratio) || 0;
+    if (value >= 1.45) return 'Kèo dễ';
+    if (value >= 1.05) return 'Vừa sức';
+    if (value >= 0.78) return 'Khó vừa';
+    return 'Nguy hiểm';
+  }
+
+  function buildMissionPokemonCombatEmbed(combat) {
+    const enemy = getMissionCombatEnemy(combat);
+    const alliesText = (combat.allies || []).map(getPokemonCombatHpLine).join('\n\n');
+    const log = compactPokemonCombatLog(combat.log || [], 4);
+    return new EmbedBuilder()
+      .setColor(enemy && isCombatantAlive(enemy) ? 0xdc2626 : 0x22c55e)
+      .setTitle(`⚔️ Nhiệm Vụ Nội Tông · ${uiTrim(combat.missionName || 'Giao chiến', 60)}`)
+      .setDescription([
+        getMissionCombatStatusText(combat),
+        '',
+        '**Phe ta**',
+        alliesText || 'Không còn ai đứng vững.',
+        '',
+        '**Địch**',
+        enemy ? getPokemonCombatHpLine(enemy) : 'Địch đã tan biến.',
+      ].join('\n'))
+      .addFields({ name: 'Diễn biến', value: uiCompactValue(log, 420), inline: false })
+      .setFooter({ text: 'Giao chiến theo lượt: solo tự chọn skill, party xoay lượt từng người, quá hạn tự dùng chiêu 1.' });
+  }
+
+  function buildMissionPokemonCombatRows(combat) {
+    const actor = getMissionCombatCurrentActor(combat);
+    if (!actor || !isCombatantAlive(getMissionCombatEnemy(combat))) return [];
+    const skills = Array.isArray(actor.skills) && actor.skills.length ? actor.skills : DEFAULT_COMBAT_SKILLS;
+    const row1 = new ActionRowBuilder();
+    for (let index = 0; index < 4; index += 1) {
+      const skill = skills[index];
+      row1.addComponents(
+        new ButtonBuilder()
+          .setCustomId(`${MISSION_COMBAT_SKILL_PREFIX}${combat.id}:${index}`)
+          .setLabel(skill ? `${index + 1}. ${uiTrim(skill.name, 28)}` : `${index + 1}. Chưa mở`)
+          .setStyle(index === 3 ? ButtonStyle.Danger : ButtonStyle.Primary)
+          .setDisabled(!skill || (Number(skill.qiCost) || 0) > (Number(actor.qi) || 0)),
+      );
+    }
+    const row2 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`${MISSION_COMBAT_DEFEND_PREFIX}${combat.id}`).setLabel('Thủ thế').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`${MISSION_COMBAT_AUTO_PREFIX}${combat.id}`).setLabel('Auto lượt').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`${MISSION_COMBAT_ESCAPE_PREFIX}${combat.id}`).setLabel('Rút lui').setStyle(ButtonStyle.Secondary),
+    );
+    return [row1, row2];
+  }
+
+  async function createMissionPokemonCombatSession(guild, mission, users) {
+    const { allies } = await buildMissionCombatants(guild, mission, users);
+    if (!allies.length) return null;
+    mission.enemyPower = mission.enemyPower || getMissionEnemyPower(mission);
+    mission.partyPower = allies.reduce((total, unit) => total + unit.power, 0);
+    const missionMonster = getMissionMonster(mission);
+    const enemy = serializePokemonCombatant(createSkillCombatant({
+      id: `mission_enemy_${mission.id}`,
+      label: mission.enemyName || getMissionEnemyText(mission.type),
+      power: mission.enemyPower || getMissionEnemyPower(mission),
+      skills: getMonsterCombatSkills(missionMonster),
+      hpMultiplier: getMonsterArchetype(missionMonster).hpMult || 1,
+      isMonster: true,
+      note: missionMonster ? getMonsterDisplayLine(missionMonster) : null,
+    }));
+    const combatId = `ms_${String(mission.id).slice(0, 18)}_${Date.now().toString(36)}`;
+    return {
+      id: combatId,
+      mode: 'mission',
+      missionId: mission.id,
+      missionName: mission.name,
+      missionType: mission.type,
+      allies: allies.map(serializePokemonCombatant),
+      enemy,
+      turnOrder: allies.map((unit) => unit.id),
+      turnIndex: 0,
+      round: 1,
+      timeoutAt: Date.now() + MISSION_TURN_TIMEOUT_MS,
+      locked: false,
+      log: [`Nhiệm vụ bắt đầu. ${mission.type === 'clean' ? 'Uế khí nổi lên.' : 'Yêu tà hiện thân.'}`],
+      createdAt: Date.now(),
+      initiatorId: mission.leaderId,
+    };
+  }
+
+  function advanceMissionCombatTurn(combat) {
+    advanceBicanhCombatTurn(combat);
+    combat.timeoutAt = Date.now() + MISSION_TURN_TIMEOUT_MS;
+  }
+
+  function getMissionCombatOutcome(combat) {
+    return getBicanhCombatOutcome(combat);
+  }
+
+  async function finishMissionPokemonCombat(guild, data, mission, combat, success, extraLines = []) {
+    const users = loadUsers();
+    const partySize = getMissionPartySize(mission);
+    const ratio = (Number(mission.partyPower) || 1) / Math.max(1, Number(mission.enemyPower) || getMissionEnemyPower(mission));
+    const chance = getMissionWinChance(ratio);
+    const missionMonster = getMissionMonster(mission);
+    const lines = [];
+    lines.push(`Combat: **${success ? 'Thắng' : 'Thua'}** · Kèo trước trận **${Math.round(chance * 100)}%** · lực chiến **${ratio.toFixed(2)}x**`);
+    if (missionMonster) lines.push(`Địch: ${uiTrim(missionMonster.name || getMissionEnemyText(mission.type), 60)}`);
+    lines.push(compactPokemonCombatLog([...(combat.log || []), ...extraLines], 4));
+
+    if (success) {
+      const isCounterKill = ratio < 1;
+      const rewardMultiplier = isCounterKill ? 1.2 : 1;
+      const tuViMultiplier = isCounterKill ? 1.1 : 1;
+      const rewardEach = Math.floor((mission.rewardTotal / partySize) * rewardMultiplier);
+      const tuViEach = Math.floor((mission.tuViRewardTotal / partySize) * tuViMultiplier);
+      lines.push(isCounterKill ? '**Phản sát thành công!**' : '**Dị Lỗi đã gục!**');
+      lines.push('Chưa phát thưởng tự động. Đội trưởng phải chọn cách xử lý tàn tích: **Hấp Tu Vi**, **Phong Ấn** hoặc **Trảm Sát**.');
+      mission.awaitingLootChoice = true;
+      mission.pendingLoot = {
+        createdAt: Date.now(),
+        party: Array.isArray(mission.party) ? [...mission.party] : [],
+        rewardEach,
+        tuViEach,
+        isCounterKill,
+        ratio,
+      };
+    } else {
+      const danger = getMissionDangerConfig(getMissionDangerKey(mission, mission.tier));
+      const injury = getMissionInjury(ratio, danger.injuryMin, danger.injuryMax, danger.restMinMs, danger.restMaxMs);
+      lines.push('**Trọng thương!**');
+      lines.push(`Mỗi thành viên mất khoảng ${Math.round(injury.percent * 100)}% tu vi và phải tĩnh dưỡng ${getRemainingTimeText(injury.restMs)}.`);
+      for (const memberId of mission.party) {
+        const userData = getOrCreateUser(users, memberId);
+        applyMissionInjury(userData, injury.percent, injury.restMs, mission.type === 'clean' ? 'Nhiễm uế khí' : 'Trọng thương');
+        const masteryMember = guild ? await guild.members.fetch(memberId).catch(() => null) : null;
+        if (masteryMember) await grantCongPhapMastery(userData, masteryMember, 6, 'nhiemvu_that_bai_turnbase');
+        userData.lastMissionDate = getTodayString();
+        await syncMissionMemberRoles(guild, memberId, userData);
+      }
+    }
+
+    mission.status = success ? MISSION_STATUS_REVEALED : MISSION_STATUS_COMPLETED;
+    mission.completedAt = success ? 0 : Date.now();
+    mission.winChance = chance;
+    mission.resultText = lines.join('\n').slice(0, 3800);
+    mission.outcome = success ? null : 'failed';
+    mission.completedById = combat.initiatorId || mission.leaderId;
+    const finisher = mission.completedById && guild ? await guild.members.fetch(mission.completedById).catch(() => null) : null;
+    mission.completedByName = finisher?.displayName || mission.completedByName || 'Tiểu đội';
+    mission.completedPartySize = getMissionPartySize(mission);
+    mission.completionTitle = success ? 'Đã thắng giao chiến, chờ xử lý tàn tích' : getMissionStatusText(mission);
+    mission.combat = null;
+    mission.activeCombatId = null;
+    saveUsers(users);
+    saveMissionData(data);
+    return { success, awaitingLootChoice: Boolean(mission.awaitingLootChoice), summary: mission.resultText };
+  }
+
+  async function stepMissionPokemonCombat(guild, data, mission, combat, actorId, action = 'skill', skillIndex = 0, forced = false) {
+    if (combat.locked) return { ok: false, message: 'Trận đang xử lý lượt trước.' };
+    combat.locked = true;
+    try {
+      const lines = [];
+      const enemy = getMissionCombatEnemy(combat);
+      const actor = getMissionCombatCurrentActor(combat);
+      if (!actor || !enemy) return { ok: false, message: 'Trận đã mất dữ liệu.' };
+      if (!forced && actor.id !== actorId) return { ok: false, message: 'Chưa tới lượt đạo hữu.' };
+      if (action === 'defend') {
+        resolveManualDefend(actor, lines);
+      } else {
+        const skill = getManualSkill(actor, skillIndex);
+        resolveManualSkillAction(actor, enemy, skill, lines);
+      }
+      if (isCombatantAlive(enemy)) resolveEnemyCounter(combat, lines);
+      combat.log.push(...lines);
+      combat.log = combat.log.slice(-12);
+      const outcome = getMissionCombatOutcome(combat);
+      if (outcome.done) {
+        const resultText = await finishMissionPokemonCombat(guild, data, mission, combat, outcome.success, lines);
+        return { ok: true, done: true, success: outcome.success, resultText };
+      }
+      advanceMissionCombatTurn(combat);
+      combat.locked = false;
+      return { ok: true, done: false };
+    } finally {
+      if (combat) combat.locked = false;
+    }
+  }
+
+  async function autoAdvanceExpiredMissionCombat(guild, data, mission, combat) {
+    if (!combat || Date.now() < Number(combat.timeoutAt || 0)) return { advanced: false };
+    const actor = getMissionCombatCurrentActor(combat);
+    if (!actor) return { advanced: false };
+    combat.log.push(`• ${actor.label} quá hạn, Thiên Đạo tự dùng chiêu cơ bản.`);
+    return stepMissionPokemonCombat(guild, data, mission, combat, actor.id, 'skill', 0, true);
+  }
+
+  function scheduleMissionPokemonCombatTimeout(guildId, combatId) {
+    const id = String(combatId || '');
+    if (!id) return;
+    if (MISSION_COMBAT_TIMEOUTS.has(id)) clearTimeout(MISSION_COMBAT_TIMEOUTS.get(id));
+    const data = getMissionDataForToday();
+    const { combat } = findMissionCombatSession(data, id);
+    if (!combat) return;
+    const delay = Math.max(1500, Number(combat.timeoutAt || 0) - Date.now() + 500);
+    const timer = setTimeout(async () => {
+      try {
+        const current = getMissionDataForToday();
+        const found = findMissionCombatSession(current, id);
+        if (!found.mission || !found.combat) return;
+        const guild = guildId ? await client.guilds.fetch(guildId).catch(() => null) : null;
+        const result = await autoAdvanceExpiredMissionCombat(guild, current, found.mission, found.combat);
+        saveMissionData(current);
+        if (found.combat?.channelId && found.combat?.messageId) {
+          const channel = await client.channels.fetch(found.combat.channelId).catch(() => null);
+          const message = channel?.messages?.fetch ? await channel.messages.fetch(found.combat.messageId).catch(() => null) : null;
+          if (message) {
+            const users = loadUsers();
+            if (result.done) {
+              await message.edit({ embeds: [buildMissionDetailEmbed(found.mission, users)], components: buildMissionDetailRows(found.mission) }).catch(() => null);
+              if (!found.mission.awaitingLootChoice) {
+                await finalizeMissionTicketAndCleanup({ guild, channel }, found.mission, current, users, 'Nhiệm vụ đã kết thúc.').catch(() => null);
+              }
+            } else {
+              await message.edit({ embeds: [buildMissionPokemonCombatEmbed(found.combat)], components: buildMissionPokemonCombatRows(found.combat) }).catch(() => null);
+            }
+          }
+        }
+        if (!result.done && found.mission?.combat?.id) scheduleMissionPokemonCombatTimeout(guildId, id);
+      } catch (error) {
+        console.error('Loi auto timeout combat nhiem vu:', error);
+      } finally {
+        MISSION_COMBAT_TIMEOUTS.delete(id);
+      }
+    }, delay);
+    MISSION_COMBAT_TIMEOUTS.set(id, timer);
+  }
+
+  async function startOrShowMissionPokemonCombat(interaction, data, mission, users) {
+    if (mission.combat?.id) {
+      const timeoutResult = await autoAdvanceExpiredMissionCombat(interaction.guild, data, mission, mission.combat);
+      if (timeoutResult.done) {
+        await finalizeMissionTicketAndCleanup(interaction, mission, data, users, 'Nhiệm vụ đã kết thúc.').catch(() => null);
+        saveMissionData(data);
+        await interaction.update({ embeds: [buildMissionDetailEmbed(mission, users)], components: buildMissionDetailRows(mission) }).catch(() => null);
+        return;
+      }
+      saveMissionData(data);
+      await interaction.update({ embeds: [buildMissionPokemonCombatEmbed(mission.combat)], components: buildMissionPokemonCombatRows(mission.combat) }).catch(() => null);
+      scheduleMissionPokemonCombatTimeout(interaction.guild.id, mission.combat.id);
+      return;
+    }
+
+    const combat = await createMissionPokemonCombatSession(interaction.guild, mission, users);
+    if (!combat) {
+      await interaction.reply({ content: 'Không thể dựng trận combat nhiệm vụ.', flags: MessageFlags.Ephemeral }).catch(() => null);
+      return;
+    }
+    combat.channelId = interaction.channelId;
+    combat.messageId = interaction.message?.id || null;
+    mission.combat = combat;
+    mission.activeCombatId = combat.id;
+    saveMissionData(data);
+    await interaction.update({ embeds: [buildMissionPokemonCombatEmbed(combat)], components: buildMissionPokemonCombatRows(combat) }).catch(() => null);
+    scheduleMissionPokemonCombatTimeout(interaction.guild.id, combat.id);
+  }
+
+  async function handleMissionCombatAction(interaction, action, skillIndex = 0) {
+    const raw = interaction.customId
+      .replace(MISSION_COMBAT_SKILL_PREFIX, '')
+      .replace(MISSION_COMBAT_DEFEND_PREFIX, '')
+      .replace(MISSION_COMBAT_AUTO_PREFIX, '')
+      .replace(MISSION_COMBAT_ESCAPE_PREFIX, '');
+    const combatId = raw.split(':')[0];
+    const data = getMissionDataForToday();
+    const users = loadUsers();
+    const { mission, combat } = findMissionCombatSession(data, combatId);
+    if (!mission || !combat) {
+      await interaction.reply({ content: 'Trận nhiệm vụ này đã kết thúc hoặc mất dữ liệu.', flags: MessageFlags.Ephemeral }).catch(() => null);
+      return;
+    }
+    if (!mission.party.includes(interaction.user.id)) {
+      await interaction.reply({ content: 'Đạo hữu không thuộc tiểu đội nhiệm vụ này.', flags: MessageFlags.Ephemeral }).catch(() => null);
+      return;
+    }
+    if (action === 'escape') {
+      const ratio = (Number(mission.partyPower) || 1) / Math.max(1, Number(mission.enemyPower) || getMissionEnemyPower(mission));
+      const result = await resolveMissionEscape(interaction.guild, mission, users, ratio);
+      mission.status = MISSION_STATUS_COMPLETED;
+      mission.completedAt = Date.now();
+      mission.winChance = getMissionEscapeChance(ratio);
+      mission.resultText = result.summary;
+      mission.outcome = result.escaped ? 'escaped' : 'failed';
+      mission.completedById = interaction.user.id;
+      mission.completedByName = interaction.member?.displayName || interaction.user.username;
+      mission.completedPartySize = getMissionPartySize(mission);
+      mission.completionTitle = getMissionStatusText(mission);
+      mission.combat = null;
+      mission.activeCombatId = null;
+      saveUsers(users);
+      saveMissionData(data);
+      if (MISSION_COMBAT_TIMEOUTS.has(combat.id)) clearTimeout(MISSION_COMBAT_TIMEOUTS.get(combat.id));
+      MISSION_COMBAT_TIMEOUTS.delete(combat.id);
+      await finalizeMissionTicketAndCleanup(interaction, mission, data, users, 'Nhiệm vụ đã kết thúc.').catch(() => null);
+      await interaction.update({ embeds: [buildMissionDetailEmbed(mission, users)], components: buildMissionDetailRows(mission) }).catch(() => null);
+      return;
+    }
+    const timeoutResult = await autoAdvanceExpiredMissionCombat(interaction.guild, data, mission, combat);
+    if (timeoutResult.done) {
+      saveMissionData(data);
+      await finalizeMissionTicketAndCleanup(interaction, mission, data, users, 'Nhiệm vụ đã kết thúc.').catch(() => null);
+      await interaction.update({ embeds: [buildMissionDetailEmbed(mission, loadUsers())], components: buildMissionDetailRows(mission) }).catch(() => null);
+      return;
+    }
+    const current = getMissionCombatCurrentActor(combat);
+    if (!current) {
+      await interaction.reply({ content: 'Trận đã mất lượt hiện tại.', flags: MessageFlags.Ephemeral }).catch(() => null);
+      return;
+    }
+    if (current.id !== interaction.user.id && action !== 'auto') {
+      await interaction.reply({ content: `Chưa tới lượt đạo hữu. Hiện là lượt <@${current.id}>.`, flags: MessageFlags.Ephemeral }).catch(() => null);
+      return;
+    }
+    const actorId = action === 'auto' ? current.id : interaction.user.id;
+    const result = await stepMissionPokemonCombat(interaction.guild, data, mission, combat, actorId, action === 'defend' ? 'defend' : 'skill', skillIndex, action === 'auto');
+    if (!result.ok) {
+      await interaction.reply({ content: result.message || 'Không thể xử lý lượt này.', flags: MessageFlags.Ephemeral }).catch(() => null);
+      return;
+    }
+    saveMissionData(data);
+    if (result.done) {
+      if (MISSION_COMBAT_TIMEOUTS.has(combat.id)) clearTimeout(MISSION_COMBAT_TIMEOUTS.get(combat.id));
+      MISSION_COMBAT_TIMEOUTS.delete(combat.id);
+      if (!mission.awaitingLootChoice) {
+        await finalizeMissionTicketAndCleanup(interaction, mission, data, loadUsers(), 'Nhiệm vụ đã kết thúc.').catch(() => null);
+      }
+      await interaction.update({ embeds: [buildMissionDetailEmbed(mission, loadUsers())], components: buildMissionDetailRows(mission) }).catch(() => null);
+      return;
+    }
+    scheduleMissionPokemonCombatTimeout(interaction.guild.id, combat.id);
+    await interaction.update({ embeds: [buildMissionPokemonCombatEmbed(combat)], components: buildMissionPokemonCombatRows(combat) }).catch(() => null);
+  }
+
+  async function handleMissionCombatSkill(interaction) {
+    const raw = interaction.customId.slice(MISSION_COMBAT_SKILL_PREFIX.length);
+    const [, skillText] = raw.split(':');
+    await handleMissionCombatAction(interaction, 'skill', Number(skillText) || 0);
+  }
+
+  async function handleMissionCombatDefend(interaction) {
+    await handleMissionCombatAction(interaction, 'defend', 0);
+  }
+
+  async function handleMissionCombatAuto(interaction) {
+    await handleMissionCombatAction(interaction, 'auto', 0);
+  }
+
+  async function handleMissionCombatEscape(interaction) {
+    await handleMissionCombatAction(interaction, 'escape', 0);
+  }
+
+  async function handleMissionStrategy(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const payload = interaction.customId.slice(MISSION_STRATEGY_PREFIX.length);
+    const [missionId, rawStrategy] = payload.split(':');
+    const strategy = getMissionStrategyConfig(rawStrategy || 'balanced');
+    const data = getMissionDataForToday();
+    const users = loadUsers();
+    const mission = getMissionById(data, missionId);
+
+    if (!mission) {
+      await interaction.reply({ content: 'Không tìm thấy nhiệm vụ này.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    if (mission.type !== 'clean') {
+      await interaction.reply({ content: 'Chiến thuật xử lý chỉ dành cho nhiệm vụ nội tông không giao chiến.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    if (!hasMissionTierAccess(interaction.member, mission.tier)) {
+      await interaction.reply({ content: getMissionTierAccessMessage(mission.tier, interaction.member), flags: MessageFlags.Ephemeral });
+      return;
+    }
+    if (mission.status !== MISSION_STATUS_REVEALED) {
+      await interaction.reply({ content: 'Nhiệm vụ chưa mở tình huống hoặc đã kết thúc.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    if (mission.leaderId !== interaction.user.id) {
+      await interaction.reply({ content: 'Chỉ đội trưởng mới được chọn chiến thuật cho nhiệm vụ này.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const blocked = getMissionPartyStatusBlock(mission, users);
+    if (blocked.length > 0) {
+      await interaction.reply({ content: `Không thể xử lý nhiệm vụ vì có thành viên bị trạng thái xấu:
+${blocked.join('\n')}`.slice(0, 1900), flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    mission.strategyKey = strategy.key;
+    mission.partyRoleSnapshot = getMissionPartyRoleAssignments(users, mission);
+    mission.enemyPower = mission.enemyPower || getMissionEnemyPower(mission);
+    mission.partyPower = await getMissionPartySupportPower(interaction.guild, mission, users);
+    const ratio = mission.partyPower / Math.max(1, mission.enemyPower);
+    const result = await resolveMissionSupport(interaction.guild, mission, users, ratio);
+    mission.status = MISSION_STATUS_COMPLETED;
+    mission.completedAt = Date.now();
+    const { effects } = getMissionPartyRoleEffects(users, mission);
+    mission.winChance = clampNumber(getMissionWinChance(ratio) + 0.08 + effects.chanceBonus + strategy.chanceBonus, 0.15, 0.98);
+    mission.resultText = result.summary;
+    mission.outcome = result.success ? 'success' : 'failed';
+    mission.completedById = interaction.user.id;
+    mission.completedByName = interaction.member?.displayName || interaction.user.username;
+    mission.completedPartySize = getMissionPartySize(mission);
+    mission.completionTitle = result.success ? getMissionCompletionTitle(mission, interaction.member) : `Xử lý thất bại · ${strategy.shortName}`;
+    mission.combat = null;
+    mission.activeCombatId = null;
+    saveUsers(users);
+    await finalizeMissionTicketAndCleanup(interaction, mission, data, users, 'Nhiệm vụ đã kết thúc.').catch(() => null);
+    saveMissionData(data);
+    await interaction.update({ embeds: [buildMissionDetailEmbed(mission, users)], components: buildMissionDetailRows(mission) }).catch(() => null);
+    await refreshMissionBoardMessages(interaction.channel, mission.tier, data).catch(() => null);
   }
 
   async function handleMissionFight(interaction) {
@@ -2753,98 +11289,170 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       return;
     }
 
+    if (!hasMissionTierAccess(interaction.member, mission.tier)) {
+      await interaction.reply({ content: getMissionTierAccessMessage(mission.tier, interaction.member), flags: MessageFlags.Ephemeral });
+      return;
+    }
+
     if (mission.status !== MISSION_STATUS_REVEALED) {
-      await interaction.reply({ content: 'Nhiệm vụ này chưa chạm trán hoặc đã kết thúc.', flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: `Nhiệm vụ chưa ${mission?.type === 'clean' ? 'mở tình huống' : 'chạm trán'} hoặc đã kết thúc.`, flags: MessageFlags.Ephemeral });
       return;
     }
 
     if (mission.leaderId !== interaction.user.id) {
-      await interaction.reply({ content: 'Chỉ đội trưởng mới được quyết định hành động.', flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: 'Chỉ đội trưởng mới được quyết định.', flags: MessageFlags.Ephemeral });
       return;
     }
 
     if (mission.party.length === 0) {
-      await interaction.reply({ content: 'Tiểu đội trống, không thể xử lý.', flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: 'Tiểu đội trống.', flags: MessageFlags.Ephemeral });
       return;
     }
 
+    if (action === 'fight') {
+      const blocked = getMissionPartyStatusBlock(mission, users);
+      if (blocked.length > 0) {
+        await interaction.reply({
+          content: `Không thể ${mission.type === 'clean' ? 'xử lý nhiệm vụ' : 'giao chiến'} vì có thành viên bị trạng thái xấu:\\n${blocked.join('\\n')}`.slice(0, 1900),
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+    }
+
     mission.enemyPower = mission.enemyPower || getMissionEnemyPower(mission);
-    mission.partyPower = getMissionPartyPower(mission, users);
+    if (mission.type === 'clean') {
+      mission.partyPower = await getMissionPartySupportPower(interaction.guild, mission, users);
+    } else {
+      const combatSetup = await buildMissionCombatants(interaction.guild, mission, users);
+      mission.partyPower = combatSetup.allies.reduce((total, unit) => total + unit.power, 0);
+    }
     const ratio = mission.partyPower / Math.max(1, mission.enemyPower);
 
-    const result = action === 'escape'
-      ? await resolveMissionEscape(interaction.guild, mission, users, ratio)
-      : await resolveMissionFight(interaction.guild, mission, users, ratio);
+    if (action === 'fight') {
+      if (mission.type === 'clean') {
+        const result = await resolveMissionSupport(interaction.guild, mission, users, ratio);
+        mission.status = MISSION_STATUS_COMPLETED;
+        mission.completedAt = Date.now();
+        {
+          const { effects } = getMissionPartyRoleEffects(users, mission);
+          const strategy = getMissionStrategyConfig(mission.strategyKey || 'balanced');
+          mission.winChance = clampNumber(getMissionWinChance(ratio) + 0.08 + effects.chanceBonus + strategy.chanceBonus, 0.15, 0.98);
+        }
+        mission.resultText = result.summary;
+        mission.outcome = result.success ? 'success' : 'failed';
+        mission.completedById = interaction.user.id;
+        mission.completedByName = interaction.member?.displayName || interaction.user.username;
+        mission.completedPartySize = getMissionPartySize(mission);
+        mission.completionTitle = result.success ? getMissionCompletionTitle(mission, interaction.member) : 'Xử lý nhiệm vụ thất bại';
+        mission.combat = null;
+        mission.activeCombatId = null;
+        saveUsers(users);
+        await finalizeMissionTicketAndCleanup(interaction, mission, data, users, 'Nhiệm vụ đã kết thúc.').catch(() => null);
+        saveMissionData(data);
+        await interaction.update({
+          embeds: [buildMissionDetailEmbed(mission, users)],
+          components: buildMissionDetailRows(mission),
+        });
+        await refreshMissionBoardMessages(interaction.channel, mission.tier, data);
+        return;
+      }
+
+      await startOrShowMissionPokemonCombat(interaction, data, mission, users);
+      await refreshMissionBoardMessages(interaction.channel, mission.tier, data).catch(() => null);
+      return;
+    }
+
+    const result = await resolveMissionEscape(interaction.guild, mission, users, ratio);
 
     mission.status = MISSION_STATUS_COMPLETED;
     mission.completedAt = Date.now();
-    mission.winChance = action === 'escape' ? getMissionEscapeChance(ratio) : getMissionWinChance(ratio);
+    mission.winChance = getMissionEscapeChance(ratio);
     mission.resultText = result.summary;
+    mission.outcome = result.escaped ? 'escaped' : 'failed';
+    mission.completedById = interaction.user.id;
+    mission.completedByName = interaction.member?.displayName || interaction.user.username;
+    mission.completedPartySize = getMissionPartySize(mission);
+    mission.completionTitle = getMissionStatusText(mission);
+    mission.combat = null;
+    mission.activeCombatId = null;
 
     saveUsers(users);
+    await finalizeMissionTicketAndCleanup(interaction, mission, data, users, 'Nhiệm vụ đã kết thúc.').catch(() => null);
     saveMissionData(data);
 
     await interaction.update({
       embeds: [buildMissionDetailEmbed(mission, users)],
       components: buildMissionDetailRows(mission),
     });
+    await refreshMissionBoardMessages(interaction.channel, mission.tier, data);
   }
+
 
   async function resolveMissionFight(guild, mission, users, ratio) {
     const chance = getMissionWinChance(ratio);
-    const success = rollPercent(chance);
+    const partySize = getMissionPartySize(mission);
+    const kyNgoBonus = mission.kyNgoBonus || null;
+    const { allies } = await buildMissionCombatants(guild, mission, users);
+    const missionMonster = getMissionMonster(mission);
+    const enemy = createSkillCombatant({
+      id: `mission:${mission.id}:enemy`,
+      label: mission.enemyName || getMissionEnemyText(mission.type),
+      power: mission.enemyPower || getMissionEnemyPower(mission),
+      skills: getMonsterCombatSkills(missionMonster),
+      hpMultiplier: getMonsterArchetype(missionMonster).hpMult || 1,
+      isMonster: true,
+      note: missionMonster ? getMonsterDisplayLine(missionMonster) : null,
+    });
+    const battle = runTurnBasedCombat({ allies, enemies: [enemy], maxTurns: mission.type === 'clean' ? 6 : 8, title: 'Giao chiến nhiệm vụ · chọn chiêu theo công pháp' });
+    const success = battle.success;
     const isCounterKill = success && ratio < 1;
     const rewardMultiplier = isCounterKill ? 1.2 : 1;
     const tuViMultiplier = isCounterKill ? 1.1 : 1;
-    const rewardEach = Math.floor((mission.rewardTotal / MISSION_MAX_PARTY_SIZE) * rewardMultiplier);
-    const tuViEach = Math.floor((mission.tuViRewardTotal / MISSION_MAX_PARTY_SIZE) * tuViMultiplier);
+    const rewardEach = Math.floor((mission.rewardTotal / partySize) * rewardMultiplier);
+    const tuViEach = Math.floor((mission.tuViRewardTotal / partySize) * tuViMultiplier);
     const lines = [];
 
+    lines.push(`Dự đoán thắng: **${Math.round(chance * 100)}%** · Sức đội/địch: **${ratio.toFixed(2)}x**`);
+    if (missionMonster) lines.push(`Địch: ${getMonsterDisplayLine(missionMonster)}`);
+    lines.push(compactPokemonCombatLog(battle.lines || battle.summary, 4));
+
     if (success) {
-      lines.push(isCounterKill ? '**Phản sát thành công!**' : '**Chinh phạt thành công!**');
-      lines.push(`Tỉ lệ thắng: ${Math.round(chance * 100)}%`);
-      lines.push(`Mỗi thành viên nhận: +${rewardEach} cống hiến, +${tuViEach} tu vi.`);
-
+      lines.push(isCounterKill ? '**Lật kèo thành công!**' : '**Giao chiến thắng!**');
+      lines.push(`Mỗi thành viên nhận: +${tuViEach} tu vi · +${rewardEach} cống hiến.`);
       const dropLines = [];
-
       for (const memberId of mission.party) {
         const userData = getOrCreateUser(users, memberId);
         normalizeMissionUserData(userData);
         addCongHien(userData, rewardEach);
-        userData.tuViExp = Math.max(0, (Number(userData.tuViExp) || 0) + tuViEach);
-        const dropSummary = grantMissionSuccessDrop(userData, mission, isCounterKill);
-        if (dropSummary) {
-          dropLines.push(`<@${memberId}>: ${dropSummary}`);
+        addTuViExp(userData, tuViEach);
+        const masteryMember = await guild.members.fetch(memberId).catch(() => null);
+        if (masteryMember) await grantCongPhapMastery(userData, masteryMember, success ? 18 : 8, 'nhiemvu');
+        if (mission.kyNgoBonus?.directStats) {
+          setTemporaryStatus(userData, 'Kỳ Ngộ Gia Thân', Math.max(1, Number(mission.kyNgoBonus.hours) || 4) * 60 * 60 * 1000, { directStats: mission.kyNgoBonus.directStats });
         }
+        const dropSummary = grantMissionSuccessDrop(userData, mission, isCounterKill);
+        if (dropSummary) dropLines.push(`<@${memberId}>: ${dropSummary}`);
         userData.lastMissionDate = getTodayString();
         await syncMissionMemberRoles(guild, memberId, userData);
       }
-
-      if (dropLines.length > 0) {
-        lines.push('');
-        lines.push('**Thu hoạch:**');
-        lines.push(...dropLines.slice(0, 8));
-      }
-
-      return { summary: lines.join('\n') };
+      if (dropLines.length > 0) { lines.push(''); lines.push('**Thưởng phụ:**'); lines.push(...dropLines.slice(0, 8)); }
+      return { summary: lines.join('\n').slice(0, 3800), success: true };
     }
 
-    const injury = mission.type === 'clean'
-      ? getMissionInjury(ratio, 0.03, 0.15, MISSION_REST_LIGHT_MS, MISSION_REST_HEAVY_MS)
-      : getMissionInjury(ratio, 0.05, 0.25, MISSION_REST_LIGHT_MS, MISSION_REST_HEAVY_MS);
-
+    const danger = getMissionDangerConfig(getMissionDangerKey(mission, mission.tier));
+    const injury = getMissionInjury(ratio, danger.injuryMin, danger.injuryMax, danger.restMinMs, danger.restMaxMs);
     lines.push('**Trọng thương!**');
-    lines.push(`Tỉ lệ thắng: ${Math.round(chance * 100)}%`);
     lines.push(`Mỗi thành viên mất khoảng ${Math.round(injury.percent * 100)}% tu vi và phải tĩnh dưỡng ${getRemainingTimeText(injury.restMs)}.`);
-
     for (const memberId of mission.party) {
       const userData = getOrCreateUser(users, memberId);
       applyMissionInjury(userData, injury.percent, injury.restMs, mission.type === 'clean' ? 'Nhiễm uế khí' : 'Trọng thương');
+      const masteryMember = await guild.members.fetch(memberId).catch(() => null);
+      if (masteryMember) await grantCongPhapMastery(userData, masteryMember, 6, 'nhiemvu_that_bai');
       userData.lastMissionDate = getTodayString();
       await syncMissionMemberRoles(guild, memberId, userData);
     }
-
-    return { summary: lines.join('\n') };
+    return { summary: lines.join('\n').slice(0, 3800), success: false };
   }
 
   async function resolveMissionEscape(guild, mission, users, ratio) {
@@ -2853,8 +11461,8 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     const lines = [];
 
     if (escaped) {
-      lines.push('**Thoát khỏi bí cảnh.**');
-      lines.push(`Tỉ lệ chạy thoát: ${Math.round(chance * 100)}%`);
+      lines.push(mission.type === 'clean' ? '**Đã rút khỏi nhiệm vụ.**' : '**Đã rút lui an toàn.**');
+      lines.push(`Tỉ lệ rút lui an toàn: ${Math.round(chance * 100)}%`);
       lines.push('Không nhận thưởng, không mất tu vi. Nhiệm vụ hôm nay đã được tính.');
 
       for (const memberId of mission.party) {
@@ -2863,25 +11471,30 @@ const AUTO_DISCIPLE_THRESHOLDS = [
         userData.lastMissionDate = getTodayString();
       }
 
-      return { summary: lines.join('\n') };
+      return { summary: lines.join('\n'), escaped: true };
     }
 
-    const injury = mission.type === 'clean'
-      ? getMissionInjury(ratio, 0.02, 0.1, 60 * 60 * 1000, 4 * 60 * 60 * 1000)
-      : getMissionInjury(ratio, 0.05, 0.15, 2 * 60 * 60 * 1000, 8 * 60 * 60 * 1000);
+    const danger = getMissionDangerConfig(getMissionDangerKey(mission, mission.tier));
+    const injury = getMissionInjury(
+      ratio,
+      Math.max(0.01, danger.injuryMin * 0.8),
+      Math.max(0.04, danger.injuryMax * 0.75),
+      Math.max(30 * 60 * 1000, Math.floor(danger.restMinMs * 0.8)),
+      Math.max(60 * 60 * 1000, Math.floor(danger.restMaxMs * 0.75)),
+    );
 
-    lines.push('**Chạy trốn thất bại.**');
-    lines.push(`Tỉ lệ chạy thoát: ${Math.round(chance * 100)}%`);
-    lines.push(`Bị phản kích, mất khoảng ${Math.round(injury.percent * 100)}% tu vi và tĩnh dưỡng ${getRemainingTimeText(injury.restMs)}.`);
+    lines.push('**Rút lui thất bại.**');
+    lines.push(`Tỉ lệ rút lui an toàn: ${Math.round(chance * 100)}%`);
+    lines.push(`${mission.type === 'clean' ? 'Vướng mắc phản hồi' : 'Địch phản kích'}, mất khoảng ${Math.round(injury.percent * 100)}% tu vi và tĩnh dưỡng ${getRemainingTimeText(injury.restMs)}.`);
 
     for (const memberId of mission.party) {
       const userData = getOrCreateUser(users, memberId);
-      applyMissionInjury(userData, injury.percent, injury.restMs, mission.type === 'clean' ? 'Uế khí phản phệ' : 'Yêu thú phản kích');
+      applyMissionInjury(userData, injury.percent, injury.restMs, mission.type === 'clean' ? 'Phạt rút lui thất bại' : 'Địch phản kích');
       userData.lastMissionDate = getTodayString();
       await syncMissionMemberRoles(guild, memberId, userData);
     }
 
-    return { summary: lines.join('\n') };
+    return { summary: lines.join('\n'), escaped: false };
   }
 
 
@@ -2892,7 +11505,7 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       return grantHuntDrop(userData, mission, isCounterKill);
     }
 
-    return grantCleanCoDuyen(userData, mission, isCounterKill);
+    return grantCleanKyNgo(userData, mission, isCounterKill);
   }
 
   function grantHuntDrop(userData, mission, isCounterKill = false) {
@@ -2922,34 +11535,36 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     return drops.join('; ');
   }
 
-  function grantCleanCoDuyen(userData, mission, isCounterClean = false) {
+  function grantCleanKyNgo(userData, mission, isCounterClean = false) {
     const realmIndex = Math.floor((Number(mission.hiddenLevel) || 0) / MINOR_REALMS.length);
     const eventRoll = Math.random();
     const drops = [];
+    const scale = Math.min(12, 2 + realmIndex + (isCounterClean ? 2 : 0));
 
     if (eventRoll < 0.18 + realmIndex * 0.01) {
-      const tuViGain = 60 + realmIndex * 45;
-      userData.tuViExp = Math.max(0, (Number(userData.tuViExp) || 0) + tuViGain);
-      drops.push(`Cơ Duyên: **Cao Nhân Chỉ Điểm**, +${tuViGain} tu vi`);
+      const stats = { tuVi: 3 + scale, dotPha: Math.ceil(scale / 3), tamMaRisk: -2 };
+      setTemporaryStatus(userData, 'Đạo Tâm Kiên Định', 8 * 60 * 60 * 1000, { directStats: stats, dotPhaBonus: true });
+      drops.push(`Kỳ Ngộ: **Cao Nhân Chỉ Điểm** · ${formatDirectStatsCompact(stats)}`);
     } else if (eventRoll < 0.36 + realmIndex * 0.01) {
-      const congHienGain = 30 + realmIndex * 25;
-      addCongHien(userData, congHienGain);
-      drops.push(`Cơ Duyên: **Linh Quang Chợt Hiện**, +${congHienGain} cống hiến`);
+      const stats = { congHien: 4 + scale, tuVi: 2, trongThuongDuration: -2 };
+      setTemporaryStatus(userData, 'Kỳ Ngộ Gia Thân', 8 * 60 * 60 * 1000, { directStats: stats });
+      drops.push(`Kỳ Ngộ: **Linh Quang Chợt Hiện** · ${formatDirectStatsCompact(stats)}`);
     } else if (eventRoll < 0.58) {
-      const item = rollMissionItemDrop(mission, 'clean');
-      const quality = rollMissionDropQuality(realmIndex, isCounterClean);
-      if (item && maybeAddInventoryDrop(userData, item.key, { quality, cursed: rollPercent(0.04 + realmIndex * 0.01) })) {
-        drops.push(`Cơ Duyên: nhặt được **${item.name} - ${getQualityByKey(quality).name}**`);
-      }
+      const stats = { lucChien: 3 + Math.ceil(scale / 2), tamMaRisk: -2, trongThuongDuration: -2 };
+      setTemporaryStatus(userData, 'Kỳ Ngộ Gia Thân', 6 * 60 * 60 * 1000, { directStats: stats });
+      drops.push(`Kỳ Ngộ: **Pháp Khí Cộng Minh** · ${formatDirectStatsCompact(stats)}`);
     } else if (eventRoll < 0.76) {
-      setTemporaryStatus(userData, 'Cơ Duyên Gia Thân', 12 * 60 * 60 * 1000, { tuViMultiplierValue: 1.15 });
-      drops.push('Cơ Duyên: **Cơ Duyên Gia Thân** 12 giờ');
+      const stats = { tuVi: 6 + Math.ceil(scale / 2), congHien: 2 };
+      setTemporaryStatus(userData, 'Kỳ Ngộ Gia Thân', 12 * 60 * 60 * 1000, { directStats: stats });
+      drops.push(`Kỳ Ngộ: **Kỳ Ngộ Gia Thân** · ${formatDirectStatsCompact(stats)}`);
     } else if (eventRoll < 0.91) {
-      setTemporaryStatus(userData, 'Đạo Tâm Kiên Định', 12 * 60 * 60 * 1000, { dotPhaBonus: true });
-      drops.push('Cơ Duyên: **Đạo Tâm Kiên Định** 12 giờ');
+      const stats = { dotPha: 4 + Math.ceil(scale / 3), tamMaRisk: -4 };
+      setTemporaryStatus(userData, 'Đạo Tâm Kiên Định', 12 * 60 * 60 * 1000, { directStats: stats, dotPhaBonus: true });
+      drops.push(`Kỳ Ngộ: **Đạo Tâm Kiên Định** · ${formatDirectStatsCompact(stats)}`);
     } else {
-      setTemporaryStatus(userData, 'Tâm Ma Quấn Thân', 3 * 60 * 60 * 1000, { dotPhaPenalty: true });
-      drops.push('Hung duyên: **Tâm Ma Thoáng Hiện** 3 giờ');
+      const stats = { tuVi: -2, lucChien: -2, dotPha: -2, tamMaRisk: 8 + Math.ceil(scale / 2), trongThuongDuration: 4 };
+      setTemporaryStatus(userData, 'Tâm Ma Quấn Thân', 3 * 60 * 60 * 1000, { dotPhaPenalty: true, directStats: stats });
+      drops.push(`Hung duyên: **Tâm Ma Thoáng Hiện** · ${formatDirectStatsCompact(stats)}`);
     }
 
     return drops.join('; ');
@@ -2985,9 +11600,12 @@ const AUTO_DISCIPLE_THRESHOLDS = [
   }
 
   function rollMissionItemDrop(mission, source) {
-    const family = mission.family || inferMissionFamily(mission.name, mission.type);
-    const preferredTypes = source === 'clean' ? ['tool', 'pill', 'talisman'] : ['artifact', 'pill', 'talisman'];
-    const candidates = SHOP_ITEMS.filter((item) => preferredTypes.includes(item.type) && (item.family === family || item.family === source || item.family === 'clean' || item.family === 'pill' || item.family === 'talisman'));
+    const monster = getMissionMonster(mission) || getMonsterByKey(mission.monsterKey);
+    const family = mission.lootFamily || mission.family || monster?.family || inferMissionFamily(mission.name, mission.type);
+    const monsterLoot = getMonsterLootBias(monster);
+    const preferredTypes = source === 'clean' ? ['tool', 'pill', 'talisman', 'armor'] : ['artifact', 'weapon', 'armor', 'pill', 'talisman', 'upgrade_stone'];
+    const allowedFamilies = Array.from(new Set([family, source, ...monsterLoot, 'clean', 'pill', 'talisman'].filter(Boolean)));
+    const candidates = SHOP_ITEMS.filter((item) => preferredTypes.includes(item.type) && allowedFamilies.includes(item.family || item.type));
     const fallback = SHOP_ITEMS.filter((item) => preferredTypes.includes(item.type));
     const pool = candidates.length > 0 ? candidates : fallback;
     return pool[Math.floor(Math.random() * pool.length)] ?? null;
@@ -3024,9 +11642,11 @@ const AUTO_DISCIPLE_THRESHOLDS = [
   function applyMissionInjury(userData, percent, restMs, reason) {
     normalizeMissionUserData(userData);
     const currentExp = Math.max(0, Number(userData.tuViExp) || 0);
-    const loss = Math.ceil(currentExp * percent);
+    const adjustedPercent = adjustTuViLossPercent(userData, percent);
+    const adjustedRestMs = adjustInjuryDuration(userData, restMs);
+    const loss = Math.ceil(currentExp * adjustedPercent);
     userData.tuViExp = Math.max(0, currentExp - loss);
-    userData.restingUntil = Date.now() + restMs;
+    userData.restingUntil = Date.now() + adjustedRestMs;
     userData.restingReason = reason;
   }
 
@@ -3039,6 +11659,19 @@ const AUTO_DISCIPLE_THRESHOLDS = [
 
     await syncTuViRoles(guild, member, userData.tuViExp).catch(() => null);
     await syncDiscipleRole(guild, member, userData.congHienExp).catch(() => null);
+  }
+
+
+  async function syncBicanhMemberAfterReward(guild, member, userData) {
+    if (!guild || !member || !userData) {
+      return { ok: true, skipped: true };
+    }
+
+    await syncTuViRoles(guild, member, userData.tuViExp).catch(() => null);
+    await syncDiscipleRole(guild, member, userData.congHienExp).catch(() => null);
+    await resolveTemporaryStatusEffects(guild, member, userData).catch(() => null);
+
+    return { ok: true };
   }
 
 
@@ -3062,26 +11695,31 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     saveUsers(users);
 
     const bag = getStorageBag(userData);
-    const equippedArtifact = getEquippedArtifact(userData);
+    const equippedGear = getEquippedCombatItems(userData);
     normalizeMissionUserData(userData);
     const beQuanText = getBeQuanStatusText(userData);
     const statusText = formatTemporaryStatus(userData);
     const restingText = getMissionRestingText(userData);
     const missionUsedText = hasUsedMissionToday(userData) ? 'Đã dùng nhiệm vụ hôm nay' : 'Chưa dùng nhiệm vụ hôm nay';
     const inventoryText = `${getInventoryUsed(userData)}/${getStorageCapacity(userData)} ô`;
+    const equippedText = equippedGear.length > 0
+      ? equippedGear.map((item) => `• **${getEquipmentSlotLabel(item.type)}:** ${item.displayName || item.name}`).slice(0, 6).join('\n')
+      : 'Chưa trang bị đạo cụ Source.';
 
     const embed = new EmbedBuilder()
       .setColor(GOLD)
-      .setTitle(`Trạng Thái - ${member.displayName}`)
+      .setTitle(`🧭 Trạng Thái Cá Nhân · ${member.displayName}`)
       .addFields(
+        { name: 'Đường tu', value: getUserTuDaoPathText(userData), inline: true },
+        { name: 'Cống hiến khả dụng', value: `${uiNumber(getSpendableCongHien(userData))}`, inline: true },
+        { name: 'Rủi ro Source', value: formatUserRiskStats(userData), inline: false },
         { name: 'Trạng thái tạm thời', value: statusText === 'Không có' ? 'Đạo tâm bình ổn, chưa có trạng thái đặc biệt.' : statusText, inline: false },
         { name: 'Bế quan', value: beQuanText, inline: false },
         { name: 'Tĩnh dưỡng / nhiệm vụ', value: `${restingText}\n${missionUsedText}`, inline: false },
-        { name: 'Túi trữ vật', value: `${bag.name} - ${inventoryText}`, inline: true },
-        { name: 'Cống hiến khả dụng', value: `${getSpendableCongHien(userData)}`, inline: true },
-        { name: 'Pháp bảo đang trang bị', value: equippedArtifact ? `${equippedArtifact.name}\n${equippedArtifact.effect}` : 'Chưa trang bị pháp bảo.', inline: false },
+        { name: 'Túi trữ vật', value: `${bag.name} · ${inventoryText}`, inline: true },
+        { name: 'Trang bị chính', value: equippedText.slice(0, 1000), inline: false },
       )
-      .setFooter({ text: 'Dùng /shop để đổi pháp bảo, đan dược và túi trữ vật.' });
+      .setFooter({ text: 'Trạng thái cá nhân luôn gửi riêng tư. Server đã đủ ồn rồi.' });
 
     await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
   }
@@ -3117,17 +11755,19 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     userData.beQuanRewardClaimed = false;
     userData.temporaryStatus = 'Bế Quan';
     userData.temporaryStatusExpireAt = userData.beQuanUntil;
+    userData.temporaryDirectStats = null;
 
     saveUsers(users);
 
     const embed = new EmbedBuilder()
       .setColor(GOLD)
       .setTitle('Bế Quan Khai Mở')
-      .setDescription(`${interaction.user} đã nhập động phủ bế quan trong **${config.label}**.`)
+      .setDescription(`${interaction.user} đã nhập động phủ bế quan trong **${config.label}**. Trong thời gian này chỉ được **xem chỉ số**; mọi hành động khác đều bị phong bế cho đến khi xuất quan.`)
       .addFields(
-        { name: 'Thưởng dự kiến', value: `+${config.reward} tu vi`, inline: true },
+        { name: 'Thưởng nền', value: `+${config.reward} tu vi`, inline: true },
         { name: 'Kết thúc sau', value: getRemainingTimeText(config.durationMs), inline: true },
-        { name: 'Lưu ý', value: 'Dùng `/xuatquan` khi đủ thời gian để nhận tu vi. Xuất quan sớm sẽ mất thưởng và có thể gặp Tâm Ma Dao Động.', inline: false },
+        { name: 'Giới hạn khi bế quan', value: 'Không được làm nhiệm vụ, bí cảnh, đấu pháp, mua bán, kỳ ngộ, điểm danh, checkcommit, dùng vật phẩm, tạo/nhận quan hệ. Chỉ được xem `/profile`, `/tuvi`, `/trangthai`, `/skill`, `/capcongphap`, `/congphap hanhdong:xem` và dùng `/xuatquan`.', inline: false },
+        { name: 'Dị tượng xuất quan', value: 'Khi `/xuatquan`, hệ thống sẽ roll **1/1440 kịch bản bug-ngộ đạo**. Có thể đại ngộ, refactor đạo cơ, hoặc phản phệ sinh Tâm Ma.', inline: false },
       );
 
     await interaction.reply({ embeds: [embed] });
@@ -3152,58 +11792,84 @@ const AUTO_DISCIPLE_THRESHOLDS = [
 
     const member = await interaction.guild.members.fetch(interaction.user.id);
     const now = Date.now();
-    const enoughTime = now >= (userData.beQuanUntil || userData.temporaryStatusExpireAt || 0);
-    let title = 'Xuất Quan';
-    let description = '';
-    let fields = [];
+    const startedAt = Number(userData.beQuanStartedAt) || now;
+    const endAt = userData.beQuanUntil || userData.temporaryStatusExpireAt || now;
+    const totalMs = Math.max(1, endAt - startedAt);
+    const progress = Math.max(0, Math.min(1, (now - startedAt) / totalMs));
+    const enoughTime = now >= endAt;
 
-    if (enoughTime) {
-      const baseReward = userData.beQuanReward || userData.beQuanRewardExp || 0;
-      const rewardInfo = applyArtifactTuViBonus(userData, member, applyTuViMultiplier(userData, baseReward), 'general');
-      userData.tuViExp += rewardInfo.amount;
-      userData.beQuanRewardClaimed = true;
+    if (!enoughTime) {
+      const remaining = Math.max(0, endAt - now);
       clearBeQuanState(userData);
+      await syncTemporaryStatusRole(interaction.guild, member, userData).catch(() => null);
+      saveUsers(users);
 
-      const syncResult = await syncTuViRoles(interaction.guild, member, userData.tuViExp);
+      const embed = new EmbedBuilder()
+        .setColor(0x991b1b)
+        .setTitle('Xuất Quan Sớm · Đạo Cơ Chưa Thành')
+        .setDescription(`${member} cưỡng ép xuất quan khi mới hoàn thành **${Math.floor(progress * 100)}%** chu kỳ bế quan.`)
+        .addFields(
+          { name: 'Kết quả', value: 'Không nhận tu vi, không nhận buff, không nhận công pháp tinh tiến. Bế quan đã bị hủy.', inline: false },
+          { name: 'Lẽ ra còn', value: getRemainingTimeText(remaining), inline: true },
+        )
+        .setFooter({ text: 'Muốn nhận thưởng thì phải chờ đủ thời gian bế quan. Luật tu tiên, không phải nút skip quảng cáo.' });
 
-      if (!syncResult.ok) {
-        await interaction.editReply(syncResult.message);
-        return;
-      }
-
-      title = 'Xuất Quan Thành Công';
-      description = `${member} kết thúc bế quan, đạo cơ ngưng thực hơn trước.`;
-      fields = [
-        { name: 'Tu vi nhận được', value: `+${rewardInfo.amount} tu vi`, inline: true },
-        { name: 'Bonus', value: rewardInfo.summary, inline: false },
-        { name: 'Tu vi hiện tại', value: `${syncResult.tuVi.realm} ${syncResult.tuVi.minor}`, inline: true },
-      ];
-    } else {
-      const gotTamMa = Math.random() < 0.2;
-      clearBeQuanState(userData);
-
-      if (gotTamMa) {
-        setTemporaryStatus(userData, 'Tâm Ma Quấn Thân', 6 * 60 * 60 * 1000, { dotPhaPenalty: true });
-      }
-
-      const statusSync = await syncTemporaryStatusRole(interaction.guild, member, userData);
-
-      if (!statusSync.ok) {
-        await interaction.editReply(statusSync.message);
-        return;
-      }
-
-      title = 'Xuất Quan Sớm';
-      description = `${member} rời động phủ khi bế quan chưa viên mãn.`;
-      fields = [
-        { name: 'Kết quả', value: gotTamMa ? 'Không nhận thưởng và bị Tâm Ma Quấn Thân 6 giờ.' : 'Không nhận thưởng.', inline: false },
-      ];
+      await interaction.editReply({ embeds: [embed] });
+      return;
     }
 
+    const scenario = buildBeQuanScenario();
+    let baseReward = Number(userData.beQuanReward || userData.beQuanRewardExp) || 0;
+    const title = 'Xuất Quan · Bug Ngộ Đạo';
+    let description;
+    const fields = [];
+
+    clearBeQuanState(userData);
+
+    const rewardBeforeBonus = Math.max(0, Math.floor(baseReward * Math.max(0.1, Number(scenario.tuViMultiplier) || 1)));
+    const rewardInfo = applyArtifactTuViBonus(userData, member, applyTuViMultiplier(userData, rewardBeforeBonus), 'general');
+
+    if (rewardInfo.amount > 0) {
+      userData.tuViExp = Math.max(0, (Number(userData.tuViExp) || 0) + rewardInfo.amount);
+    }
+
+    const statusName = scenario.status || (scenario.rarity === 'Truyền thuyết' ? 'Linh Khí Bạo Phát' : scenario.rarity === 'Hung' ? 'Tâm Ma Quấn Thân' : 'Kỳ Ngộ Gia Thân');
+    const statusHours = enoughTime ? (scenario.rarity === 'Truyền thuyết' ? 8 : scenario.rarity === 'Hiếm' ? 6 : 4) : 3;
+    setTemporaryStatus(userData, statusName, statusHours * 60 * 60 * 1000, {
+      dotPhaPenalty: statusName.includes('Tâm Ma'),
+      directStats: scenario.directStats,
+    });
+
+    if (!enoughTime && Math.random() < 0.22) {
+      setTemporaryStatus(userData, 'Tâm Ma Quấn Thân', 4 * 60 * 60 * 1000, {
+        dotPhaPenalty: true,
+        directStats: addDirectStats(scenario.directStats, { tamMaRisk: 8, tuVi: -4 }),
+      });
+    }
+
+    await grantCongPhapMastery(userData, member, enoughTime ? 18 : 7, 'bequan');
+    const syncResult = await syncTuViRoles(interaction.guild, member, userData.tuViExp);
+    if (!syncResult.ok) {
+      await interaction.editReply(syncResult.message);
+      return;
+    }
+    await syncTemporaryStatusRole(interaction.guild, member, userData).catch(() => null);
     saveUsers(users);
 
+    description = `${member} xuất quan, gặp **${scenario.name}**.
+
+${scenario.text}`;
+    fields.push(
+      { name: 'Kịch bản', value: `#${scenario.index}/${scenario.total} · ${scenario.rarity}`, inline: true },
+      { name: 'Tu vi', value: rewardInfo.amount > 0 ? `+${rewardInfo.amount} tu vi` : 'Không nhận tu vi do xuất quan quá sớm.', inline: true },
+      { name: 'Buff/Debuff', value: formatDirectStatsCompact(scenario.directStats), inline: false },
+      { name: 'Trạng thái', value: `${userData.temporaryStatus} · ${statusHours} giờ`, inline: true },
+      { name: 'Cảnh giới hiện tại', value: `${syncResult.tuVi.realm} ${syncResult.tuVi.minor}`, inline: true },
+      { name: 'Hệ số tu vi', value: rewardInfo.summary.slice(0, 1000), inline: false },
+    );
+
     const embed = new EmbedBuilder()
-      .setColor(GOLD)
+      .setColor(scenario.color || GOLD)
       .setTitle(title)
       .setDescription(description)
       .addFields(fields);
@@ -3211,6 +11877,7 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     await interaction.editReply({ embeds: [embed] });
   }
 
+  
   async function handleShop(interaction) {
     if (!interaction.inGuild()) {
       await interaction.reply({ content: 'Shop chỉ mở trong tông môn.', flags: MessageFlags.Ephemeral });
@@ -3223,14 +11890,16 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     saveUsers(users);
 
     await interaction.reply({
-      embeds: [buildShopEmbed(userData, 0)],
-      components: buildShopPageRows(interaction.user.id, 0),
+      embeds: [buildShopMenuEmbed(userData, interaction.member)],
+      components: buildShopMenuRows(interaction.user.id),
       flags: MessageFlags.Ephemeral,
     });
   }
 
   async function handleShopPage(interaction) {
-    const [ownerId, pageText] = interaction.customId.slice(SHOP_PAGE_BUTTON_PREFIX.length).split(':');
+    const parts = interaction.customId.slice(SHOP_PAGE_BUTTON_PREFIX.length).split(':');
+    const ownerId = parts[0];
+    const pageText = parts[1] === 'view' ? parts[2] : parts[1];
 
     if (interaction.user.id !== ownerId) {
       await interaction.reply({ content: 'Trang shop này không phải của đạo hữu.', flags: MessageFlags.Ephemeral });
@@ -3239,15 +11908,196 @@ const AUTO_DISCIPLE_THRESHOLDS = [
 
     const users = loadUsers();
     const userData = getOrCreateUser(users, interaction.user.id);
-    const page = Math.max(0, Math.min(getShopPages().length - 1, Number(pageText) || 0));
+    const page = Math.max(0, Math.min(getShopPages(interaction.member).length - 1, Number(pageText) || 0));
 
     normalizeInventoryData(userData);
     saveUsers(users);
 
     await interaction.update({
-      embeds: [buildShopEmbed(userData, page)],
-      components: buildShopPageRows(interaction.user.id, page),
+      embeds: [buildShopEmbed(userData, page, interaction.member)],
+      components: buildShopPageRows(interaction.user.id, page, interaction.member),
     });
+  }
+
+
+  async function handleShopBack(interaction) {
+    const ownerId = interaction.customId.slice(SHOP_BACK_BUTTON_PREFIX.length);
+
+    if (interaction.user.id !== ownerId) {
+      await interaction.reply({ content: 'Mục lục shop này không phải của đạo hữu.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    normalizeInventoryData(userData);
+    saveUsers(users);
+
+    await interaction.update({
+      embeds: [buildShopMenuEmbed(userData, interaction.member)],
+      components: buildShopMenuRows(interaction.user.id),
+    });
+  }
+
+  async function handleShopCategory(interaction) {
+    const [ownerId, type] = interaction.customId.slice(SHOP_CATEGORY_BUTTON_PREFIX.length).split(':');
+
+    if (interaction.user.id !== ownerId) {
+      await interaction.reply({ content: 'Danh mục shop này không phải của đạo hữu.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    normalizeInventoryData(userData);
+    saveUsers(users);
+
+    await interaction.update({
+      embeds: [buildShopItemEmbed(userData, type, 0, interaction.member)],
+      components: buildShopItemRows(interaction.user.id, type, 0, interaction.member),
+    });
+  }
+
+  async function handleShopItemPage(interaction) {
+    const parts = interaction.customId.slice(SHOP_ITEM_BUTTON_PREFIX.length).split(':');
+    const ownerId = parts[0];
+    const type = parts[1];
+    let indexText = parts[2];
+
+    if (['prev', 'next', 'view'].includes(parts[2])) {
+      indexText = parts[3];
+    }
+
+    if (interaction.user.id !== ownerId) {
+      await interaction.reply({ content: 'Trang vật phẩm này không phải của đạo hữu.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    normalizeInventoryData(userData);
+    saveUsers(users);
+
+    const items = getShopItemsByType(type, interaction.member);
+    const pageSize = 3;
+    const pageCount = Math.max(1, Math.ceil(items.length / pageSize));
+    const safeIndex = clampIndex(Number(indexText) || 0, pageCount);
+
+    await interaction.update({
+      embeds: [buildShopItemEmbed(userData, type, safeIndex, interaction.member)],
+      components: buildShopItemRows(interaction.user.id, type, safeIndex, interaction.member),
+    });
+  }
+
+
+  async function handleShopBuyButton(interaction) {
+    const [ownerId, itemKey] = interaction.customId.slice(SHOP_BUY_BUTTON_PREFIX.length).split(':');
+
+    if (interaction.user.id !== ownerId) {
+      await interaction.reply({ content: 'Nút mua này không phải của đạo hữu.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const result = await buyShopItemForUser(interaction, itemKey);
+
+    if (!result.ok) {
+      await interaction.reply({ content: result.message, flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    await interaction.update({
+      embeds: [result.embed],
+      components: buildShopMenuRows(interaction.user.id),
+    });
+  }
+
+  async function buyShopItemForUser(interaction, key) {
+    const item = getShopItemByKey(key);
+
+    if (!item) {
+      return { ok: false, message: 'Không tìm thấy vật phẩm trong shop.' };
+    }
+
+    const lockedText = getShopItemLockedText(item, interaction.member);
+    if (lockedText) {
+      return { ok: false, message: lockedText };
+    }
+
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    normalizeInventoryData(userData);
+    let purchasedEntry = null;
+    const balance = getSpendableCongHien(userData);
+    const price = getShopItemPrice(item, interaction.member);
+
+    if (balance < price) {
+      return { ok: false, message: `Không đủ cống hiến. Cần **${price}**, hiện có **${balance}**, còn thiếu **${price - balance}**.` };
+    }
+
+    if (item.type === 'bag') {
+      const currentBag = getStorageBag(userData);
+      const usedAfterBuying = getInventoryUsed(userData) + 1;
+
+      if ((item.grade ?? 0) <= (currentBag.grade ?? 0)) {
+        return { ok: false, message: `Đạo hữu đang dùng **${currentBag.name}**. Chỉ có thể mua túi phẩm cấp cao hơn.` };
+      }
+
+      if (usedAfterBuying > (item.capacity ?? 5)) {
+        return {
+          ok: false,
+          message: `Không thể đổi **${item.name}** vì túi này chỉ chứa **${item.capacity ?? 5}** vật phẩm, nhưng sau khi mua đạo hữu sẽ có **${usedAfterBuying}** vật phẩm.`,
+        };
+      }
+
+      userData.congHienBalance = balance - price;
+      purchasedEntry = addItemToInventory(userData, item.key, getPurchaseInventoryOptions(item));
+      userData.storageBag = item.key;
+    } else {
+      if (!hasInventorySpace(userData)) {
+        return { ok: false, message: getInventoryFullMessage(userData) };
+      }
+
+      userData.congHienBalance = balance - price;
+      purchasedEntry = addItemToInventory(userData, item.key, getPurchaseInventoryOptions(item));
+    }
+
+    saveUsers(users);
+
+    const embed = new EmbedBuilder()
+      .setColor(GOLD)
+      .setTitle('Đổi Vật Phẩm Thành Công')
+      .setDescription(`${interaction.user} đã đổi **${item.name}**.`)
+      .addFields(
+        { name: 'Loại', value: getItemTypeText(item.type), inline: true },
+        { name: 'Giá', value: `${price} cống hiến`, inline: true },
+        { name: 'Cống hiến còn lại', value: `${userData.congHienBalance}`, inline: true },
+        { name: 'Hiệu ứng', value: item.effect, inline: false },
+      );
+
+    if (item.sourceFamilyName || item.sourceItemGroupName || item.itemClass || Number.isFinite(Number(item.stability))) {
+      embed.addFields({
+        name: 'Đạo Cụ Source',
+        value: [
+          item.sourceFamilyName ? `Hệ Dị Lỗi: **${item.sourceFamilyName}**` : null,
+          item.sourceItemGroupName ? `Nhóm: **${item.sourceItemGroupName}**` : null,
+          item.itemClass ? `Đẳng cấp: **${getSourceItemClass(item.itemClass).name}**` : null,
+          item.itemRarity ? `Độ hiếm: **${getSourceItemRarity(item.itemRarity).name}**` : null,
+          Number.isFinite(Number(item.stability)) ? `Ổn định: **${item.stability}/100**` : null,
+        ].filter(Boolean).join('\n') || 'Đã đồng bộ hệ Source.',
+        inline: false,
+      });
+    }
+
+    if (isPhapBaoItem(item) && purchasedEntry) {
+      const quality = getInventoryItemQuality(purchasedEntry);
+      const sellValue = getPhapBaoSellValue(item, purchasedEntry, interaction.member);
+      embed.addFields(
+        { name: 'Cấp pháp bảo rèn ra', value: quality.name, inline: true },
+        { name: 'Giá trị hiến tông', value: `${sellValue} cống hiến (70% giá trị)`, inline: true },
+      );
+    }
+
+    return { ok: true, embed };
   }
 
   async function handleMua(interaction) {
@@ -3259,56 +12109,75 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     const key = interaction.options.getString('item', true);
+    const result = await buyShopItemForUser(interaction, key);
+
+    if (!result.ok) {
+      await interaction.editReply(result.message);
+      return;
+    }
+
+    await interaction.editReply({ embeds: [result.embed] });
+  }
+
+  async function handleBanPhapBao(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Chỉ có thể hiến pháp bảo trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    const key = interaction.options.getString('item', true);
     const item = getShopItemByKey(key);
 
-    if (!item) {
-      await interaction.editReply('Không tìm thấy vật phẩm trong shop.');
+    if (!item || !isPhapBaoItem(item)) {
+      await interaction.editReply('Chỉ có thể hiến pháp bảo. Đan dược, phù, túi trữ vật và linh thạch không bán bằng lệnh này.');
       return;
     }
 
     const users = loadUsers();
     const userData = getOrCreateUser(users, interaction.user.id);
     normalizeInventoryData(userData);
-    const balance = getSpendableCongHien(userData);
 
-    if (balance < item.price) {
-      await interaction.editReply(`Không đủ cống hiến. Cần **${item.price}**, hiện có **${balance}**, còn thiếu **${item.price - balance}**.`);
+    const ownedCount = countInventoryItem(userData, item.key);
+    if (ownedCount <= 0) {
+      await interaction.editReply(`Đạo hữu chưa sở hữu **${item.name}**.`);
       return;
     }
 
-    if (item.type === 'bag') {
-      const currentBag = getStorageBag(userData);
-
-      if ((item.grade ?? 0) <= (currentBag.grade ?? 0)) {
-        await interaction.editReply(`Đạo hữu đang dùng **${currentBag.name}**. Chỉ có thể mua túi phẩm cấp cao hơn.`);
-        return;
-      }
-
-      userData.congHienBalance = balance - item.price;
-      addItemToInventory(userData, item.key);
-      userData.storageBag = item.key;
-    } else {
-      if (!hasInventorySpace(userData)) {
-        await interaction.editReply(`Túi trữ vật đã đầy (**${getInventoryUsed(userData)}/${getStorageCapacity(userData)}**). Hãy đổi túi cao hơn hoặc tặng bớt vật phẩm.`);
-        return;
-      }
-
-
-      userData.congHienBalance = balance - item.price;
-      addItemToInventory(userData, item.key);
+    const isEquipped = getEquippedGearKeys(userData).includes(item.key);
+    if (isEquipped && ownedCount <= 1) {
+      await interaction.editReply(`**${item.name}** đang được trang bị. Hãy trang bị pháp bảo khác trước rồi mới hiến cho tông môn.`);
+      return;
     }
 
+    const sellIndex = getSellableInventoryIndex(userData, item.key);
+    if (sellIndex < 0) {
+      await interaction.editReply(`Không tìm thấy **${item.name}** trong túi.`);
+      return;
+    }
+
+    const soldEntry = userData.inventory[sellIndex];
+    const quality = getInventoryItemQuality(soldEntry);
+    const sellValue = getPhapBaoSellValue(item, soldEntry, interaction.member);
+
+    userData.inventory.splice(sellIndex, 1);
+    addCongHien(userData, sellValue);
+    normalizeInventoryData(userData);
     saveUsers(users);
+
+    const member = await interaction.guild.members.fetch(interaction.user.id);
+    await syncDiscipleRole(interaction.guild, member, userData.congHienExp).catch(() => null);
 
     const embed = new EmbedBuilder()
       .setColor(GOLD)
-      .setTitle('Đổi Vật Phẩm Thành Công')
-      .setDescription(`${interaction.user} đã đổi **${item.name}**.`)
+      .setTitle('Hiến Pháp Bảo Cho Tông Môn')
+      .setDescription(`${interaction.user} đã hiến **${item.name} - ${quality.name}** cho tông môn.`)
       .addFields(
-        { name: 'Loại', value: getItemTypeText(item.type), inline: true },
-        { name: 'Giá', value: `${item.price} cống hiến`, inline: true },
-        { name: 'Cống hiến còn lại', value: `${userData.congHienBalance}`, inline: true },
-        { name: 'Hiệu ứng', value: item.effect, inline: false },
+        { name: 'Loại', value: 'Pháp bảo', inline: true },
+        { name: 'Giá trị thu hồi', value: `${sellValue} cống hiến`, inline: true },
+        { name: 'Tỉ lệ', value: '70% giá trị pháp bảo', inline: true },
+        { name: 'Cống hiến hiện có', value: `${userData.congHienBalance}`, inline: true },
       );
 
     await interaction.editReply({ embeds: [embed] });
@@ -3327,21 +12196,74 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     saveUsers(users);
 
     const member = await interaction.guild.members.fetch(targetUser.id);
-    const bag = getStorageBag(userData);
-    const equippedArtifact = getEquippedArtifact(userData);
-    const lines = formatInventoryLines(userData);
 
-    const embed = new EmbedBuilder()
-      .setColor(GOLD)
-      .setTitle(`Túi Đồ - ${member.displayName}`)
-      .addFields(
-        { name: 'Túi trữ vật', value: `${bag.name} (${getInventoryUsed(userData)}/${getStorageCapacity(userData)} ô)`, inline: false },
-        { name: 'Pháp bảo trang bị', value: equippedArtifact ? `${equippedArtifact.name}\n${equippedArtifact.effect}` : 'Chưa trang bị.', inline: false },
-        { name: 'Cống hiến khả dụng', value: `${getSpendableCongHien(userData)}`, inline: true },
-        { name: 'Vật phẩm', value: lines.length > 0 ? lines.join('\n') : 'Túi trống.', inline: false },
-      );
+    await interaction.reply({
+      embeds: [buildTuiDoMenuEmbed(member, userData)],
+      components: buildTuiDoMenuRows(interaction.user.id, targetUser.id, userData),
+      flags: MessageFlags.Ephemeral,
+    });
+  }
 
-    await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+  async function handleTuiDoBack(interaction) {
+    const [viewerId, targetId] = interaction.customId.slice(TUIDO_BACK_BUTTON_PREFIX.length).split(':');
+
+    if (interaction.user.id !== viewerId) {
+      await interaction.reply({ content: 'Túi đồ này không phải phiên xem của đạo hữu.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, targetId);
+    normalizeInventoryData(userData);
+    saveUsers(users);
+    const member = await interaction.guild.members.fetch(targetId);
+
+    await interaction.update({
+      embeds: [buildTuiDoMenuEmbed(member, userData)],
+      components: buildTuiDoMenuRows(viewerId, targetId, userData),
+    });
+  }
+
+  async function handleTuiDoCategory(interaction) {
+    const [viewerId, targetId, type] = interaction.customId.slice(TUIDO_CATEGORY_BUTTON_PREFIX.length).split(':');
+
+    if (interaction.user.id !== viewerId) {
+      await interaction.reply({ content: 'Danh mục túi đồ này không phải phiên xem của đạo hữu.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, targetId);
+    normalizeInventoryData(userData);
+    saveUsers(users);
+    const member = await interaction.guild.members.fetch(targetId);
+
+    await interaction.update({
+      embeds: [buildTuiDoItemEmbed(member, userData, type, 0)],
+      components: buildTuiDoItemRows(viewerId, targetId, userData, type, 0),
+    });
+  }
+
+  async function handleTuiDoItemPage(interaction) {
+    const [viewerId, targetId, type, indexText] = interaction.customId.slice(TUIDO_ITEM_BUTTON_PREFIX.length).split(':');
+
+    if (interaction.user.id !== viewerId) {
+      await interaction.reply({ content: 'Trang túi đồ này không phải phiên xem của đạo hữu.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, targetId);
+    normalizeInventoryData(userData);
+    saveUsers(users);
+    const member = await interaction.guild.members.fetch(targetId);
+    const entries = getInventoryEntriesByType(userData, type);
+    const safeIndex = clampIndex(Number(indexText) || 0, entries.length);
+
+    await interaction.update({
+      embeds: [buildTuiDoItemEmbed(member, userData, type, safeIndex)],
+      components: buildTuiDoItemRows(viewerId, targetId, userData, type, safeIndex),
+    });
   }
 
   async function handleTrangBi(interaction) {
@@ -3353,8 +12275,8 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     const key = interaction.options.getString('item', true);
     const item = getShopItemByKey(key);
 
-    if (!item || !['artifact', 'bag'].includes(item.type)) {
-      await interaction.reply({ content: 'Chỉ có thể trang bị pháp bảo hoặc túi trữ vật.', flags: MessageFlags.Ephemeral });
+    if (!item || !['artifact', 'weapon', 'armor', 'tool', 'talisman', 'bag'].includes(item.type)) {
+      await interaction.reply({ content: 'Chỉ có thể trang bị vũ khí, pháp bảo, giáp, dụng cụ, phù lục hoặc túi trữ vật.', flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -3367,10 +12289,17 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       return;
     }
 
-    if (item.type === 'artifact') {
-      userData.equippedArtifact = item.key;
+    if (isPhapBaoItem(item) || ['tool', 'talisman'].includes(item.type)) {
+      const slotByType = { weapon: 'equippedWeapon', artifact: 'equippedArtifact', armor: 'equippedArmor', tool: 'equippedTool', talisman: 'equippedTalisman' };
+      const slot = slotByType[item.type] || 'equippedArtifact';
+      userData[slot] = item.key;
+      if (!userData.equippedArtifact && item.type === 'weapon') userData.equippedArtifact = item.key; // tương thích dữ liệu cũ
+      if (!userData.equippedWeapon && item.type === 'artifact') userData.equippedWeapon = item.key;
       saveUsers(users);
-      await interaction.reply({ content: `Đã trang bị pháp bảo **${item.name}**. Hiệu ứng: ${item.effect}`, flags: MessageFlags.Ephemeral });
+      const entry = getBestInventoryEntryByKey(userData, item.key);
+      const profile = getItemCombatProfile(item, entry);
+      await interaction.reply({ content: `Đã trang bị **${item.name}** vào slot **${getEquipmentSlotLabel(item.type)}**. Hiệu ứng: ${item.effect}
+Combat: ${profile?.text || 'Không có hiệu ứng combat trực tiếp.'}`, flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -3382,7 +12311,7 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     }
 
     if (getInventoryUsed(userData) > (item.capacity ?? 5)) {
-      await interaction.reply({ content: `Túi **${item.name}** không đủ chứa vật phẩm hiện tại.`, flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: `Không thể dùng **${item.name}** vì túi này chỉ chứa **${item.capacity ?? 5}** vật phẩm, hiện đạo hữu đang có **${getInventoryUsed(userData)}** vật phẩm.`, flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -3456,6 +12385,44 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       }
     }
 
+    if (item.linhCanPurifyGain) {
+      const restoredLinhCan = ensureStoredLinhCanFromRoles(users, userData, member);
+      if (!restoredLinhCan.ok) {
+        await interaction.editReply(restoredLinhCan.message);
+        return;
+      }
+
+      const beforeQuality = userData.linhCan?.quality ?? 'Chưa rõ';
+      const oldLinhCan = userData.linhCan ? JSON.parse(JSON.stringify(userData.linhCan)) : null;
+      const oldProgress = Math.max(0, Number(userData.linhCanPurify) || 0);
+      const purifyResult = applyLinhCanPurifyGain(userData, item.linhCanPurifyGain);
+
+      if (!purifyResult.ok) {
+        await interaction.editReply(purifyResult.message);
+        return;
+      }
+
+      if (purifyResult.upgrades.length > 0) {
+        const syncResult = await syncStoredLinhCanRoles(interaction.guild, member, userData);
+
+        if (!syncResult.ok) {
+          userData.linhCan = oldLinhCan;
+          userData.linhCanPurify = oldProgress;
+          await interaction.editReply(syncResult.message);
+          return;
+        }
+      }
+
+      resultText = [
+        restoredLinhCan.restored ? 'Đã đồng bộ dữ liệu linh căn từ role hiện có.' : null,
+        `+${item.linhCanPurifyGain} điểm tẩy tủy linh căn.`,
+        purifyResult.upgrades.length > 0
+          ? `Đột phá phẩm chất: **${purifyResult.upgrades.join('**, **')}**.`
+          : `Phẩm chất hiện tại: **${beforeQuality}**.`,
+        `Tiến độ: ${purifyResult.progress}.`,
+      ].filter(Boolean).join('\n');
+    }
+
     removeItemFromInventory(userData, item.key);
     saveUsers(users);
 
@@ -3499,13 +12466,13 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       return;
     }
 
-    if (senderData.equippedArtifact === item.key || senderData.storageBag === item.key) {
+    if (getEquippedGearKeys(senderData).includes(item.key) || senderData.storageBag === item.key) {
       await interaction.reply({ content: 'Không thể tặng vật phẩm đang trang bị hoặc túi trữ vật đang dùng.', flags: MessageFlags.Ephemeral });
       return;
     }
 
     if (!hasInventorySpace(targetData)) {
-      await interaction.reply({ content: `${targetUser} đã đầy túi trữ vật.`, flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: `${targetUser} đã đầy túi trữ vật. ${getInventoryFullMessage(targetData)}`, flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -3526,6 +12493,401 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       );
 
     await interaction.reply({ embeds: [embed] });
+  }
+
+
+
+  function getRelationTypeConfig(type) {
+    return {
+      ketbai: {
+        title: 'Kết Bái Huynh Đệ',
+        action: 'xin kết bái',
+        acceptLabel: 'Đồng Ý Kết Bái',
+        rejectLabel: 'Từ Chối',
+        color: 0x60a5fa,
+      },
+      ketdaolu: {
+        title: 'Kết Đạo Lữ',
+        action: 'xin kết đạo lữ',
+        acceptLabel: 'Đồng Ý Kết Đạo Lữ',
+        rejectLabel: 'Từ Chối',
+        color: 0xf472b6,
+      },
+      baisu: {
+        title: 'Bái Sư',
+        action: 'xin bái sư',
+        acceptLabel: 'Thu Nhận',
+        rejectLabel: 'Từ Chối',
+        color: 0xfacc15,
+      },
+      nhando: {
+        title: 'Nhận Đồ Đệ',
+        action: 'muốn nhận làm đồ đệ',
+        acceptLabel: 'Đồng Ý Bái Sư',
+        rejectLabel: 'Từ Chối',
+        color: 0x34d399,
+      },
+    }[type] ?? null;
+  }
+
+  function buildRelationCustomId(prefix, type, requesterId, targetId) {
+    return `${prefix}${type}:${requesterId}:${targetId}`;
+  }
+
+  function parseRelationCustomId(customId, prefix) {
+    const [type, requesterId, targetId] = customId.slice(prefix.length).split(':');
+    return { type, requesterId, targetId };
+  }
+
+  function addUniqueId(list, id) {
+    const normalized = Array.isArray(list) ? list.map(String) : [];
+    return Array.from(new Set([...normalized, String(id)]));
+  }
+
+  function removeUniqueId(list, id) {
+    return (Array.isArray(list) ? list.map(String) : []).filter((value) => value !== String(id));
+  }
+
+  function appendRelationLog(userData, text) {
+    userData.relationLog = Array.isArray(userData.relationLog) ? userData.relationLog : [];
+    userData.relationLog.unshift({ at: Date.now(), text });
+    userData.relationLog = userData.relationLog.slice(0, 20);
+  }
+
+  function validateRelationTarget(interaction, targetUser) {
+    if (!interaction.inGuild()) {
+      return 'Lệnh này chỉ dùng trong tông môn.';
+    }
+
+    if (!targetUser) {
+      return 'Không tìm thấy đạo hữu mục tiêu.';
+    }
+
+    if (targetUser.bot) {
+      return 'Không thể lập quan hệ với bot.';
+    }
+
+    if (targetUser.id === interaction.user.id) {
+      return 'Không thể tự lập quan hệ với chính mình.';
+    }
+
+    return null;
+  }
+
+  async function sendRelationRequest(interaction, type, targetUser) {
+    const config = getRelationTypeConfig(type);
+    const invalid = validateRelationTarget(interaction, targetUser);
+    if (invalid) {
+      await interaction.reply({ content: invalid, flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const users = loadUsers();
+    const requesterData = getOrCreateUser(users, interaction.user.id);
+    const targetData = getOrCreateUser(users, targetUser.id);
+
+    if (type === 'ketbai' && requesterData.ketBaiIds?.includes(targetUser.id)) {
+      await interaction.reply({ content: 'Hai người đã kết bái rồi.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (type === 'ketdaolu') {
+      if (requesterData.daoLuId && requesterData.daoLuId !== targetUser.id) {
+        await interaction.reply({ content: 'Đạo hữu đã có đạo lữ.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      if (targetData.daoLuId && targetData.daoLuId !== interaction.user.id) {
+        await interaction.reply({ content: 'Đối phương đã có đạo lữ.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+    }
+
+    if (type === 'baisu' && requesterData.masterId && requesterData.masterId !== targetUser.id) {
+      await interaction.reply({ content: 'Đạo hữu đã có sư phụ.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (type === 'nhando' && targetData.masterId && targetData.masterId !== interaction.user.id) {
+      await interaction.reply({ content: 'Đối phương đã có sư phụ.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    saveUsers(users);
+
+    const embed = new EmbedBuilder()
+      .setColor(config.color)
+      .setTitle(config.title)
+      .setDescription([
+        `${interaction.user} ${config.action} với ${targetUser}.`,
+        `Người được mời bấm **${config.acceptLabel}** để xác nhận.`,
+      ].join('\n'))
+      .setFooter({ text: 'Quan hệ chỉ có hiệu lực khi đối phương đồng ý.' });
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(buildRelationCustomId(RELATION_ACCEPT_BUTTON_PREFIX, type, interaction.user.id, targetUser.id))
+        .setLabel(config.acceptLabel)
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(buildRelationCustomId(RELATION_REJECT_BUTTON_PREFIX, type, interaction.user.id, targetUser.id))
+        .setLabel(config.rejectLabel)
+        .setStyle(ButtonStyle.Secondary),
+    );
+
+    await interaction.reply({
+      content: `${targetUser}`,
+      embeds: [embed],
+      components: [row],
+    });
+  }
+
+  async function handleKetBai(interaction) {
+    const targetUser = interaction.options.getUser('thanhvien');
+    await sendRelationRequest(interaction, 'ketbai', targetUser);
+  }
+
+  async function handleKetDaoLu(interaction) {
+    const targetUser = interaction.options.getUser('thanhvien');
+    await sendRelationRequest(interaction, 'ketdaolu', targetUser);
+  }
+
+  async function handleBaiSu(interaction) {
+    const targetUser = interaction.options.getUser('suphu');
+    await sendRelationRequest(interaction, 'baisu', targetUser);
+  }
+
+  async function handleNhanDo(interaction) {
+    const targetUser = interaction.options.getUser('detu');
+    await sendRelationRequest(interaction, 'nhando', targetUser);
+  }
+
+  function formatRelationMentions(ids = [], emptyText = 'Chưa có') {
+    const normalized = Array.from(new Set((Array.isArray(ids) ? ids : []).map(String).filter(Boolean)));
+    return normalized.length > 0 ? normalized.map((id) => `<@${id}>`).join('\n') : emptyText;
+  }
+
+  function getRelationSummaryLines(userData = createDefaultUserData()) {
+    return [
+      `**Đạo lữ:** ${userData.daoLuId ? `<@${userData.daoLuId}>` : 'Chưa có'}`,
+      `**Sư phụ:** ${userData.masterId ? `<@${userData.masterId}>` : 'Chưa có'}`,
+      `**Đồ đệ:** ${formatRelationMentions(userData.disciples)}`,
+      `**Kết bái:** ${formatRelationMentions(userData.ketBaiIds)}`,
+    ];
+  }
+
+  async function handleQuanHe(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Quan hệ chỉ xem được trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const targetUser = interaction.options.getUser('thanhvien') ?? interaction.user;
+    const member = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, targetUser.id);
+    saveUsers(users);
+
+    const recentLog = Array.isArray(userData.relationLog) && userData.relationLog.length > 0
+      ? userData.relationLog.slice(0, 5).map((entry) => `• ${entry.text}`).join('\n')
+      : 'Chưa có ghi chép.';
+
+    const embed = new EmbedBuilder()
+      .setColor(0x93c5fd)
+      .setAuthor({
+        name: `Quan Hệ · ${member?.displayName || targetUser.username}`,
+        iconURL: targetUser.displayAvatarURL({ size: 128 }),
+      })
+      .setDescription(getRelationSummaryLines(userData).join('\n'))
+      .addFields({ name: 'Ghi chép gần đây', value: recentLog.slice(0, 1000), inline: false })
+      .setFooter({ text: 'Có thể xem người khác bằng /quanhe thanhvien:@user' });
+
+    await interaction.reply({ embeds: [embed] });
+  }
+
+  function cancelRelation(users, actorId, targetId, type) {
+    const actorData = getOrCreateUser(users, actorId);
+    const targetData = getOrCreateUser(users, targetId);
+
+    if (type === 'ketbai') {
+      const existed = actorData.ketBaiIds?.includes(targetId) || targetData.ketBaiIds?.includes(actorId);
+      if (!existed) return 'Hai người chưa kết bái.';
+      actorData.ketBaiIds = removeUniqueId(actorData.ketBaiIds, targetId);
+      targetData.ketBaiIds = removeUniqueId(targetData.ketBaiIds, actorId);
+      appendRelationLog(actorData, `Hủy kết bái với ${targetId}`);
+      appendRelationLog(targetData, `Hủy kết bái với ${actorId}`);
+      return 'Đã hủy quan hệ kết bái.';
+    }
+
+    if (type === 'daolu') {
+      const existed = actorData.daoLuId === targetId || targetData.daoLuId === actorId;
+      if (!existed) return 'Hai người chưa phải đạo lữ.';
+      if (actorData.daoLuId === targetId) actorData.daoLuId = null;
+      if (targetData.daoLuId === actorId) targetData.daoLuId = null;
+      appendRelationLog(actorData, `Hủy đạo lữ với ${targetId}`);
+      appendRelationLog(targetData, `Hủy đạo lữ với ${actorId}`);
+      return 'Đã hủy quan hệ đạo lữ.';
+    }
+
+    if (type === 'sudo') {
+      let changed = false;
+
+      if (actorData.masterId === targetId) {
+        actorData.masterId = null;
+        targetData.disciples = removeUniqueId(targetData.disciples, actorId);
+        changed = true;
+      }
+
+      if (targetData.masterId === actorId) {
+        targetData.masterId = null;
+        actorData.disciples = removeUniqueId(actorData.disciples, targetId);
+        changed = true;
+      }
+
+      if (!changed) return 'Hai người chưa có quan hệ sư đồ.';
+      appendRelationLog(actorData, `Hủy quan hệ sư đồ với ${targetId}`);
+      appendRelationLog(targetData, `Hủy quan hệ sư đồ với ${actorId}`);
+      return 'Đã hủy quan hệ sư đồ.';
+    }
+
+    return 'Loại quan hệ không hợp lệ.';
+  }
+
+  async function handleHuyQuanHe(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Quan hệ chỉ dùng được trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const type = interaction.options.getString('loai');
+    const targetUser = interaction.options.getUser('thanhvien');
+
+    if (!targetUser || targetUser.bot || targetUser.id === interaction.user.id) {
+      await interaction.reply({ content: 'Hãy chọn một đạo hữu hợp lệ để hủy quan hệ.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const users = loadUsers();
+    const result = cancelRelation(users, interaction.user.id, targetUser.id, type);
+    saveUsers(users);
+
+    const ok = result.startsWith('Đã hủy');
+    const embed = new EmbedBuilder()
+      .setColor(ok ? 0xf97316 : 0x64748b)
+      .setTitle(ok ? 'Hủy Quan Hệ · Hoàn tất' : 'Hủy Quan Hệ · Không thay đổi')
+      .setDescription([
+        `Người yêu cầu: ${interaction.user}`,
+        `Đối tượng: ${targetUser}`,
+        `Kết quả: **${result}**`,
+      ].join('\n'));
+
+    const replyPayload = { embeds: [embed] };
+    if (!ok) {
+      replyPayload.flags = MessageFlags.Ephemeral;
+    }
+
+    await interaction.reply(replyPayload);
+  }
+
+  function applyRelationAccept(users, type, requesterId, targetId) {
+    const requesterData = getOrCreateUser(users, requesterId);
+    const targetData = getOrCreateUser(users, targetId);
+
+    if (type === 'ketbai') {
+      requesterData.ketBaiIds = addUniqueId(requesterData.ketBaiIds, targetId);
+      targetData.ketBaiIds = addUniqueId(targetData.ketBaiIds, requesterId);
+      appendRelationLog(requesterData, `Kết bái với ${targetId}`);
+      appendRelationLog(targetData, `Kết bái với ${requesterId}`);
+      return 'Hai người đã kết bái.';
+    }
+
+    if (type === 'ketdaolu') {
+      if (requesterData.daoLuId && requesterData.daoLuId !== targetId) {
+        return 'Người gửi đã có đạo lữ khác.';
+      }
+      if (targetData.daoLuId && targetData.daoLuId !== requesterId) {
+        return 'Người nhận đã có đạo lữ khác.';
+      }
+      requesterData.daoLuId = targetId;
+      targetData.daoLuId = requesterId;
+      appendRelationLog(requesterData, `Kết đạo lữ với ${targetId}`);
+      appendRelationLog(targetData, `Kết đạo lữ với ${requesterId}`);
+      return 'Hai người đã kết đạo lữ.';
+    }
+
+    if (type === 'baisu') {
+      if (requesterData.masterId && requesterData.masterId !== targetId) {
+        return 'Người bái sư đã có sư phụ khác.';
+      }
+      requesterData.masterId = targetId;
+      targetData.disciples = addUniqueId(targetData.disciples, requesterId);
+      appendRelationLog(requesterData, `Bái sư ${targetId}`);
+      appendRelationLog(targetData, `Thu nhận đồ đệ ${requesterId}`);
+      return 'Đã lập quan hệ sư đồ.';
+    }
+
+    if (type === 'nhando') {
+      if (targetData.masterId && targetData.masterId !== requesterId) {
+        return 'Người được nhận đã có sư phụ khác.';
+      }
+      targetData.masterId = requesterId;
+      requesterData.disciples = addUniqueId(requesterData.disciples, targetId);
+      appendRelationLog(requesterData, `Thu nhận đồ đệ ${targetId}`);
+      appendRelationLog(targetData, `Bái sư ${requesterId}`);
+      return 'Đã lập quan hệ sư đồ.';
+    }
+
+    return 'Loại quan hệ không hợp lệ.';
+  }
+
+  async function handleRelationAccept(interaction) {
+    const { type, requesterId, targetId } = parseRelationCustomId(interaction.customId, RELATION_ACCEPT_BUTTON_PREFIX);
+    const config = getRelationTypeConfig(type);
+
+    if (!config) {
+      await interaction.reply({ content: 'Quan hệ không hợp lệ.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (interaction.user.id !== targetId) {
+      await interaction.reply({ content: 'Chỉ người được mời mới được xác nhận.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const users = loadUsers();
+    const result = applyRelationAccept(users, type, requesterId, targetId);
+    saveUsers(users);
+
+    const embed = new EmbedBuilder()
+      .setColor(config.color)
+      .setTitle(`${config.title} · Đã xác nhận`)
+      .setDescription([
+        `<@${targetId}> đã đồng ý.`,
+        result,
+      ].join('\n'));
+
+    await interaction.update({ content: null, embeds: [embed], components: [] });
+  }
+
+  async function handleRelationReject(interaction) {
+    const { type, requesterId, targetId } = parseRelationCustomId(interaction.customId, RELATION_REJECT_BUTTON_PREFIX);
+    const config = getRelationTypeConfig(type);
+
+    if (!config) {
+      await interaction.reply({ content: 'Quan hệ không hợp lệ.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (interaction.user.id !== targetId) {
+      await interaction.reply({ content: 'Chỉ người được mời mới được từ chối.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const embed = new EmbedBuilder()
+      .setColor(0x64748b)
+      .setTitle(`${config.title} · Đã từ chối`)
+      .setDescription(`<@${targetId}> đã từ chối lời mời của <@${requesterId}>.`);
+
+    await interaction.update({ content: null, embeds: [embed], components: [] });
   }
 
 
@@ -3585,7 +12947,7 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     }
 
     if (!hasInventoryItem(userData, rule.stone)) {
-      await interaction.editReply(`Thiếu **${stone?.name ?? rule.stone}** để nâng phẩm. Diệt quái có tỉ lệ rơi Refactor Linh Thạch.`);
+      await interaction.editReply(`Thiếu **${stone?.name ?? rule.stone}** để nâng phẩm. Trấn áp Dị Lỗi hoặc đi bí cảnh có tỉ lệ rơi Refactor Linh Thạch.`);
       return;
     }
 
@@ -3762,25 +13124,21 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     const channel = await createPrivateTicket(interaction, {
-      channelPrefix: 'linh-can',
+      channelPrefix: 'nhap-dao',
       topicPrefix: TICKET_TOPIC_PREFIX,
       staffRoleNames: STAFF_ROLE_NAMES,
-      existingMessage: 'Đạo hữu đã có Linh Căn Đài riêng',
-      reason: 'Mo ticket Linh Can Dai.',
+      existingMessage: 'Đạo hữu đã có Động Phủ Nhập Môn riêng',
+      reason: 'Mo ticket Nhap Dao.',
     });
 
     if (!channel) {
       return;
     }
 
-    const embed = new EmbedBuilder()
-      .setColor(GOLD)
-      .setTitle('Linh Căn Đài Riêng')
-      .setDescription('Đạo hữu hãy dùng `/linhcan ngay thang nam` tại đây để khai mở căn cơ.')
-      .setFooter({ text: 'Kết quả chỉ hiển thị trong ticket này.' });
+    const embed = buildOnboardingWelcomeEmbed(interaction.user);
 
-    await channel.send({ content: `${interaction.user}`, embeds: [embed] });
-    await interaction.editReply(`Linh Căn Đài riêng đã mở: ${channel}`);
+    await channel.send({ content: `${interaction.user}`, embeds: [embed], components: buildOnboardingWelcomeRows() });
+    await interaction.editReply(`Động Phủ Nhập Môn đã mở: ${channel}`);
   }
 
   async function handleRequestDisciple(interaction) {
@@ -3790,46 +13148,74 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     }
 
     await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    await interaction.guild.roles.fetch();
 
     const member = await interaction.guild.members.fetch(interaction.user.id);
-    const sectPosition = getMemberSectPosition(member);
 
-    if (sectPosition) {
-      await interaction.editReply(`Đạo hữu đang giữ chức vị **${sectPosition}**, không cần xin thu nhận đệ tử.`);
+    if (getMemberSectPosition(member)) {
+      await interaction.editReply('Đạo hữu đang giữ chức vị tông môn, không cần xin gia nhập theo luồng đệ tử thường.');
+      return;
+    }
+
+    const sectStatus = getMemberOnboardingSectStatus(member);
+    if (sectStatus !== 'Tán Tu') {
+      await interaction.editReply(`Đạo hữu đã thuộc **${sectStatus}**.`);
+      return;
+    }
+
+    const daiDaoTongRole = findRoleByName(interaction.guild, DAI_DAO_TONG_ROLE_NAME);
+    if (!daiDaoTongRole) {
+      await interaction.editReply('Thiếu role **Đại Đạo Tông**. Hãy chạy `npm run create:roles` hoặc tạo role này trước.');
       return;
     }
 
     const channel = await createPrivateTicket(interaction, {
-      channelPrefix: 'thu-nhan',
+      channelPrefix: 'gia-nhap',
       topicPrefix: THU_NHAN_TOPIC_PREFIX,
       staffRoleNames: DISCIPLE_APPROVER_ROLE_NAMES,
-      existingMessage: 'Đạo hữu đã có ticket xin thu nhận',
-      reason: 'Mo ticket xin thu nhan de tu.',
+      existingMessage: 'Đạo hữu đã có đơn xin gia nhập tông môn',
+      reason: 'Mo ticket xin gia nhap tong mon.',
+      cooldownMs: REQUEST_TICKET_OPEN_COOLDOWN_MS,
     });
 
     if (!channel) {
       return;
     }
 
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    userData.congHienExp = Math.max(0, Number(userData.congHienExp) || 0);
+    userData.congHienBalance = Math.max(0, Number(userData.congHienBalance) || 0);
+    saveUsers(users);
+
+    const linhCanText = getMemberElementText(member);
+    const congPhapText = getMemberCongPhapText(member);
+
     const embed = new EmbedBuilder()
       .setColor(GOLD)
-      .setTitle('Đơn Xin Thu Nhận Đệ Tử')
+      .setTitle('Đơn Xin Gia Nhập Tông Môn')
       .setDescription(
         [
-          `${interaction.user} đã dâng đơn xin nhập môn.`,
-          'Trưởng Lão trở lên duyệt sẽ thu vào Nội Môn. Chấp Pháp, Dẫn Đạo, Chấp Sự duyệt sẽ thu vào Ngoại Môn.',
+          `${interaction.user} xin được ghi danh nhập tông.`,
+          'Trong lúc chờ duyệt, đạo hữu **vẫn là Tán Tu** và chưa nhận role Đại Đạo Tông / Ký Danh Đệ Tử.',
         ].join('\n'),
       )
-      .setFooter({ text: 'Cấp đệ tử được quyết theo chức vị người duyệt.' });
+      .addFields(
+        { name: 'Thân phận hiện tại', value: sectStatus, inline: true },
+        { name: 'Linh căn đã khai', value: linhCanText || 'Chưa rõ', inline: true },
+        { name: 'Công pháp đã chọn', value: congPhapText, inline: false },
+        { name: 'Cách duyệt', value: 'Người có quyền xét duyệt bấm **Chấp Nhận Gia Nhập** để gán role **Đại Đạo Tông** và **Ký Danh Đệ Tử**.', inline: false },
+      )
+      .setFooter({ text: 'Chỉ khi đơn được duyệt mới chuyển từ Tán Tu sang Đại Đạo Tông / Ký Danh Đệ Tử.' });
 
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(ACCEPT_DISCIPLE_BUTTON)
-        .setLabel('Chấp Nhận Thu Nhận')
+        .setLabel('Chấp Nhận Gia Nhập')
         .setStyle(ButtonStyle.Success),
       new ButtonBuilder()
         .setCustomId(REJECT_DISCIPLE_BUTTON)
-        .setLabel('Từ Chối')
+        .setLabel('Từ Chối Chiến Thư')
         .setStyle(ButtonStyle.Danger),
       new ButtonBuilder()
         .setCustomId(CLOSE_REQUEST_TICKET_BUTTON)
@@ -3838,7 +13224,14 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     );
 
     await channel.send({ content: `${interaction.user}`, embeds: [embed], components: [row] });
-    await interaction.editReply(`Đơn xin thu nhận đã được lập tại ${channel}`);
+    await interaction.editReply(`Đơn xin gia nhập tông môn đã được lập tại ${channel}. Hiện tại đạo hữu vẫn là **Tán Tu** cho đến khi được duyệt.`);
+
+    if (isLinhCanTicket(interaction.channel)) {
+      await scheduleOnboardingTicketAutoClose(
+        interaction.channel,
+        `Đã lập đơn xin gia nhập tại ${channel}. Động Phủ Nhập Môn tự đóng sau ${Math.round(ONBOARDING_TICKET_DELETE_DELAY_MS / 1000)} giây để tránh rác ticket.`,
+      ).catch(() => null);
+    }
   }
 
   async function handleRequestMaster(interaction) {
@@ -3847,76 +13240,20 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       return;
     }
 
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-    const member = await interaction.guild.members.fetch(interaction.user.id);
-    const sectPosition = getMemberSectPosition(member);
-
-    if (sectPosition) {
-      await interaction.editReply(`Đạo hữu đang giữ chức vị **${sectPosition}**, không cần xin bái sư theo luồng đệ tử.`);
-      return;
-    }
-
-    if (!member.roles.cache.some((role) => BAI_SU_ELIGIBLE_ROLES.includes(role.name))) {
-      await interaction.editReply('Ngươi cần được thu nhận vào tông môn trước khi xin bái sư.');
-      return;
-    }
-
-    const channel = await createPrivateTicket(interaction, {
-      channelPrefix: 'bai-su',
-      topicPrefix: BAI_SU_TOPIC_PREFIX,
-      staffRoleNames: MASTER_STAFF_ROLE_NAMES,
-      existingMessage: 'Đạo hữu đã có ticket xin bái sư',
-      reason: 'Mo ticket xin bai su.',
+    await interaction.reply({
+      content: 'Luồng truyền thừa cũ đã tắt. Tuyến nhập môn hiện chỉ dùng **Xin Gia Nhập Tông Môn** để vào **Đại Đạo Tông**.',
+      flags: MessageFlags.Ephemeral,
     });
-
-    if (!channel) {
-      return;
-    }
-
-    const embed = new EmbedBuilder()
-      .setColor(GOLD)
-      .setTitle('Đơn Xin Bái Sư')
-      .setDescription(
-        [
-          `${interaction.user} đã dâng đơn xin bái sư.`,
-          'Trưởng Lão hoặc Đường Chủ hãy xét đạo duyên rồi quyết định truyền thừa.',
-        ].join('\n'),
-      )
-      .setFooter({ text: 'Chấp nhận sẽ gán Thân Truyền Đệ Tử và giữ nguyên cấp đệ tử hiện có.' });
-
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(ACCEPT_MASTER_BUTTON)
-        .setLabel('Chấp Nhận Bái Sư')
-        .setStyle(ButtonStyle.Success),
-      new ButtonBuilder()
-        .setCustomId(REJECT_MASTER_BUTTON)
-        .setLabel('Từ Chối')
-        .setStyle(ButtonStyle.Danger),
-      new ButtonBuilder()
-        .setCustomId(CLOSE_REQUEST_TICKET_BUTTON)
-        .setLabel('Đóng Ticket')
-        .setStyle(ButtonStyle.Secondary),
-    );
-
-    await channel.send({ content: `${interaction.user}`, embeds: [embed], components: [row] });
-    await interaction.editReply(`Đơn xin bái sư đã được lập tại ${channel}`);
   }
 
   async function handleAcceptDisciple(interaction) {
-    if (!interaction.inGuild() || !isTicketWithPrefix(interaction.channel, THU_NHAN_TOPIC_PREFIX)) {
-      await interaction.reply({ content: 'Nút này chỉ dùng trong ticket xin thu nhận.', flags: MessageFlags.Ephemeral });
+    if (!interaction.inGuild() || !isRequestTicket(interaction.channel)) {
+      await interaction.reply({ content: 'Nút này chỉ dùng trong ticket xét duyệt.', flags: MessageFlags.Ephemeral });
       return;
     }
 
-    const approval = getDiscipleApprovalTarget(interaction.member);
-
-    if (!approval) {
-      await interaction.reply({
-        content: 'Chỉ Trưởng Lão trở lên hoặc các chức vụ Chấp Pháp, Dẫn Đạo, Chấp Sự, Đường Chủ mới được duyệt đơn này.',
-        flags: MessageFlags.Ephemeral,
-      });
+    if (!hasAnyRole(interaction.member, DISCIPLE_APPROVER_ROLE_NAMES)) {
+      await interaction.reply({ content: 'Ngươi không có quyền thu nhận đệ tử.', flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -3924,136 +13261,66 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     await interaction.guild.roles.fetch();
 
     const ownerId = getTicketOwnerIdByPrefix(interaction.channel, THU_NHAN_TOPIC_PREFIX);
-
     if (!ownerId) {
       await interaction.editReply('Không tìm thấy chủ ticket xin thu nhận.');
       return;
     }
 
     const member = await interaction.guild.members.fetch(ownerId);
-    const targetSectPosition = getMemberSectPosition(member);
-
-    if (targetSectPosition) {
-      await interaction.editReply(`${member} đang giữ chức vị **${targetSectPosition}**, không cần duyệt thu nhận đệ tử.`);
+    const daiDaoTongRole = findRoleByName(interaction.guild, DAI_DAO_TONG_ROLE_NAME);
+    const kyDanhRole = findRoleByName(interaction.guild, 'Ký Danh Đệ Tử');
+    if (!daiDaoTongRole || !kyDanhRole) {
+      const missingRoles = [
+        !daiDaoTongRole ? 'Đại Đạo Tông' : null,
+        !kyDanhRole ? 'Ký Danh Đệ Tử' : null,
+      ].filter(Boolean).join(', ');
+      await interaction.editReply(`Thiếu role: ${missingRoles}. Hãy chạy \`npm run create:roles\` rồi thử lại.`);
       return;
     }
 
-    const autoRoleNames = AUTO_DISCIPLE_THRESHOLDS.map((entry) => entry.roleName);
-    const currentAutoRank = getMemberHighestAutoDiscipleRank(member);
-    const targetRank = getHigherDiscipleRank(currentAutoRank, approval.roleName);
-    const targetRole = findRoleByName(interaction.guild, targetRank);
-    const missing = targetRole ? [] : [targetRank];
-
-    if (missing.length > 0) {
-      await interaction.editReply(`Thiếu role: ${missing.join(', ')}. Hãy chạy \`npm run create:roles\` rồi thử lại.`);
-      return;
-    }
-
-    const oldDiscipleRoles = member.roles.cache.filter(
-      (role) => autoRoleNames.includes(role.name) && role.id !== targetRole.id,
+    const oldRoles = member.roles.cache.filter((role) =>
+      DISCIPLE_RANK_ROLES.includes(role.name) && role.id !== kyDanhRole.id,
     );
-    const rolesToAdd = member.roles.cache.has(targetRole.id) ? [] : [targetRole];
     const blocker = await getDiscipleRoleManageBlocker(interaction.guild, [
-      ...rolesToAdd,
-      ...oldDiscipleRoles.values(),
+      daiDaoTongRole,
+      kyDanhRole,
+      ...oldRoles.values(),
     ]);
-
     if (blocker) {
       await interaction.editReply(blocker);
       return;
     }
 
-    try {
-      if (oldDiscipleRoles.size > 0) {
-        await member.roles.remove(oldDiscipleRoles, 'Thu nhan de tu: xoa cap de tu cu.');
-      }
-
-      if (rolesToAdd.length > 0) {
-        await member.roles.add(rolesToAdd, `Thu nhan de tu: gan ${targetRank}.`);
-      }
-    } catch (error) {
-      if (error.code === 50013) {
-        await interaction.editReply('Thiên Đạo chưa đủ quyền Quản Lý Vai Trò hoặc role Thiên Đạo đang nằm dưới role cần gán.');
-        return;
-      }
-
-      throw error;
+    if (oldRoles.size > 0) {
+      await member.roles.remove(oldRoles, 'Chap nhan thu nhan: xoa than phan cu.');
     }
 
-    const users = loadUsers();
-    const userData = getOrCreateUser(users, ownerId);
-    const oldCongHienExp = userData.congHienExp;
-    userData.congHienExp = Math.max(userData.congHienExp, getDiscipleRankRequiredExp(targetRank));
-    if (userData.congHienExp > oldCongHienExp) {
-      userData.congHienBalance = Math.max(getSpendableCongHien(userData), userData.congHienExp);
+    const freshMember = await interaction.guild.members.fetch(ownerId);
+    const rolesToGrant = [daiDaoTongRole, kyDanhRole].filter((role) => !freshMember.roles.cache.has(role.id));
+    if (rolesToGrant.length > 0) {
+      await freshMember.roles.add(rolesToGrant, 'Chap nhan gia nhap: gan Dai Dao Tong va Ky Danh De Tu.');
     }
-    saveUsers(users);
 
-    await interaction.editReply(`${member} đã được ${approval.sourceText} thu nhận làm **${targetRank}**.`);
+    await interaction.editReply(`${freshMember} đã được thu nhận và nhận role **Đại Đạo Tông** + **Ký Danh Đệ Tử**. Ticket tự đóng sau ${Math.round(REQUEST_TICKET_DELETE_DELAY_MS / 1000)} giây.`);
+    await scheduleRequestTicketAutoClose(interaction.channel, `Đơn xin gia nhập của ${freshMember} đã được duyệt. Ticket tự đóng sau ${Math.round(REQUEST_TICKET_DELETE_DELAY_MS / 1000)} giây.`);
   }
 
   async function handleAcceptMaster(interaction) {
-    if (!interaction.inGuild() || !isTicketWithPrefix(interaction.channel, BAI_SU_TOPIC_PREFIX)) {
-      await interaction.reply({ content: 'Nút này chỉ dùng trong ticket xin bái sư.', flags: MessageFlags.Ephemeral });
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Yêu cầu này chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
       return;
     }
 
-    if (!hasAnyRole(interaction.member, MASTER_STAFF_ROLE_NAMES)) {
-      await interaction.reply({ content: 'Chỉ Trưởng Lão hoặc Đường Chủ được duyệt đơn này.', flags: MessageFlags.Ephemeral });
-      return;
+    await interaction.reply({
+      content: isRequestTicket(interaction.channel)
+        ? `Luồng truyền thừa cũ đã tắt. Ticket tự đóng sau ${Math.round(REQUEST_TICKET_DELETE_DELAY_MS / 1000)} giây.`
+        : 'Luồng truyền thừa cũ đã tắt. Tuyến nhập môn hiện kết thúc ở bước **Xin Gia Nhập Tông Môn** và role **Đại Đạo Tông**.',
+      flags: MessageFlags.Ephemeral,
+    });
+
+    if (isRequestTicket(interaction.channel)) {
+      await scheduleRequestTicketAutoClose(interaction.channel, `Luồng truyền thừa cũ đã tắt. Ticket tự đóng sau ${Math.round(REQUEST_TICKET_DELETE_DELAY_MS / 1000)} giây.`).catch(() => null);
     }
-
-    await interaction.deferReply();
-    await interaction.guild.roles.fetch();
-
-    const ownerId = getTicketOwnerIdByPrefix(interaction.channel, BAI_SU_TOPIC_PREFIX);
-
-    if (!ownerId) {
-      await interaction.editReply('Không tìm thấy chủ ticket xin bái sư.');
-      return;
-    }
-
-    const member = await interaction.guild.members.fetch(ownerId);
-    const targetSectPosition = getMemberSectPosition(member);
-
-    if (targetSectPosition) {
-      await interaction.editReply(`${member} đang giữ chức vị **${targetSectPosition}**, không cần duyệt bái sư theo luồng đệ tử.`);
-      return;
-    }
-
-    if (!member.roles.cache.some((role) => BAI_SU_ELIGIBLE_ROLES.includes(role.name))) {
-      await interaction.editReply('Ngươi cần được thu nhận vào tông môn trước khi xin bái sư.');
-      return;
-    }
-
-    const thanTruyenRole = findRoleByName(interaction.guild, 'Thân Truyền Đệ Tử');
-
-    if (!thanTruyenRole) {
-      await interaction.editReply('Thiếu role: Thân Truyền Đệ Tử. Hãy chạy `npm run create:roles` rồi thử lại.');
-      return;
-    }
-
-    const blocker = await getDiscipleRoleManageBlocker(interaction.guild, [thanTruyenRole]);
-
-    if (blocker) {
-      await interaction.editReply(blocker);
-      return;
-    }
-
-    try {
-      if (!member.roles.cache.has(thanTruyenRole.id)) {
-        await member.roles.add(thanTruyenRole, 'Chap nhan bai su: gan Than Truyen De Tu.');
-      }
-    } catch (error) {
-      if (error.code === 50013) {
-        await interaction.editReply('Thiên Đạo chưa đủ quyền Quản Lý Vai Trò hoặc role Thiên Đạo đang nằm dưới role cần gán.');
-        return;
-      }
-
-      throw error;
-    }
-
-    await interaction.editReply(`${member} đã được chấp nhận bái sư và nhận role **Thân Truyền Đệ Tử**.`);
   }
 
   async function handleRejectTicket(interaction, allowedRoleNames, message) {
@@ -4067,12 +13334,54 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       return;
     }
 
-    await interaction.reply({ content: message });
+    await interaction.reply({ content: `${message}
+Ticket tự đóng sau ${Math.round(REQUEST_TICKET_DELETE_DELAY_MS / 1000)} giây.` });
+    await scheduleRequestTicketAutoClose(interaction.channel, `${message}
+Ticket tự đóng sau ${Math.round(REQUEST_TICKET_DELETE_DELAY_MS / 1000)} giây.`);
+  }
+
+
+  async function handleCloseTicket(interaction) {
+    if (!interaction.inGuild() || !isLinhCanTicket(interaction.channel)) {
+      await interaction.reply({ content: 'Nút này chỉ dùng trong Động Phủ Nhập Môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const ownerId = getTicketOwnerId(interaction.channel);
+    const canClose = interaction.user.id === ownerId || isStaff(interaction.member);
+    if (!canClose) {
+      await interaction.reply({ content: 'Chỉ chủ động phủ hoặc staff mới được đóng ticket này.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    await interaction.reply({ content: 'Đang đóng Động Phủ Nhập Môn...', flags: MessageFlags.Ephemeral }).catch(() => null);
+    await interaction.channel.delete('Dong Dong Phu Nhap Mon.').catch(async () => {
+      await interaction.followUp({ content: 'Không thể xóa kênh. Hãy kiểm tra quyền Quản Lý Kênh.', flags: MessageFlags.Ephemeral }).catch(() => null);
+    });
+  }
+
+  async function handleCloseAnyTicket(interaction) {
+    if (!interaction.inGuild() || !isManagedTicket(interaction.channel)) {
+      await interaction.reply({ content: 'Nút này chỉ dùng trong ticket của tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const isOwner = [THU_NHAN_TOPIC_PREFIX, BAI_SU_TOPIC_PREFIX, TICKET_TOPIC_PREFIX]
+      .some((prefix) => getTicketOwnerIdByPrefix(interaction.channel, prefix) === interaction.user.id || getTicketOwnerId(interaction.channel) === interaction.user.id);
+    if (!isOwner && !isStaff(interaction.member)) {
+      await interaction.reply({ content: 'Chỉ chủ ticket hoặc staff mới được đóng ticket này.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    await interaction.reply({ content: 'Đang đóng ticket...', flags: MessageFlags.Ephemeral }).catch(() => null);
+    await interaction.channel.delete('Dong ticket tong mon.').catch(async () => {
+      await interaction.followUp({ content: 'Không thể xóa kênh. Hãy kiểm tra quyền Quản Lý Kênh.', flags: MessageFlags.Ephemeral }).catch(() => null);
+    });
   }
   async function handleLinhCan(interaction) {
     if (!interaction.inGuild() || !isLinhCanTicket(interaction.channel)) {
       await interaction.reply({
-        content: 'Lệnh này chỉ có thể dùng trong Linh Căn Đài riêng của ngươi.',
+        content: 'Lệnh /linhcan chỉ dùng trong Động Phủ Nhập Môn riêng. Cách dễ hơn: bấm nút Khắc Ngày Sinh & Dò Linh Mạch trong ticket.',
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -4108,8 +13417,33 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     const existingLinhCanRoles = getExistingLinhCanRoles(member);
 
     if (existingLinhCanRoles.size > 0) {
+      const users = loadUsers();
+      const userData = getOrCreateUser(users, interaction.user.id);
+      const restored = ensureStoredLinhCanFromRoles(users, userData, member);
+      if (restored.ok) {
+        userData.birthDate = userData.birthDate ?? { ngay, thang, nam };
+        userData.onboardingStartedAt = userData.onboardingStartedAt ?? new Date().toISOString();
+        userData.huyenMach = userData.huyenMach?.name
+          ? userData.huyenMach
+          : calculateHuyenMach(ngay, thang, nam, interaction.user.id, member.displayName);
+        userData.menhCach = userData.menhCach?.name
+          ? userData.menhCach
+          : calculateMenhCach(ngay, thang, nam, interaction.user.id, member.displayName);
+        hydrateDestinyBuffs(userData);
+        saveUsers(users);
+
+        await interaction.editReply({
+          content: restored.restored
+            ? 'Đã tìm thấy role linh căn có sẵn và đồng bộ lại dữ liệu tẩy tủy. Từ giờ có thể dùng Tẩy Tủy Đan bình thường.'
+            : 'Linh căn đã được Thiên Đạo khắc vào căn cơ, không thể tự ý khai lại.',
+          embeds: [buildOnboardingFlowEmbed(member, userData, 0)],
+          components: buildOnboardingFlowComponents(0, interaction.user.id, getMemberOnboardingSectStatus(member)),
+        });
+        return;
+      }
+
       await interaction.editReply(
-        'Linh căn đã được Thiên Đạo khắc vào căn cơ, không thể tự ý khai lại. Nếu có sai sót, hãy báo Trưởng Lão xử lý thủ công.',
+        'Linh căn đã có role nhưng dữ liệu chưa đủ để đồng bộ. Hãy kiểm tra role Linh Căn gọn hoặc nhờ Trưởng Lão xử lý thủ công.',
       );
       return;
     }
@@ -4172,13 +13506,23 @@ const AUTO_DISCIPLE_THRESHOLDS = [
 
     const users = loadUsers();
     const userData = getOrCreateUser(users, interaction.user.id);
+    userData.birthDate = { ngay, thang, nam };
+    userData.linhCan = result;
+    userData.onboardingStartedAt = userData.onboardingStartedAt ?? new Date().toISOString();
+    userData.huyenMach = userData.huyenMach?.name
+      ? userData.huyenMach
+      : calculateHuyenMach(ngay, thang, nam, interaction.user.id, member.displayName);
+    userData.menhCach = userData.menhCach?.name
+      ? userData.menhCach
+      : calculateMenhCach(ngay, thang, nam, interaction.user.id, member.displayName);
+    const destinyRoleSync = await syncOnboardingDestinyRoles(member, userData);
     saveUsers(users);
 
     const refreshedMember = await interaction.guild.members.fetch(interaction.user.id);
-    const hasTuViRole = refreshedMember.roles.cache.some((role) => TU_VI_REALMS.includes(role.name));
-    const hasMinorRole = refreshedMember.roles.cache.some((role) => MINOR_REALMS.includes(role.name));
+    const hasTuViRole = refreshedMember.roles.cache.some((role) => ALL_TU_VI_REALM_ROLE_NAMES.includes(role.name));
+    const hasTuViStageRole = getAssignedTuViLevel(refreshedMember) !== null;
 
-    if (!hasTuViRole || !hasMinorRole) {
+    if (!hasTuViRole || !hasTuViStageRole) {
       const syncResult = await syncTuViRoles(interaction.guild, refreshedMember, userData.tuViExp);
 
       if (!syncResult.ok) {
@@ -4187,86 +13531,440 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       }
     }
 
-    const nextDiscipleRole = sectPosition ?? currentDiscipleRole ?? 'Tán Tu';
-    const actionRows = buildLinhCanActionRows(nextDiscipleRole);
-
-    const embed = new EmbedBuilder()
-      .setColor(GOLD)
-      .setTitle('Kim Quang Khai Mở')
-      .setDescription(`${member} đã thức tỉnh **${result.displayName}**.`)
-      .addFields(
-        { name: 'Can Chi năm sinh', value: result.canChi, inline: true },
-        { name: 'Điểm phân loại', value: `${result.phanLoaiScore}/99`, inline: true },
-        { name: 'Phân loại', value: result.classification, inline: true },
-        { name: 'Hệ linh căn', value: `${result.elements.join(' - ')} Linh Căn`, inline: false },
-        { name: 'Độ thuần linh căn', value: `${result.doThuan}/100`, inline: true },
-        { name: 'Phẩm chất linh căn', value: result.quality, inline: true },
-        { name: 'Điểm ngũ hành', value: formatElementScores(result.scores), inline: false },
-        { name: 'Vai trò hiện tại', value: nextDiscipleRole, inline: true },
-        {
-          name: 'Bước tiếp theo',
-          value: getLinhCanNextStepText(nextDiscipleRole),
-          inline: false,
-        },
-      )
-      .setFooter({ text: 'Linh căn đã định, không thể tự ý khai lại.' });
-
     await interaction.editReply({
-      embeds: [embed],
-      components: actionRows,
+      content: destinyRoleSync.ok ? undefined : destinyRoleSync.message,
+      embeds: [buildOnboardingFlowEmbed(refreshedMember, userData, 0)],
+      components: buildOnboardingFlowComponents(0, interaction.user.id, getMemberOnboardingSectStatus(refreshedMember)),
     });
   }
 
-  async function handleCloseTicket(interaction) {
+
+  function buildOnboardingBirthModal() {
+    const modal = new ModalBuilder()
+      .setCustomId(ONBOARDING_BIRTH_MODAL_ID)
+      .setTitle('Khắc Ngày Sinh - Dò Linh Mạch');
+
+    const dayInput = new TextInputBuilder()
+      .setCustomId(ONBOARDING_BIRTH_DAY_INPUT)
+      .setLabel('Ngày sinh')
+      .setPlaceholder('Ví dụ: 15')
+      .setRequired(true)
+      .setStyle(TextInputStyle.Short);
+
+    const monthInput = new TextInputBuilder()
+      .setCustomId(ONBOARDING_BIRTH_MONTH_INPUT)
+      .setLabel('Tháng sinh')
+      .setPlaceholder('Ví dụ: 8')
+      .setRequired(true)
+      .setStyle(TextInputStyle.Short);
+
+    const yearInput = new TextInputBuilder()
+      .setCustomId(ONBOARDING_BIRTH_YEAR_INPUT)
+      .setLabel('Năm sinh')
+      .setPlaceholder('Ví dụ: 2005')
+      .setRequired(true)
+      .setStyle(TextInputStyle.Short);
+
+    return modal.addComponents(
+      new ActionRowBuilder().addComponents(dayInput),
+      new ActionRowBuilder().addComponents(monthInput),
+      new ActionRowBuilder().addComponents(yearInput),
+    );
+  }
+
+  async function assertOnboardingTicketOwner(interaction, actionName) {
     if (!interaction.inGuild() || !isLinhCanTicket(interaction.channel)) {
-      await interaction.reply({ content: 'Nút này chỉ dùng trong ticket Linh Căn Đài.', flags: MessageFlags.Ephemeral });
-      return;
+      await interaction.reply({ content: `${actionName} chỉ dùng trong Động Phủ Nhập Môn riêng.`, flags: MessageFlags.Ephemeral });
+      return false;
     }
 
     const ownerId = getTicketOwnerId(interaction.channel);
-
-    if (ownerId && interaction.user.id !== ownerId && !isStaff(interaction.member)) {
-      await interaction.reply({ content: 'Chỉ chủ ticket hoặc trưởng lão mới được đóng Linh Căn Đài.', flags: MessageFlags.Ephemeral });
-      return;
+    if (ownerId && interaction.user.id !== ownerId) {
+      await interaction.reply({ content: 'Chỉ chủ động phủ mới được đi tuyến nhập môn tại đây.', flags: MessageFlags.Ephemeral });
+      return false;
     }
 
-    await interaction.reply({ content: 'Linh Căn Đài sẽ khép lại sau 5 giây.', flags: MessageFlags.Ephemeral });
-
-    setTimeout(() => {
-      interaction.channel
-        .delete('Dong ticket Linh Can Dai.')
-        .catch((error) => console.error('Khong the xoa ticket:', error));
-    }, 5000);
+    return true;
   }
 
-  async function handleCloseAnyTicket(interaction) {
-    if (!interaction.inGuild() || !isManagedTicket(interaction.channel)) {
-      await interaction.reply({ content: 'Nút này chỉ dùng trong ticket của Thiên Đạo.', flags: MessageFlags.Ephemeral });
+  async function handleOnboardingHuyenMach(interaction) {
+    if (!(await assertOnboardingTicketOwner(interaction, 'Dò Huyền Mạch'))) {
       return;
     }
 
-    const ownerId = getManagedTicketOwnerId(interaction.channel);
-    const staffRoleNames = isTicketWithPrefix(interaction.channel, BAI_SU_TOPIC_PREFIX)
-      ? MASTER_STAFF_ROLE_NAMES
-      : DISCIPLE_APPROVER_ROLE_NAMES;
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    const member = await interaction.guild.members.fetch(interaction.user.id);
+    const prepared = ensureOnboardingDestinyData(userData, member);
 
-    if (ownerId && interaction.user.id !== ownerId && !hasAnyRole(interaction.member, staffRoleNames)) {
-      await interaction.reply({ content: 'Chỉ chủ ticket hoặc người xét duyệt mới được đóng ticket này.', flags: MessageFlags.Ephemeral });
+    if (!prepared.ok) {
+      await interaction.reply({ content: prepared.message, flags: MessageFlags.Ephemeral });
       return;
     }
 
-    await interaction.reply({ content: 'Ticket sẽ khép lại sau 5 giây.', flags: MessageFlags.Ephemeral });
+    const roleSync = await syncDestinyRole(member, userData.huyenMach, DAO_THE_ROLE_NAMES, 'Dong bo Dao The tu onboarding.');
+    saveUsers(users);
 
-    setTimeout(() => {
-      interaction.channel
-        .delete('Dong ticket Thien Dao.')
-        .catch((error) => console.error('Khong the xoa ticket:', error));
-    }, 5000);
+    await interaction.reply({
+      content: roleSync.ok ? 'Đã dò và đồng bộ **Đạo Thể / Huyền Mạch**.' : roleSync.message,
+      embeds: [buildOnboardingFlowEmbed(member, userData, 1)],
+      components: buildOnboardingFlowComponents(1, interaction.user.id, getMemberOnboardingSectStatus(member)),
+      flags: MessageFlags.Ephemeral,
+    });
   }
+
+  async function handleOnboardingMenhCach(interaction) {
+    if (!(await assertOnboardingTicketOwner(interaction, 'Soi Mệnh Cách'))) {
+      return;
+    }
+
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    const member = await interaction.guild.members.fetch(interaction.user.id);
+    const prepared = ensureOnboardingDestinyData(userData, member);
+
+    if (!prepared.ok) {
+      await interaction.reply({ content: prepared.message, flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const roleSync = await syncDestinyRole(member, userData.menhCach, MENH_CACH_ROLE_NAMES, 'Dong bo Menh Cach tu onboarding.');
+    saveUsers(users);
+
+    await interaction.reply({
+      content: roleSync.ok ? 'Đã soi và đồng bộ **Mệnh Cách**.' : roleSync.message,
+      embeds: [buildOnboardingFlowEmbed(member, userData, 2)],
+      components: buildOnboardingFlowComponents(2, interaction.user.id, getMemberOnboardingSectStatus(member)),
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  async function handleOnboardingStatus(interaction) {
+    if (!(await assertOnboardingTicketOwner(interaction, 'Xem tiến trình nhập môn'))) {
+      return;
+    }
+
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    const member = await interaction.guild.members.fetch(interaction.user.id);
+    const prepared = ensureOnboardingDestinyData(userData, member);
+    if (prepared.ok) saveUsers(users);
+
+    await interaction.reply({
+      content: prepared.ok ? 'Tiến trình nhập môn hiện tại:' : prepared.message,
+      embeds: prepared.ok ? [buildOnboardingFlowEmbed(member, userData, 0)] : [],
+      components: prepared.ok ? buildOnboardingFlowComponents(0, interaction.user.id, getMemberOnboardingSectStatus(member)) : [],
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  async function handleOnboardingLinhCanButton(interaction) {
+    if (!(await assertOnboardingTicketOwner(interaction, 'Khai căn'))) {
+      return;
+    }
+
+    await interaction.guild.roles.fetch();
+    const member = await interaction.guild.members.fetch(interaction.user.id);
+    if (getExistingLinhCanRoles(member).size > 0) {
+      const users = loadUsers();
+      const userData = getOrCreateUser(users, interaction.user.id);
+      const restored = ensureStoredLinhCanFromRoles(users, userData, member);
+
+      if (restored.ok) {
+        userData.onboardingStartedAt = userData.onboardingStartedAt ?? new Date().toISOString();
+        hydrateDestinyBuffs(userData);
+        saveUsers(users);
+
+        await interaction.reply({
+          content: restored.restored
+            ? 'Đã tìm thấy role linh căn có sẵn và đồng bộ lại dữ liệu tẩy tủy. Không cần khai lại.'
+            : 'Linh căn đã được Thiên Đạo khắc vào căn cơ, không cần khai lại.',
+          embeds: [buildOnboardingFlowEmbed(member, userData, 0)],
+          components: buildOnboardingFlowComponents(0, interaction.user.id, getMemberOnboardingSectStatus(member)),
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+
+      await interaction.reply({
+        content: 'Đạo hữu đã có role linh căn nhưng dữ liệu chưa đủ để đồng bộ. Hãy nhờ Trưởng Lão kiểm tra role Linh Căn gọn hoặc chạy lại create-roles.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await interaction.showModal(buildOnboardingBirthModal());
+  }
+
+  async function handleOnboardingBirthModal(interaction) {
+    if (!(await assertOnboardingTicketOwner(interaction, 'Biểu mẫu khai căn'))) {
+      return;
+    }
+
+    const ngay = Number(interaction.fields.getTextInputValue(ONBOARDING_BIRTH_DAY_INPUT));
+    const thang = Number(interaction.fields.getTextInputValue(ONBOARDING_BIRTH_MONTH_INPUT));
+    const nam = Number(interaction.fields.getTextInputValue(ONBOARDING_BIRTH_YEAR_INPUT));
+
+    if (!Number.isInteger(ngay) || !Number.isInteger(thang) || !Number.isInteger(nam) || !isValidDate(ngay, thang, nam)) {
+      await interaction.reply({ content: 'Ngày sinh không hợp lệ. Hãy nhập ngày/tháng/năm bằng số, ví dụ: 15 / 8 / 2005.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    await interaction.deferReply();
+    await runLinhCanAwakening(interaction, ngay, thang, nam);
+  }
+
+
+  async function runLinhCanAwakening(interaction, ngay, thang, nam) {
+    await interaction.guild.roles.fetch();
+    const member = await interaction.guild.members.fetch(interaction.user.id);
+    const result = calculateLinhCan(ngay, thang, nam);
+    const roleCheck = resolveResultRoles(interaction.guild, result);
+    const sectPosition = getMemberSectPosition(member);
+    const currentDiscipleRole = getMemberDiscipleRank(member);
+    const existingLinhCanRoles = getExistingLinhCanRoles(member);
+
+    if (existingLinhCanRoles.size > 0) {
+      const users = loadUsers();
+      const userData = getOrCreateUser(users, interaction.user.id);
+      const restored = ensureStoredLinhCanFromRoles(users, userData, member);
+
+      if (restored.ok) {
+        userData.birthDate = userData.birthDate ?? { ngay, thang, nam };
+        userData.onboardingStartedAt = userData.onboardingStartedAt ?? new Date().toISOString();
+        userData.huyenMach = userData.huyenMach?.name
+          ? userData.huyenMach
+          : calculateHuyenMach(ngay, thang, nam, interaction.user.id, member.displayName);
+        userData.menhCach = userData.menhCach?.name
+          ? userData.menhCach
+          : calculateMenhCach(ngay, thang, nam, interaction.user.id, member.displayName);
+        hydrateDestinyBuffs(userData);
+        saveUsers(users);
+
+        await interaction.editReply({
+          content: restored.restored
+            ? 'Đã tìm thấy role linh căn có sẵn và đồng bộ lại dữ liệu tẩy tủy. Không cần khai lại.'
+            : 'Linh căn đã được Thiên Đạo khắc vào căn cơ, không thể tự ý khai lại.',
+          embeds: [buildOnboardingFlowEmbed(member, userData, 0)],
+          components: buildOnboardingFlowComponents(0, interaction.user.id, getMemberOnboardingSectStatus(member)),
+        });
+        return;
+      }
+
+      await interaction.editReply(
+        'Linh căn đã có role nhưng dữ liệu chưa đủ để đồng bộ. Hãy kiểm tra role Linh Căn gọn hoặc nhờ Trưởng Lão xử lý thủ công.',
+      );
+      return;
+    }
+
+    const shouldAssignTanTu = !sectPosition && !currentDiscipleRole;
+    const tanTuRole = shouldAssignTanTu ? findRoleByName(interaction.guild, 'Tán Tu') : null;
+
+    if (roleCheck.missing.length > 0) {
+      const missingQualityRoles = roleCheck.missing.filter((roleName) => QUALITY_ROLES.includes(roleName));
+
+      if (missingQualityRoles.length > 0) {
+        await interaction.editReply(
+          `Thiếu role phẩm chất linh căn: ${missingQualityRoles.join(', ')}. Hãy chạy \`npm run create:roles\` rồi thử lại.`,
+        );
+        return;
+      }
+
+      await interaction.editReply(
+        `Thiếu role: ${roleCheck.missing.join(', ')}. Hãy chạy \`npm run create:roles\` rồi thử lại.`,
+      );
+      return;
+    }
+
+    if (shouldAssignTanTu && !tanTuRole) {
+      await interaction.editReply('Thiếu role: Tán Tu. Hãy chạy `npm run create:roles` rồi thử lại.');
+      return;
+    }
+
+    const oldLinhCanRoles = getExistingLinhCanRoles(member);
+    const rolesToAssign = shouldAssignTanTu ? [...roleCheck.roles, tanTuRole] : roleCheck.roles;
+    const rolesToAdd = rolesToAssign.filter((role) => !member.roles.cache.has(role.id));
+    const blocker = await getLinhCanRoleManageBlocker(interaction.guild, [
+      ...rolesToAdd,
+      ...oldLinhCanRoles.values(),
+    ]);
+
+    if (blocker) {
+      await interaction.editReply(blocker);
+      return;
+    }
+
+    try {
+      if (oldLinhCanRoles.size > 0) {
+        await member.roles.remove(oldLinhCanRoles, 'Xoa linh can cu truoc khi gan moi.');
+      }
+
+      if (rolesToAdd.length > 0) {
+        await member.roles.add(rolesToAdd, 'Gan linh can va pham chat moi theo Linh Can Dai.');
+      }
+    } catch (error) {
+      if (error.code === 50013) {
+        await interaction.editReply(
+          'Thiên Đạo chưa đủ quyền Quản Lý Vai Trò hoặc role Thiên Đạo đang nằm dưới role linh căn cần gán.',
+        );
+        return;
+      }
+
+      throw error;
+    }
+
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    userData.birthDate = { ngay, thang, nam };
+    userData.linhCan = result;
+    userData.onboardingStartedAt = userData.onboardingStartedAt ?? new Date().toISOString();
+    userData.huyenMach = userData.huyenMach?.name
+      ? userData.huyenMach
+      : calculateHuyenMach(ngay, thang, nam, interaction.user.id, member.displayName);
+    userData.menhCach = userData.menhCach?.name
+      ? userData.menhCach
+      : calculateMenhCach(ngay, thang, nam, interaction.user.id, member.displayName);
+    const destinyRoleSync = await syncOnboardingDestinyRoles(member, userData);
+    saveUsers(users);
+
+    const refreshedMember = await interaction.guild.members.fetch(interaction.user.id);
+    const hasTuViRole = refreshedMember.roles.cache.some((role) => ALL_TU_VI_REALM_ROLE_NAMES.includes(role.name));
+    const hasTuViStageRole = getAssignedTuViLevel(refreshedMember) !== null;
+
+    if (!hasTuViRole || !hasTuViStageRole) {
+      const syncResult = await syncTuViRoles(interaction.guild, refreshedMember, userData.tuViExp);
+
+      if (!syncResult.ok) {
+        await interaction.editReply(syncResult.message);
+        return;
+      }
+    }
+
+    await interaction.editReply({
+      content: destinyRoleSync.ok ? undefined : destinyRoleSync.message,
+      embeds: [buildOnboardingFlowEmbed(refreshedMember, userData, 0)],
+      components: buildOnboardingFlowComponents(0, interaction.user.id, getMemberOnboardingSectStatus(refreshedMember)),
+    });
+  }
+
+
+  function buildOnboardingWelcomeEmbed(user) {
+    return new EmbedBuilder()
+      .setColor(GOLD)
+      .setTitle('Động Phủ Nhập Môn')
+      .setDescription([
+        `${user}`,
+        '`1` Linh Căn  →  `2` Đạo Thể  →  `3` Mệnh Cách',
+        '`4` Công Pháp → `5` Nhập Tông',
+      ].join('\n'))
+      .addFields(
+        { name: 'Bắt đầu', value: 'Bấm **Khai Đạo Hồ**.', inline: true },
+        { name: 'Duyệt tông', value: 'Staff duyệt mới nhận **Đại Đạo Tông + Ký Danh**.', inline: true },
+      )
+      .setFooter({ text: 'Mỗi trang một việc' });
+  }
+
+
+  function buildOnboardingWelcomeRows() {
+    return [
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(ONBOARDING_LINH_CAN_BUTTON)
+          .setLabel('Khai Đạo Hồ')
+          .setStyle(ButtonStyle.Primary),
+        new ButtonBuilder()
+          .setCustomId(ONBOARDING_STATUS_BUTTON)
+          .setLabel('Xem Tiến Trình')
+          .setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder()
+          .setCustomId(CLOSE_TICKET_BUTTON)
+          .setLabel('Đóng Động Phủ')
+          .setStyle(ButtonStyle.Danger),
+      ),
+    ];
+  }
+  function buildOnboardingCoreRow() {
+    return new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(ONBOARDING_LINH_CAN_BUTTON)
+        .setLabel('Dò Linh Mạch')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(ONBOARDING_HUYEN_MACH_BUTTON)
+        .setLabel('Dò Huyền Mạch')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(ONBOARDING_MENH_CACH_BUTTON)
+        .setLabel('Soi Mệnh Cách')
+        .setStyle(ButtonStyle.Primary),
+      new ButtonBuilder()
+        .setCustomId(ONBOARDING_STATUS_BUTTON)
+        .setLabel('Tiến Trình')
+        .setStyle(ButtonStyle.Secondary),
+    );
+  }
+
+  function buildOnboardingActionRows(discipleRoleName) {
+    const rows = [buildOnboardingCoreRow(), buildCongPhapSelectRow()];
+    rows.push(...buildLinhCanActionRows(discipleRoleName));
+    return rows.slice(0, 5);
+  }
+
+  function getStoredBirthDate(userData) {
+    const date = userData?.birthDate;
+    if (!date) return null;
+    const ngay = Number(date.ngay);
+    const thang = Number(date.thang);
+    const nam = Number(date.nam);
+    if (!isValidDate(ngay, thang, nam)) return null;
+    return { ngay, thang, nam };
+  }
+
+  function getOnboardingChecklistText(userData, member) {
+    const hasLinhCan = getExistingLinhCanRoles(member).size > 0;
+    const hasHuyenMach = Boolean(userData?.huyenMach?.name);
+    const hasMenhCach = Boolean(userData?.menhCach?.name);
+    const hasCongPhap = getMemberCongPhapText(member) !== 'Chưa chọn công pháp chủ tu.';
+    const discipleRank = getMemberDiscipleRank(member) ?? 'Chưa nhập tông';
+    const isDisciple = discipleRank !== 'Chưa nhập tông' && discipleRank !== 'Tán Tu';
+    const isSectMember = getMemberOnboardingSectStatus(member) !== 'Tán Tu';
+
+    return [
+      `${hasLinhCan ? '✅' : '⬜'} Linh Mạch / Căn Cơ: ${hasLinhCan ? getMemberElementText(member) : 'chưa khai căn'}`,
+      `${hasHuyenMach ? '✅' : '⬜'} Huyền Mạch / Đạo Thể: ${hasHuyenMach ? userData.huyenMach.name : 'chưa dò'}`,
+      `${hasMenhCach ? '✅' : '⬜'} Mệnh Cách: ${hasMenhCach ? userData.menhCach.name : 'chưa soi'}`,
+      `${hasCongPhap ? '✅' : '⬜'} Công Pháp Chủ Tu: ${getMemberCongPhapText(member)}`,
+      `${isDisciple ? '✅' : '⬜'} Thân phận: ${discipleRank}`,
+      `${isSectMember ? '✅' : '⬜'} Gia nhập Đại Đạo Tông: ${isSectMember ? 'đã vào tông' : 'chưa được duyệt'}`,
+    ].join('\n');
+  }
+
+  function buildOnboardingStatusEmbed(member, userData) {
+    const date = getStoredBirthDate(userData);
+    return new EmbedBuilder()
+      .setColor(GOLD)
+      .setTitle('Tiến Trình Nhập Môn')
+      .setDescription(`${member}`)
+      .addFields(
+        { name: 'Checklist', value: getOnboardingChecklistText(userData, member), inline: false },
+        { name: 'Ngày sinh', value: date ? `${date.ngay}/${date.thang}/${date.nam}` : 'Chưa lưu', inline: true },
+      )
+      .setFooter({ text: 'Lật 1 → 5' });
+  }
+
 
   async function createPrivateTicket(interaction, options) {
     const guild = interaction.guild;
     const member = await guild.members.fetch(interaction.user.id);
+    const cooldownMs = Number(options.cooldownMs) || 0;
+    if (cooldownMs > 0) {
+      const cooldown = canOpenManagedTicket(interaction.user.id, options.topicPrefix, cooldownMs);
+      if (!cooldown.ok) {
+        await interaction.editReply(cooldown.message);
+        return null;
+      }
+    }
+
     const channels = await guild.channels.fetch();
     await guild.roles.fetch();
 
@@ -4284,7 +13982,7 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     const botMember = await guild.members.fetchMe();
 
     if (!botMember.permissions.has(PermissionFlagsBits.ManageChannels)) {
-      await interaction.editReply('Thiên Đạo chưa đủ quyền Quản Lý Kênh để lập ticket riêng.');
+      await interaction.editReply('Thiên Đạo chưa đủ quyền **Quản Lý Kênh** để lập ticket riêng.');
       return null;
     }
 
@@ -4333,7 +14031,7 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       });
     } catch (error) {
       if (error.code === 50013) {
-        await interaction.editReply('Thiên Đạo chưa đủ quyền Quản Lý Kênh để lập ticket riêng.');
+        await interaction.editReply('Thiên Đạo chưa đủ quyền **Quản Lý Kênh** để lập ticket riêng.');
         return null;
       }
 
@@ -4361,59 +14059,68 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     return rows;
   }
 
-  function buildLinhCanActionRows(discipleRoleName) {
-    const row = new ActionRowBuilder();
-
-    const needJoinSectRoles = [
-      null,
-      'Tán Tu',
-      'Ký Danh Đệ Tử',
-      'Tạp Dịch Đệ Tử',
-    ];
-
-    if (needJoinSectRoles.includes(discipleRoleName)) {
-      row.addComponents(
-        new ButtonBuilder()
-          .setCustomId(REQUEST_DISCIPLE_BUTTON)
-          .setLabel('Xin Thu Nhận Đệ Tử')
-          .setStyle(ButtonStyle.Success),
-      );
-
-      return [row];
-    }
-
-    if (BAI_SU_ELIGIBLE_ROLES.includes(discipleRoleName)) {
-      row.addComponents(
-        new ButtonBuilder()
-          .setCustomId(REQUEST_MASTER_BUTTON)
-          .setLabel('Xin Bái Sư')
-          .setStyle(ButtonStyle.Primary),
-      );
-
-      return [row];
-    }
-
-    return [];
+  function buildCongPhapSelectRow() {
+    return new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder()
+        .setCustomId(CONG_PHAP_SELECT_CUSTOM_ID)
+        .setPlaceholder('Chọn Công Pháp Chủ Tu')
+        .addOptions(
+          CONG_PHAP_OPTIONS.map((option) => ({
+            label: option.name,
+            value: option.key,
+            emoji: option.emoji,
+            description: `Truyền thừa ${option.name}`,
+          })),
+        ),
+    );
   }
 
-  function getLinhCanNextStepText(discipleRoleName) {
-    if (isSectPositionRoleName(discipleRoleName)) {
-      return 'Đạo hữu đang giữ chức vị tông môn, không cần xin thu nhận đệ tử.';
+  function buildLinhCanActionRows(sectStatus) {
+    if (sectStatus && sectStatus !== 'Tán Tu') {
+      return [];
     }
 
-    if (!discipleRoleName || ['Tán Tu', 'Ký Danh Đệ Tử', 'Tạp Dịch Đệ Tử'].includes(discipleRoleName)) {
-      return 'Đạo hữu cần xin thu nhận vào tông môn trước.';
+    return [
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(REQUEST_DISCIPLE_BUTTON)
+          .setLabel('Xin Gia Nhập Tông Môn')
+          .setStyle(ButtonStyle.Success),
+      ),
+    ];
+  }
+
+  function getLinhCanNextStepText(sectStatus) {
+    if (isSectPositionRoleName(sectStatus)) {
+      return `Đạo hữu đang giữ chức vị **${sectStatus}**, xem như đã thuộc tông môn.`;
     }
 
-    if (BAI_SU_ELIGIBLE_ROLES.includes(discipleRoleName)) {
-      return 'Đạo hữu đã đủ điều kiện xin bái sư.';
+    if (sectStatus === DAI_DAO_TONG_ROLE_NAME) {
+      return 'Đạo hữu đã được thu nhận vào **Đại Đạo Tông**.';
     }
 
-    if (['Thân Truyền Đệ Tử', 'Thánh Tử', 'Thánh Nữ'].includes(discipleRoleName)) {
-      return 'Đạo hữu đã có truyền thừa cao, không cần xin bái sư tại đây.';
+    return 'Bước cuối chỉ là **Xin Gia Nhập Tông Môn**. Khi chưa được duyệt, đạo hữu vẫn giữ thân phận **Tán Tu**.';
+  }
+
+  function getLinhCanActionHint(sectStatus) {
+    if (isSectPositionRoleName(sectStatus)) {
+      return 'Đạo hữu đang giữ chức vị tông môn nên không cần gửi đơn nhập tông thường.';
     }
 
-    return 'Tiếp tục tu luyện và tích lũy cống hiến.';
+    if (sectStatus === DAI_DAO_TONG_ROLE_NAME) {
+      return 'Đã gia nhập **Đại Đạo Tông**. Tuyến nhập môn đã hoàn tất.';
+    }
+
+    return 'Bấm **Xin Gia Nhập Tông Môn**. Nếu chưa bấm hoặc chưa được duyệt, thân phận vẫn là **Tán Tu**.';
+  }
+
+  function getMemberOnboardingSectStatus(member) {
+    const sectPosition = getMemberSectPosition(member);
+    if (sectPosition) return sectPosition;
+
+    return member.roles.cache.some((role) => role.name === DAI_DAO_TONG_ROLE_NAME)
+      ? DAI_DAO_TONG_ROLE_NAME
+      : 'Tán Tu';
   }
 
   function getMemberDiscipleRank(member) {
@@ -4482,12 +14189,12 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     }
 
     const role = getMemberDiscipleRank(member);
+    if (role && role !== 'Tán Tu') return role;
 
-    if (!role) {
-      return userData ? getDiscipleRankFromContribution(userData.congHienExp).roleName : 'Chưa nhập đạo';
-    }
+    const sectStatus = getMemberOnboardingSectStatus(member);
+    if (sectStatus === DAI_DAO_TONG_ROLE_NAME) return DAI_DAO_TONG_ROLE_NAME;
 
-    return role === 'Tán Tu' ? 'Tán Tu - chưa nhập môn' : role;
+    return 'Tán Tu - chưa nhập môn';
   }
 
   function getDiscipleRankDisplay(member, userData) {
@@ -4517,27 +14224,49 @@ const AUTO_DISCIPLE_THRESHOLDS = [
   }
 
   function getMemberLinhCanClassificationText(member) {
-    return CLASSIFICATION_ROLES.find((roleName) =>
+    const direct = CLASSIFICATION_ROLES.find((roleName) =>
       member.roles.cache.some((role) => role.name === roleName),
-    ) ?? 'Chưa khai mở linh căn.';
+    );
+
+    if (direct) return direct;
+
+    const compact = [...member.roles.cache.values()]
+      .map((role) => parseLinhCanCompactRoleName(role.name))
+      .find(Boolean);
+
+    return compact?.classification ?? 'Chưa khai mở linh căn.';
   }
 
   function getMemberElementText(member) {
-    const elements = ELEMENT_ROLE_NAMES.filter((roleName) =>
+    const compact = [...member.roles.cache.values()]
+      .map((role) => parseLinhCanCompactRoleName(role.name) ? role.name : null)
+      .find(Boolean);
+
+    if (compact) return compact;
+
+    const legacyElements = LEGACY_ELEMENT_ROLE_NAMES.filter((roleName) =>
       member.roles.cache.some((role) => role.name === roleName),
     ).map((roleName) => roleName.replace(' Linh Căn', ''));
 
-    if (elements.length === 0) {
+    if (legacyElements.length === 0) {
       return 'Chưa khai mở linh căn.';
     }
 
-    return `${elements.join(' - ')} Linh Căn`;
+    return `${legacyElements.join(' - ')} Linh Căn`;
   }
 
   function getMemberQualityText(member) {
-    return QUALITY_ROLES.find((roleName) =>
+    const direct = QUALITY_ROLES.find((roleName) =>
       member.roles.cache.some((role) => role.name === roleName),
-    ) ?? 'Chưa xác định phẩm chất linh căn.';
+    );
+
+    if (direct) return direct;
+
+    const compact = [...member.roles.cache.values()]
+      .map((role) => parseLinhCanCompactRoleName(role.name))
+      .find(Boolean);
+
+    return compact?.quality ?? 'Chưa xác định phẩm chất linh căn.';
   }
 
   function getExistingLinhCanRoles(member) {
@@ -4545,25 +14274,1041 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       ...CLASSIFICATION_ROLES,
       ...ELEMENT_ROLE_NAMES,
       ...ALL_QUALITY_ROLE_NAMES,
+      ...LINH_CAN_COMPACT_ROLE_NAMES,
     ];
 
     return member.roles.cache.filter((role) => linhCanRoleNames.includes(role.name));
   }
 
+
+  function inferLinhCanClassificationFromCount(count) {
+    if (count <= 1) return 'Nhất Linh Căn';
+    if (count === 2) return 'Nhị Linh Căn';
+    if (count === 3) return 'Tam Linh Căn';
+    if (count === 4) return 'Tứ Linh Căn';
+    return 'Tạp Linh Căn';
+  }
+
+  function buildStoredLinhCanFromMemberRoles(member, fallback = null) {
+    const compactLinhCan = [...member.roles.cache.values()]
+      .map((role) => parseLinhCanCompactRoleName(role.name))
+      .find(Boolean);
+    const legacyElements = LEGACY_ELEMENT_ROLE_NAMES
+      .filter((roleName) => member.roles.cache.some((role) => role.name === roleName))
+      .map((roleName) => roleName.replace(' Linh Căn', ''));
+    const fallbackElements = Array.isArray(fallback?.elements) ? fallback.elements.filter((element) => ELEMENTS.includes(element)) : [];
+    const elements = fallbackElements.length > 0 ? fallbackElements : legacyElements;
+    const quality = QUALITY_ROLES.find((roleName) => member.roles.cache.some((role) => role.name === roleName))
+      ?? compactLinhCan?.quality
+      ?? fallback?.quality;
+
+    if (elements.length === 0 || !quality) {
+      return null;
+    }
+
+    const classification = CLASSIFICATION_ROLES.find((roleName) => member.roles.cache.some((role) => role.name === roleName))
+      ?? compactLinhCan?.classification
+      ?? fallback?.classification
+      ?? inferLinhCanClassificationFromCount(elements.length);
+    const scores = Object.fromEntries(ELEMENTS.map((element) => [
+      element,
+      fallback?.scores?.[element] ?? (elements.includes(element) ? 72 : 18),
+    ]));
+
+    return {
+      displayName: `${elements.join(' - ')} Linh Căn`,
+      elements,
+      count: elements.length,
+      classification,
+      quality,
+      canChi: fallback?.canChi ?? 'Chưa rõ',
+      doThuan: fallback?.doThuan ?? 50,
+      phanLoaiScore: fallback?.phanLoaiScore ?? 0,
+      scores,
+      restoredFromRoles: true,
+      restoredAt: Date.now(),
+    };
+  }
+
+  function ensureStoredLinhCanFromRoles(users, userData, member) {
+    if (userData?.linhCan?.quality && QUALITY_ROLES.includes(userData.linhCan.quality) && Array.isArray(userData.linhCan.elements)) {
+      return { ok: true, restored: false };
+    }
+
+    const restored = buildStoredLinhCanFromMemberRoles(member, userData?.linhCan ?? null);
+    if (!restored) {
+      return {
+        ok: false,
+        restored: false,
+        message: 'Đạo hữu chưa có đủ dữ liệu linh căn nên chưa thể tẩy tủy. Hãy dùng Khai Đạo Hồ hoặc nhờ Trưởng Lão kiểm tra role Linh Căn gọn.',
+      };
+    }
+
+    userData.linhCan = restored;
+    userData.linhCanPurify = Math.max(0, Number(userData.linhCanPurify) || 0);
+    users[member.id] = userData;
+    return { ok: true, restored: true, linhCan: restored };
+  }
+
+  function getMemberCongPhapOption(member) {
+    if (!member?.roles?.cache) return null;
+    const selected = CONG_PHAP_OPTIONS.find((option) =>
+      member.roles.cache.some((role) => role.name === option.roleName),
+    );
+    if (selected) return selected;
+
+    const legacyRoleName = LEGACY_CONG_PHAP_ROLE_NAMES.find((name) =>
+      member.roles.cache.some((role) => role.name === name),
+    );
+    if (!legacyRoleName) return null;
+
+    const legacyKey = LEGACY_CONG_PHAP_KEY_MAP[legacyRoleName] || 'system';
+    const mapped = CONG_PHAP_OPTIONS.find((option) => option.key === legacyKey) || CONG_PHAP_OPTIONS.find((option) => option.key === 'system');
+    return mapped ? { ...mapped, legacyRoleName } : null;
+  }
+
+  function getMemberCongPhapKey(member) {
+    return getMemberCongPhapOption(member)?.key || 'default';
+  }
+
+
+  function normalizeCongPhapProgress(userData) {
+    if (!userData.congPhapProgress || typeof userData.congPhapProgress !== 'object') {
+      userData.congPhapProgress = {};
+    }
+    for (const option of CONG_PHAP_OPTIONS) {
+      const current = userData.congPhapProgress[option.key] && typeof userData.congPhapProgress[option.key] === 'object'
+        ? userData.congPhapProgress[option.key]
+        : {};
+      userData.congPhapProgress[option.key] = {
+        exp: Math.max(0, Number(current.exp) || 0),
+        stage: Math.max(0, Math.min(CONG_PHAP_MAX_STAGE, Number(current.stage) || 0)),
+        insight: Math.max(0, Number(current.insight) || 0),
+        breakthroughFails: Math.max(0, Number(current.breakthroughFails) || 0),
+      };
+    }
+    return userData.congPhapProgress;
+  }
+
+  function getCongPhapProgress(userData, key = 'default') {
+    normalizeCongPhapProgress(userData);
+    const actualKey = CONG_PHAP_OPTIONS.some((option) => option.key === key) ? key : 'system';
+    return userData.congPhapProgress[actualKey] || userData.congPhapProgress.system;
+  }
+
+  function getCongPhapStageInfo(stage = 0) {
+    return CONG_PHAP_STAGES[Math.max(0, Math.min(CONG_PHAP_MAX_STAGE, Number(stage) || 0))] || CONG_PHAP_STAGES[0];
+  }
+
+  function getCongPhapNextStageInfo(stage = 0) {
+    const next = Math.max(0, Math.min(CONG_PHAP_MAX_STAGE, Number(stage) + 1));
+    return next === stage ? null : CONG_PHAP_STAGES[next];
+  }
+
+  function getCongPhapRealmCapStage(member, fallbackExp = 0) {
+    const level = getCurrentTuViLevel(member, fallbackExp);
+    const realmIndex = Math.floor(level / MINOR_REALMS.length);
+    if (realmIndex <= 1) return 1;
+    if (realmIndex <= 3) return 2;
+    if (realmIndex <= 5) return 3;
+    if (realmIndex <= 7) return 4;
+    if (realmIndex <= 10) return 5;
+    if (realmIndex <= 13) return 6;
+    if (realmIndex <= 20) return 7;
+    return CONG_PHAP_MAX_STAGE;
+  }
+
+  function getCongPhapUnlockedSkillCount(userData, member = null) {
+    const key = getMemberCongPhapKey(member);
+    const progress = getCongPhapProgress(userData, key);
+    const stageInfo = getCongPhapStageInfo(progress.stage);
+    return Math.max(1, Math.min(4, Number(stageInfo.unlock) || 1));
+  }
+
+  async function grantCongPhapMastery(userData, member, amount = 1, reason = 'tu luyện') {
+    if (!member?.roles?.cache) return { gained: 0, key: 'default', stage: 0 };
+    normalizeCongPhapProgress(userData);
+    const key = getMemberCongPhapKey(member);
+    const progress = getCongPhapProgress(userData, key);
+    const gained = Math.max(0, Math.floor(Number(amount) || 0));
+    progress.exp += gained;
+    progress.insight += Math.max(0, Math.floor(gained / 5));
+    progress.lastReason = reason;
+    progress.lastGainAt = Date.now();
+    return { gained, key, stage: progress.stage, exp: progress.exp };
+  }
+
+  function formatCongPhapProgress(userData, member = null) {
+    const option = getMemberCongPhapOption(member);
+    const key = option?.key || 'system';
+    const progress = getCongPhapProgress(userData, key);
+    const stage = getCongPhapStageInfo(progress.stage);
+    const next = getCongPhapNextStageInfo(progress.stage);
+    const unlocked = getCongPhapUnlockedSkillCount(userData, member);
+    const nextText = next ? `${Math.max(0, next.exp - progress.exp)} thuần thục nữa để thử ngộ pháp lên **${next.name}**.` : 'Đã đạt cực hạn công pháp.';
+    return [
+      `Công pháp: **${option?.roleName || 'Chưa chọn'}**`,
+      `Cảnh giới công pháp: **${stage.name}**`,
+      `Thuần thục: **${progress.exp}**`,
+      `Tâm đắc: **${progress.insight}**`,
+      `Skill đang mở: **${unlocked}/4**`,
+      nextText,
+    ].join('\n');
+  }
+
+
+  function makeSmallProgressBar(current, required, size = 10) {
+    const need = Math.max(1, Number(required) || 1);
+    const value = Math.max(0, Number(current) || 0);
+    const filled = Math.max(0, Math.min(size, Math.round((value / need) * size)));
+    return `${'▰'.repeat(filled)}${'▱'.repeat(size - filled)}`;
+  }
+
+  function formatCongPhapStageLadder(currentStage = 0) {
+    return CONG_PHAP_STAGES.map((stage, index) => {
+      const mark = index === currentStage ? '➤' : index < currentStage ? '✓' : '◇';
+      const skillText = stage.unlock >= 4 ? 'mở tuyệt kỹ' : `mở ${stage.unlock}/4 chiêu`;
+      const expText = index === 0 ? 'mặc định' : `${stage.exp} thuần thục`;
+      return `${mark} **${index + 1}. ${stage.name}** · ${expText} · ${skillText}`;
+    }).join('\n');
+  }
+
+  function formatCongPhapRankOverview(userData, member = null) {
+    const option = getMemberCongPhapOption(member);
+    const key = option?.key || 'system';
+    const progress = getCongPhapProgress(userData, key);
+    const stage = getCongPhapStageInfo(progress.stage);
+    const next = getCongPhapNextStageInfo(progress.stage);
+    const unlocked = getCongPhapUnlockedSkillCount(userData, member);
+    const cap = getCongPhapRealmCapStage(member, userData.tuViExp);
+    const nextNeed = next ? Math.max(0, next.exp - progress.exp) : 0;
+    const bar = next ? makeSmallProgressBar(progress.exp, next.exp) : '▰▰▰▰▰▰▰▰▰▰';
+    const capText = progress.stage >= cap && next ? `\n⚠️ Tu vi hiện tại chỉ cho phép công pháp tối đa tới **${getCongPhapStageInfo(cap).name}**.` : '';
+
+    return [
+      `Công pháp: **${option?.roleName || 'Chưa chọn'}**`,
+      `Cấp bậc: **${progress.stage + 1}/${CONG_PHAP_STAGES.length} · ${stage.name}**`,
+      `Thuần thục: **${progress.exp}** ${next ? `/ ${next.exp}` : ''} ${bar}`,
+      `Tâm đắc: **${progress.insight}** · Số lần ngộ pháp hụt: **${progress.breakthroughFails || 0}**`,
+      `Skill đã mở: **${unlocked}/4**`,
+      next ? `Còn **${nextNeed} thuần thục** để thử ngộ pháp lên **${next.name}**.${capText}` : 'Công pháp đã tới cực hạn hiện tại.',
+    ].join('\n');
+  }
+
+  function buildCongPhapRankEmbed(userData, member, viewerId = null) {
+    const option = getMemberCongPhapOption(member);
+    const progress = getCongPhapProgress(userData, option?.key || 'system');
+    const next = getCongPhapNextStageInfo(progress.stage);
+    const cap = getCongPhapRealmCapStage(member, userData.tuViExp);
+    const cost = next ? 60 + progress.stage * 45 : 0;
+    const capNote = next && progress.stage + 1 > cap
+      ? `Tu vi chưa đủ để lên **${next.name}**. Trần hiện tại: **${getCongPhapStageInfo(cap).name}**.`
+      : 'Nếu đủ thuần thục và cống hiến thì có thể thử ngộ pháp.';
+
+    return uiEmbedBase('Cấp Bậc Công Pháp', member, UI_V19.colors.violet)
+      .setDescription(formatCongPhapRankOverview(userData, member))
+      .addFields(
+        { name: 'Lộ trình 9 bậc', value: formatCongPhapStageLadder(progress.stage), inline: false },
+        { name: 'Cách cày cấp', value: 'Nhận thuần thục từ checkcommit, tụ linh, nhiệm vụ, bí cảnh, đấu pháp và bế quan. Tâm đắc tăng theo thuần thục, dùng để trợ ngộ pháp.', inline: false },
+        { name: 'Ngộ pháp / lên cấp', value: next ? `Cần **${next.exp} thuần thục** và **${cost} cống hiến** để thử lên **${next.name}**. ${capNote}` : 'Đã đạt cực hạn công pháp.', inline: false },
+      )
+      .setFooter({ text: viewerId && viewerId !== member.id ? 'Đang xem cấp bậc công pháp của đạo hữu khác.' : 'Dùng /congphap hanhdong:ngophap để thử phá bình cảnh công pháp.' });
+  }
+
+  function buildCongPhapSkillBook(key = 'default') {
+    const theme = CONG_PHAP_SKILL_THEMES[key];
+    if (!theme) return DEFAULT_COMBAT_SKILLS;
+    const mode = theme.mode;
+    const attackExtra = mode === 'dot' ? { dotPower: 0.07 } : mode === 'stun' ? { stunChance: 0.16 } : mode === 'crit' ? { critChance: 0.2 } : { targetDefDebuff: 0.08 };
+    const guardExtra = mode === 'survive' ? { healPct: 0.09, shieldPct: 0.12 } : mode === 'guard' ? { shieldPct: 0.2, defBuff: 0.12 } : mode === 'speed' ? { healPct: 0.05, defBuff: 0.12, priority: 1 } : { shieldPct: 0.12, atkBuff: 0.06 };
+    const ultimateExtra = mode === 'stun' ? { stunChance: 0.24 } : mode === 'crit' ? { critChance: 0.26 } : mode === 'dot' ? { dotPower: 0.1 } : { critChance: 0.14 };
+
+    return [
+      { key: `${key}_basic`, emoji: theme.emoji, name: theme.basic, power: mode === 'speed' ? 0.86 : 0.92, accuracy: mode === 'speed' ? 0.98 : 0.95, qiCost: 0, qiGain: 16, priority: mode === 'speed' ? 1 : 0, effect: 'Chiêu nhập môn ổn định.' },
+      { key: `${key}_attack`, emoji: theme.emoji, name: theme.attack, power: mode === 'crit' ? 1.25 : 1.12, accuracy: 0.86, qiCost: 18, qiGain: 10, effect: 'Chiêu công kích theo công pháp.', ...attackExtra },
+      { key: `${key}_guard`, emoji: theme.emoji, name: theme.guard, power: 0.52, accuracy: 1, qiCost: 16, qiGain: 12, effect: 'Chiêu phòng hộ/điều tức.', ...guardExtra },
+      { key: `${key}_ultimate`, emoji: theme.emoji, name: theme.ultimate, power: mode === 'crit' ? 1.74 : 1.62, accuracy: mode === 'guard' ? 0.82 : 0.78, qiCost: 42, qiGain: 6, effect: 'Tuyệt kỹ công pháp.', ...ultimateExtra },
+    ];
+  }
+
   function getMemberCongPhapText(member) {
+    if (!member?.roles?.cache) return 'Chưa chọn công pháp chủ tu.';
     const selected = CONG_PHAP_OPTIONS.filter((option) =>
       member.roles.cache.some((role) => role.name === option.roleName),
     );
 
-    if (selected.length === 0) {
-      return 'Chưa chọn công pháp chủ tu.';
+    if (selected.length > 0) {
+      if (selected.length === 1) return selected[0].roleName;
+      return `${selected[0].roleName}
+Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nhất đạo tâm.`;
     }
 
-    if (selected.length === 1) {
-      return selected[0].roleName;
+    const legacy = getMemberCongPhapOption(member);
+    if (legacy?.legacyRoleName) return `${legacy.legacyRoleName} → ${legacy.roleName}`;
+    return 'Chưa chọn công pháp chủ tu.';
+  }
+
+  function getCombatSkillBookForMember(member) {
+    return buildCongPhapSkillBook(getMemberCongPhapKey(member));
+  }
+
+  function getEquipmentSlotLabel(type) {
+    return {
+      weapon: 'Vũ khí chính',
+      artifact: 'Pháp bảo lõi',
+      armor: 'Giáp/Đạo bào',
+      tool: 'Pháp cụ nghề',
+      talisman: 'Phù hộ thân',
+      bag: 'Túi trữ vật',
+    }[type] || 'Trang bị';
+  }
+
+  function getEquippedGearKeys(userData) {
+    normalizeInventoryData(userData);
+    return [
+      userData.equippedWeapon,
+      userData.equippedArtifact,
+      userData.equippedArmor,
+      userData.equippedTool,
+      userData.equippedTalisman,
+    ].filter(Boolean).filter((key, index, arr) => arr.indexOf(key) === index);
+  }
+
+  function getEquippedCombatItems(userData) {
+    return getEquippedGearKeys(userData)
+      .map((key) => getShopItemByKey(key))
+      .filter((item) => isPhapBaoItem(item) || ['tool', 'talisman'].includes(item?.type));
+  }
+
+  function getEquippedCombatItem(userData) {
+    return getEquippedCombatItems(userData)[0] || null;
+  }
+
+  function getEquippedCombatItemEntry(userData) {
+    const item = getEquippedCombatItem(userData);
+    return item ? getBestInventoryEntryByKey(userData, item.key) : null;
+  }
+
+  function getCombinedItemCombatProfile(userData) {
+    const items = getEquippedCombatItems(userData);
+    const profiles = items.map((item) => getItemCombatProfile(item, getBestInventoryEntryByKey(userData, item.key))).filter(Boolean);
+    if (profiles.length === 0) return null;
+    const combined = {
+      label: items.map((item) => item.name).slice(0, 5).join(' + '),
+      text: profiles.map((profile) => profile.text).filter(Boolean).slice(0, 3).join(' '),
+      power: 0, accuracy: 0, critChance: 0, qiGain: 0, shieldPct: 0, healPct: 0, defBuff: 0, dotPower: 0, stunChance: 0, priority: 0,
+    };
+    for (const profile of profiles) {
+      combined.power += Number(profile.power) || 0;
+      combined.accuracy += Number(profile.accuracy) || 0;
+      combined.critChance += Number(profile.critChance) || 0;
+      combined.qiGain += Number(profile.qiGain) || 0;
+      combined.shieldPct += Number(profile.shieldPct) || 0;
+      combined.healPct += Number(profile.healPct) || 0;
+      combined.defBuff += Number(profile.defBuff) || 0;
+      combined.dotPower += Number(profile.dotPower) || 0;
+      combined.stunChance += Number(profile.stunChance) || 0;
+      combined.priority += Number(profile.priority) || 0;
+    }
+    // Nhiều slot cùng lúc mạnh hơn nhưng có soft cap, không để người chơi biến thành bug boss mặc đồ shop.
+    combined.power = Math.min(0.95, combined.power);
+    combined.accuracy = Math.min(0.22, combined.accuracy);
+    combined.critChance = Math.min(0.32, combined.critChance);
+    combined.qiGain = Math.min(14, Math.round(combined.qiGain));
+    combined.shieldPct = Math.min(0.42, combined.shieldPct);
+    combined.healPct = Math.min(0.22, combined.healPct);
+    combined.defBuff = Math.min(0.32, combined.defBuff);
+    combined.dotPower = Math.min(0.25, combined.dotPower);
+    combined.stunChance = Math.min(0.28, combined.stunChance);
+    combined.priority = Math.min(8, Math.round(combined.priority));
+    return combined;
+  }
+
+  function getItemCombatProfile(item = null, entry = null) {
+    if (!item) return null;
+    const quality = entry ? getInventoryItemQuality(entry) : getQualityByKey(DEFAULT_ITEM_QUALITY);
+    const qualityScale = Math.max(1, Number(quality.multiplier) || 1);
+    const base = ITEM_COMBAT_PROFILES[item.type] || ITEM_COMBAT_PROFILES.artifact;
+    const family = ITEM_FAMILY_COMBAT_BONUSES[item.family] || ITEM_FAMILY_COMBAT_BONUSES.system;
+    const explicit = item.combatEffect || {};
+    const tierIndex = getCatalogTierIndexForItem(item);
+    const tierCombatPower = [0, 0.035, 0.075, 0.14][tierIndex] || 0;
+    const profession = getProfessionForItem(item);
+    const professionCombat = profession?.combat || {};
+    const profile = {
+      label: profession ? `${base.label} · ${profession.name}` : base.label,
+      text: [base.text, family.text, profession ? `Đạo Nghiệp: ${profession.name}.` : null].filter(Boolean).join(' '),
+      power: ((Number(base.power) || 0) + (Number(family.power) || 0) + (Number(explicit.power) || 0) + (Number(professionCombat.power) || 0) + tierCombatPower) * qualityScale,
+      accuracy: (Number(base.accuracy) || 0) + (Number(family.accuracy) || 0) + (Number(explicit.accuracy) || 0) + (Number(professionCombat.accuracy) || 0),
+      critChance: (Number(base.critChance) || 0) + (Number(family.critChance) || 0) + (Number(explicit.critChance) || 0) + (Number(professionCombat.critChance) || 0),
+      qiGain: Math.round((Number(base.qiGain) || 0) + (Number(family.qiGain) || 0) + (Number(explicit.qiGain) || 0) + (Number(professionCombat.qiGain) || 0)),
+      shieldPct: ((Number(base.shieldPct) || 0) + (Number(family.shieldPct) || 0) + (Number(explicit.shieldPct) || 0) + (Number(professionCombat.shieldPct) || 0)) * Math.min(1.8, qualityScale),
+      healPct: ((Number(base.healPct) || 0) + (Number(family.healPct) || 0) + (Number(explicit.healPct) || 0) + (Number(professionCombat.healPct) || 0)) * Math.min(1.6, qualityScale),
+      defBuff: (Number(base.defBuff) || 0) + (Number(family.defBuff) || 0) + (Number(explicit.defBuff) || 0) + (Number(professionCombat.defBuff) || 0),
+      dotPower: (Number(base.dotPower) || 0) + (Number(family.dotPower) || 0) + (Number(explicit.dotPower) || 0) + (Number(professionCombat.dotPower) || 0),
+      stunChance: (Number(base.stunChance) || 0) + (Number(family.stunChance) || 0) + (Number(explicit.stunChance) || 0) + (Number(professionCombat.stunChance) || 0),
+      priority: Math.round((Number(base.priority) || 0) + (Number(family.priority) || 0) + (Number(explicit.priority) || 0) + (Number(professionCombat.priority) || 0)),
+    };
+    if (entry && getInventoryItemCurse(entry)) {
+      profile.power += 0.04;
+      profile.critChance += 0.03;
+      profile.accuracy -= 0.02;
+    }
+    return profile;
+  }
+
+  function applyItemProfileToSkill(skill, profile, index) {
+    if (!profile) return { ...skill };
+    const upgraded = { ...skill };
+    const isAttack = index === 1 || index === 3;
+    const isGuard = index === 2;
+    upgraded.power = Number(((Number(upgraded.power) || 1) + (isAttack ? profile.power : profile.power * 0.35)).toFixed(3));
+    upgraded.accuracy = clampNumber((Number(upgraded.accuracy) || 0.9) + profile.accuracy, 0.45, 1);
+    upgraded.critChance = clampNumber((Number(upgraded.critChance) || 0) + (isAttack ? profile.critChance : profile.critChance * 0.45), 0, 0.55);
+    upgraded.qiGain = Math.min(35, (Number(upgraded.qiGain) || 0) + profile.qiGain);
+    upgraded.priority = (Number(upgraded.priority) || 0) + profile.priority;
+    if (isGuard && profile.shieldPct) upgraded.shieldPct = (Number(upgraded.shieldPct) || 0) + profile.shieldPct;
+    if (isGuard && profile.healPct) upgraded.healPct = (Number(upgraded.healPct) || 0) + profile.healPct;
+    if (isGuard && profile.defBuff) upgraded.defBuff = (Number(upgraded.defBuff) || 0) + profile.defBuff;
+    if (isAttack && profile.dotPower) upgraded.dotPower = (Number(upgraded.dotPower) || 0) + profile.dotPower;
+    if (isAttack && profile.stunChance) upgraded.stunChance = (Number(upgraded.stunChance) || 0) + profile.stunChance;
+    upgraded.effect = `${upgraded.effect || 'Chiêu thức.'} Pháp bảo: ${profile.label}.`;
+    return upgraded;
+  }
+
+  function getCombatSkillBookForUser(member, userData = null) {
+    const baseSkills = getCombatSkillBookForMember(member);
+    if (!userData) return baseSkills;
+    const unlocked = getCongPhapUnlockedSkillCount(userData, member);
+    const profile = getCombinedItemCombatProfile(userData);
+    return baseSkills.slice(0, unlocked).map((skill, index) => applyItemProfileToSkill(skill, profile, index));
+  }
+
+
+  function formatCombatSkill(skill) {
+    return `${skill.emoji || '✦'} **${skill.name}** · lực ${Math.round((Number(skill.power) || 1) * 100)} · chính xác ${Math.round((Number(skill.accuracy) || 1) * 100)}% · khí ${Number(skill.qiCost) || 0}${skill.effect ? `\n↳ ${skill.effect}` : ''}`;
+  }
+
+  async function handleSkill(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
     }
 
-    return `${selected[0].roleName}\nCòn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nhất đạo tâm.`;
+    const targetUser = interaction.options.getUser('thanhvien') || interaction.user;
+    const member = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
+    if (!member) {
+      await interaction.reply({ content: 'Không tìm thấy đạo hữu này trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, targetUser.id);
+    normalizeInventoryData(userData);
+    const option = getMemberCongPhapOption(member);
+    const equippedItems = getEquippedCombatItems(userData);
+    const equippedText = equippedItems.length > 0 ? equippedItems.map((item) => item.name).join(' + ') : 'Chưa trang bị';
+    const skills = getCombatSkillBookForUser(member, userData);
+    const baseSkills = getCombatSkillBookForMember(member);
+    const unlocked = skills.length;
+    const embed = uiEmbedBase('Bộ Skill Công Pháp', member, UI_V19.colors.violet)
+      .setDescription([
+        `${member} đang tu: **${option?.roleName || 'Chưa chọn công pháp'}**`,
+        formatCongPhapProgress(userData, member),
+        `Trang bị đang cường hóa skill: **${equippedText}**`,
+        'Combat mới cho người chơi tự chọn chiêu từng lượt; party sẽ xoay lượt từng người, quá hạn thì tự động dùng chiêu cơ bản.',
+      ].join('\n'))
+      .addFields(
+        baseSkills.map((skill, index) => ({
+          name: `Chiêu ${index + 1}${index < unlocked ? ' · Đã mở' : ' · Chưa mở'}`,
+          value: index < unlocked ? formatCombatSkill(skills[index]) : `${skill.emoji || '✦'} **${skill.name}**\n↳ Cần nâng cảnh giới công pháp để mở khóa.`,
+          inline: false,
+        })),
+      );
+
+    await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+  }
+
+
+
+  async function handleCapCongPhap(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const targetUser = interaction.options.getUser('thanhvien') || interaction.user;
+    const member = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
+    if (!member) {
+      await interaction.reply({ content: 'Không tìm thấy đạo hữu này trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, targetUser.id);
+    normalizeCongPhapProgress(userData);
+    saveUsers(users);
+
+    const embed = buildCongPhapRankEmbed(userData, member, interaction.user.id);
+    await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+  }
+
+
+  async function handleCongPhap(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const action = interaction.options.getString('hanhdong') || 'xem';
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    const member = await interaction.guild.members.fetch(interaction.user.id);
+    normalizeCongPhapProgress(userData);
+    const option = getMemberCongPhapOption(member);
+    if (!option) {
+      await interaction.reply({ content: 'Đạo hữu chưa chọn công pháp. Dùng bảng `/setup-congphap` của tông môn để chọn trước.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const progress = getCongPhapProgress(userData, option.key);
+    const stage = getCongPhapStageInfo(progress.stage);
+    const next = getCongPhapNextStageInfo(progress.stage);
+
+    if (action === 'ngophap') {
+      if (!next) {
+        await interaction.reply({ content: 'Công pháp đã Hóa Đạo, không còn bình cảnh để phá.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const cap = getCongPhapRealmCapStage(member, userData.tuViExp);
+      if (progress.stage + 1 > cap) {
+        await interaction.reply({ content: `Cảnh giới bản thân chưa đủ để ngộ pháp lên **${next.name}**. Hãy đột phá tu vi trước.`, flags: MessageFlags.Ephemeral });
+        return;
+      }
+      if (progress.exp < next.exp) {
+        await interaction.reply({ content: `Chưa đủ độ thuần thục. Cần **${next.exp}**, hiện có **${progress.exp}**.`, flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const cost = 60 + progress.stage * 45;
+      if (getSpendableCongHien(userData) < cost) {
+        await interaction.reply({ content: `Ngộ pháp cần **${cost} cống hiến** để đổi đan hương/đạo quyển phụ trợ.`, flags: MessageFlags.Ephemeral });
+        return;
+      }
+      userData.congHienBalance = Math.max(0, getSpendableCongHien(userData) - cost);
+      const stats = getUserDirectStats(userData, member);
+      const chance = Math.max(35, Math.min(92, CONG_PHAP_BREAKTHROUGH_BASE_CHANCE + Math.round(stats.dotPha * 0.35) - Math.max(0, stats.tamMaRisk) * 0.15 + progress.insight * 0.08));
+      const roll = Math.random() * 100;
+      if (roll <= chance) {
+        progress.stage += 1;
+        progress.insight = Math.max(0, progress.insight - 10);
+        saveUsers(users);
+        await interaction.reply({ content: `Ngộ pháp thành công! **${option.roleName}**: ${stage.name} → **${next.name}**. Skill mở: **${getCongPhapStageInfo(progress.stage).unlock}/4**.`, flags: MessageFlags.Ephemeral });
+        return;
+      }
+      progress.breakthroughFails += 1;
+      progress.insight = Math.max(0, progress.insight - 4);
+      if (Math.random() < 0.18) setTemporaryStatus(userData, 'Tâm Ma Quấn Thân', 3 * 60 * 60 * 1000, { dotPhaPenalty: true, directStats: { tamMaRisk: 8, dotPha: -3 } });
+      saveUsers(users);
+      await interaction.reply({ content: `Ngộ pháp thất bại. Tỉ lệ **${Math.round(chance)}%**, thiên số **${Math.ceil(roll)}**. Không tụt cấp công pháp, nhưng hao tâm đắc/cống hiến.`, flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const embed = buildCongPhapRankEmbed(userData, member, interaction.user.id)
+      .setTitle('Công Pháp Tu Luyện');
+    saveUsers(users);
+    await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+  }
+  function getLinhCanQualityIndex(qualityName) {
+    return QUALITY_ROLES.indexOf(qualityName);
+  }
+
+  function getCurrentLinhCanQuality(userData, member = null) {
+    const storedQuality = userData?.linhCan?.quality;
+    if (storedQuality && QUALITY_ROLES.includes(storedQuality)) {
+      return storedQuality;
+    }
+
+    if (member) {
+      return getMemberQualityText(member);
+    }
+
+    return 'Chưa xác định phẩm chất linh căn.';
+  }
+
+  function getNextLinhCanQuality(qualityName) {
+    const index = getLinhCanQualityIndex(qualityName);
+    if (index < 0 || index >= QUALITY_ROLES.length - 1) return null;
+    return QUALITY_ROLES[index + 1];
+  }
+
+  function getLinhCanPurifyNeed(qualityName) {
+    return LINH_CAN_PURIFY_COSTS[qualityName] ?? null;
+  }
+
+  function formatLinhCanPurifyProgress(userData) {
+    const quality = getCurrentLinhCanQuality(userData);
+    const next = getNextLinhCanQuality(quality);
+
+    if (!next) {
+      return `${quality} đã đạt cực hạn. Tẩy tủy: **viên mãn**.`;
+    }
+
+    const current = Math.max(0, Number(userData?.linhCanPurify) || 0);
+    const need = getLinhCanPurifyNeed(quality) ?? 9999;
+    return `${quality} → ${next}: **${current}/${need}** điểm tẩy tủy`;
+  }
+
+  function applyLinhCanPurifyGain(userData, gain) {
+    if (!userData?.linhCan?.quality || !QUALITY_ROLES.includes(userData.linhCan.quality)) {
+      return { ok: false, message: 'Đạo hữu chưa khai linh căn nên chưa thể tẩy tủy. Hãy dùng /linhcan hoặc Khai Đạo Hồ trước.' };
+    }
+
+    userData.linhCanPurify = Math.max(0, Number(userData.linhCanPurify) || 0) + Math.max(0, Number(gain) || 0);
+    const upgrades = [];
+
+    while (true) {
+      const currentQuality = userData.linhCan.quality;
+      const nextQuality = getNextLinhCanQuality(currentQuality);
+      const need = getLinhCanPurifyNeed(currentQuality);
+
+      if (!nextQuality || !need || userData.linhCanPurify < need) break;
+
+      userData.linhCanPurify -= need;
+      userData.linhCan.quality = nextQuality;
+      upgrades.push(`${currentQuality} → ${nextQuality}`);
+    }
+
+    return {
+      ok: true,
+      upgrades,
+      quality: userData.linhCan.quality,
+      progress: formatLinhCanPurifyProgress(userData),
+    };
+  }
+
+  async function syncStoredLinhCanRoles(guild, member, userData) {
+    if (!userData?.linhCan?.displayName) {
+      return { ok: false, message: 'Chưa có dữ liệu linh căn để đồng bộ role.' };
+    }
+
+    await guild.roles.fetch();
+    const freshMember = await guild.members.fetch(member.id);
+    const roleCheck = resolveResultRoles(guild, userData.linhCan);
+
+    if (roleCheck.missing.length > 0) {
+      return { ok: false, message: `Thiếu role linh căn: ${roleCheck.missing.join(', ')}. Hãy chạy \`node create-roles.js\` rồi thử lại.` };
+    }
+
+    const oldLinhCanRoles = getExistingLinhCanRoles(freshMember);
+    const blocker = await getLinhCanRoleManageBlocker(guild, [
+      ...roleCheck.roles,
+      ...oldLinhCanRoles.values(),
+    ]);
+
+    if (blocker) {
+      return { ok: false, message: blocker };
+    }
+
+    try {
+      if (oldLinhCanRoles.size > 0) {
+        await freshMember.roles.remove(oldLinhCanRoles, 'Dong bo linh can sau khi tay tuy.');
+      }
+
+      await freshMember.roles.add(roleCheck.roles, 'Gan linh can moi sau khi tay tuy.');
+    } catch (error) {
+      if (error.code === 50013) {
+        return { ok: false, message: 'Thiên Đạo chưa đủ quyền Quản Lý Vai Trò hoặc role Thiên Đạo đang nằm dưới role linh căn cần gán.' };
+      }
+
+      throw error;
+    }
+
+    return { ok: true, member: freshMember };
+  }
+
+  function createEmptyDirectStats() {
+    return {
+      tuVi: 0,
+      congHien: 0,
+      lucChien: 0,
+      dotPha: 0,
+      tamMaRisk: 0,
+      trongThuongDuration: 0,
+      tuViLoss: 0,
+      statusDuration: 0,
+    };
+  }
+
+  function normalizeDirectStats(stats = {}) {
+    const normalized = createEmptyDirectStats();
+
+    for (const key of DIRECT_STAT_KEYS) {
+      normalized[key] = Math.max(-80, Math.min(200, Number(stats[key]) || 0));
+    }
+
+    return normalized;
+  }
+
+  function addDirectStats(...blocks) {
+    const total = createEmptyDirectStats();
+
+    for (const block of blocks) {
+      const stats = normalizeDirectStats(block);
+      for (const key of DIRECT_STAT_KEYS) {
+        total[key] += stats[key];
+      }
+    }
+
+    total.tuVi = Math.max(-60, Math.min(120, total.tuVi));
+    total.congHien = Math.max(-60, Math.min(120, total.congHien));
+    total.lucChien = Math.max(-80, Math.min(180, total.lucChien));
+    total.dotPha = Math.max(-50, Math.min(60, total.dotPha));
+    total.tamMaRisk = Math.max(-80, Math.min(160, total.tamMaRisk));
+    total.trongThuongDuration = Math.max(-80, Math.min(160, total.trongThuongDuration));
+    total.tuViLoss = Math.max(-80, Math.min(160, total.tuViLoss));
+    total.statusDuration = Math.max(-80, Math.min(160, total.statusDuration));
+
+    return total;
+  }
+
+  function statMultiplier(percent) {
+    return Math.max(0.05, 1 + (Number(percent) || 0) / 100);
+  }
+
+  function applyDirectPercent(amount, percent) {
+    return Math.max(0, Math.floor((Number(amount) || 0) * statMultiplier(percent)));
+  }
+
+  function formatSignedPercent(value) {
+    const rounded = Math.round(Number(value) || 0);
+    return rounded > 0 ? `+${rounded}%` : `${rounded}%`;
+  }
+
+
+  function formatSourceStatsCompact(stats = {}) {
+    const labels = {
+      sourcePower: 'Sức Source',
+      runtime: 'Nhịp vận hành',
+      integrity: 'Độ toàn vẹn',
+      logic: 'Logic',
+      throughput: 'Hiệu suất',
+      stability: 'Độ ổn định',
+    };
+    return Object.entries(labels)
+      .map(([key, label]) => [label, Number(stats[key]) || 0])
+      .filter(([, value]) => value !== 0)
+      .map(([label, value]) => `${label} ${value > 0 ? '+' : ''}${value}`)
+      .join(' · ') || 'Không có';
+  }
+
+  function formatSourceRiskStatsCompact(stats = {}) {
+    const labels = {
+      technicalDebt: 'Nợ kỹ thuật',
+      entropy: 'Hỗn loạn',
+      nghiepLuc: 'Nghiệp',
+    };
+    return Object.entries(labels)
+      .map(([key, label]) => [label, Number(stats[key]) || 0])
+      .filter(([, value]) => value !== 0)
+      .map(([label, value]) => `${label} ${value > 0 ? '+' : ''}${value}`)
+      .join(' · ') || '0';
+  }
+
+  function formatDirectStatsCompact(stats = createEmptyDirectStats(), options = {}) {
+    const direct = normalizeDirectStats(stats);
+    const lines = [];
+    const push = (label, value, suffix = '') => {
+      if (Math.round(Number(value) || 0) === 0) return;
+      lines.push(`${label}: **${formatSignedPercent(value)}**${suffix}`);
+    };
+
+    push('Tu vi', direct.tuVi);
+    push('Cống hiến', direct.congHien);
+    push('Lực chiến', direct.lucChien);
+    push('Đột phá', direct.dotPha);
+    push('Tâm Ma', direct.tamMaRisk, ' nguy cơ');
+    push('Trọng thương', direct.trongThuongDuration, ' thời gian');
+
+    if (lines.length === 0) {
+      return options.emptyText ?? 'Không cộng thêm.';
+    }
+
+    return lines.join('\n');
+  }
+
+  function formatDirectStats(stats = createEmptyDirectStats()) {
+    const direct = normalizeDirectStats(stats);
+    return [
+      `Tu vi: **${formatSignedPercent(direct.tuVi)}**`,
+      `Cống hiến: **${formatSignedPercent(direct.congHien)}**`,
+      `Lực chiến: **${formatSignedPercent(direct.lucChien)}**`,
+      `Đột phá: **${formatSignedPercent(direct.dotPha)}**`,
+      `Tâm Ma: **${formatSignedPercent(direct.tamMaRisk)}** nguy cơ`,
+      `Trọng thương: **${formatSignedPercent(direct.trongThuongDuration)}** thời gian`,
+    ].join('\n');
+  }
+
+  function getRarityDirectStats(rarity, type = 'menh') {
+    const base = {
+      'Ổn định': { tuVi: 2, congHien: 1, lucChien: 1, dotPha: 1, tamMaRisk: -2, trongThuongDuration: -2 },
+      'Hiếm': { tuVi: 4, congHien: 2, lucChien: 2, dotPha: 2, tamMaRisk: -1, trongThuongDuration: -3 },
+      'Dị biến': { tuVi: 6, congHien: 0, lucChien: 4, dotPha: -1, tamMaRisk: 4, trongThuongDuration: 0 },
+      'Cực hiếm': { tuVi: 7, congHien: 3, lucChien: 5, dotPha: 3, tamMaRisk: 3, trongThuongDuration: -4 },
+      'Thiên mệnh': { tuVi: 9, congHien: 4, lucChien: 6, dotPha: 4, tamMaRisk: 6, trongThuongDuration: -5 },
+      'Cấm kỵ': { tuVi: 12, congHien: 5, lucChien: 9, dotPha: -4, tamMaRisk: 12, trongThuongDuration: 8, tuViLoss: 8 },
+    }[rarity] ?? { tuVi: 3, congHien: 1, lucChien: 1, dotPha: 1, tamMaRisk: 0, trongThuongDuration: 0 };
+
+    if (type === 'dao') {
+      return normalizeDirectStats({
+        tuVi: Math.floor(base.tuVi * 0.7),
+        congHien: Math.floor(base.congHien * 0.6),
+        lucChien: Math.ceil(base.lucChien * 1.35),
+        dotPha: Math.ceil(base.dotPha * 1.15),
+        tamMaRisk: base.tamMaRisk,
+        trongThuongDuration: Math.floor((base.trongThuongDuration || 0) * 1.3),
+        tuViLoss: base.tuViLoss || 0,
+        statusDuration: base.statusDuration || 0,
+      });
+    }
+
+    return normalizeDirectStats(base);
+  }
+
+  function getMenhCachDirectStats(result) {
+    if (!result?.name) return createEmptyDirectStats();
+
+    const rarity = result.rarity ?? result.resultRarity ?? 'Ổn định';
+    const daoTam = Number(result.daoTam) || 50;
+    const phucDuyen = Number(result.phucDuyen) || 50;
+    const nghiepLuc = Number(result.nghiepLuc) || 50;
+
+    return addDirectStats(
+      getRarityDirectStats(rarity, 'menh'),
+      {
+        tuVi: Math.floor((daoTam - 50) / 12),
+        congHien: Math.floor((phucDuyen - 50) / 14),
+        lucChien: Math.floor((nghiepLuc - 50) / 18),
+        dotPha: Math.floor((daoTam - 50) / 16),
+        tamMaRisk: Math.floor((nghiepLuc - daoTam) / 10),
+        trongThuongDuration: Math.floor((nghiepLuc - phucDuyen) / 18),
+        tuViLoss: Math.floor((nghiepLuc - 50) / 15),
+        statusDuration: Math.floor((nghiepLuc - daoTam) / 18),
+      },
+    );
+  }
+
+  function getHuyenMachDirectStats(result) {
+    if (!result?.name) return createEmptyDirectStats();
+
+    const rarity = result.rarity ?? result.resultRarity ?? 'Ổn định';
+    const purity = Number(result.purity) || 50;
+    const awakening = Number(result.awakening) || 50;
+    const stability = Number(result.stability) || 50;
+
+    return addDirectStats(
+      getRarityDirectStats(rarity, 'dao'),
+      {
+        tuVi: Math.floor((purity - 50) / 14),
+        congHien: 0,
+        lucChien: Math.floor((awakening - 50) / 10),
+        dotPha: Math.floor((stability - 50) / 13),
+        tamMaRisk: Math.floor((50 - stability) / 9),
+        trongThuongDuration: Math.floor((50 - stability) / 8),
+        tuViLoss: Math.floor((50 - stability) / 12),
+        statusDuration: Math.floor((50 - stability) / 12),
+      },
+    );
+  }
+
+  function getItemDirectStats(item, entry = null) {
+    if (!item) return createEmptyDirectStats();
+
+    const quality = entry ? getInventoryItemQuality(entry) : null;
+    const qualityScale = quality ? Math.max(1, Number(quality.multiplier) || 1) : 1;
+    const basePower = Math.round((Number(item.powerBonus) || 0) * 100);
+    const base = createEmptyDirectStats();
+
+    const hasSourceStats = item.sourceStats && typeof item.sourceStats === 'object';
+    if (hasSourceStats) {
+      const sourceDirect = sourceStatsToDirectStats(item.sourceStats, item.riskStats || {}, item.type, Number(item.stability) || 80);
+      for (const key of DIRECT_STAT_KEYS) {
+        base[key] += Number(sourceDirect[key]) || 0;
+      }
+    } else if (item.directStats && typeof item.directStats === 'object') {
+      for (const key of DIRECT_STAT_KEYS) {
+        base[key] += Number(item.directStats[key]) || 0;
+      }
+    }
+
+    if (isPhapBaoItem(item)) {
+      base.lucChien += Math.max(2, basePower || 4);
+      base.tuVi += item.type === 'artifact' ? 2 : 0;
+      base.congHien += item.family === 'git' || item.family === 'clean' ? 2 : 0;
+      base.dotPha += item.family === 'security' || item.family === 'system' ? 2 : 0;
+      base.trongThuongDuration -= item.family === 'clean' || item.family === 'security' ? 4 : 0;
+      base.tamMaRisk -= item.family === 'clean' ? 3 : 0;
+      if (item.type === 'armor') {
+        base.lucChien += 4;
+        base.trongThuongDuration -= 6;
+        base.tamMaRisk -= 2;
+        base.tuViLoss -= 2;
+      }
+    }
+
+    if (item.type === 'tool') {
+      base.congHien += 2;
+      base.tamMaRisk -= 1;
+    }
+
+    if (item.type === 'bag') {
+      base.trongThuongDuration -= 2;
+    }
+
+    if (item.type === 'talisman') {
+      base.dotPha += 2;
+      base.tamMaRisk -= 3;
+      base.trongThuongDuration -= 2;
+    }
+
+    const profession = getProfessionForItem(item);
+    if (profession?.stats) {
+      for (const key of DIRECT_STAT_KEYS) {
+        base[key] += Math.round((Number(profession.stats[key]) || 0) * 0.55);
+      }
+    }
+
+    const scaled = createEmptyDirectStats();
+    for (const key of DIRECT_STAT_KEYS) {
+      scaled[key] = Math.round(base[key] * qualityScale);
+    }
+
+    if (entry && getInventoryItemCurse(entry)) {
+      scaled.lucChien += 6;
+      scaled.tamMaRisk += 8;
+      scaled.trongThuongDuration += 8;
+      scaled.tuViLoss += 8;
+    }
+
+    return normalizeDirectStats(scaled);
+  }
+
+  function getEquippedItemSetDirectStats(userData) {
+    const setCounts = {};
+    for (const item of getEquippedCombatItems(userData)) {
+      if (!item.itemSet) continue;
+      setCounts[item.itemSet] = (setCounts[item.itemSet] || 0) + 1;
+    }
+    let stats = createEmptyDirectStats();
+    for (const [setKey, count] of Object.entries(setCounts)) {
+      const set = ITEM_SET_DEFINITIONS[setKey];
+      if (!set) continue;
+      if (count >= 2) stats = addDirectStats(stats, set.stats2 || {});
+      if (count >= 3) stats = addDirectStats(stats, set.stats3 || {});
+    }
+    return normalizeDirectStats(stats);
+  }
+
+  function getEquippedPhapBaoDirectStats(userData) {
+    normalizeInventoryData(userData);
+    let stats = createEmptyDirectStats();
+    for (const key of getEquippedGearKeys(userData)) {
+      const item = getShopItemByKey(key);
+      if (!item || !(isPhapBaoItem(item) || ['tool', 'talisman'].includes(item.type))) continue;
+      const entry = getBestInventoryEntryByKey(userData, key);
+      stats = addDirectStats(stats, getItemDirectStats(item, entry));
+    }
+    stats = addDirectStats(stats, getEquippedItemSetDirectStats(userData));
+    return normalizeDirectStats(stats);
+  }
+
+  function getTemporaryStatusDirectStats(userData) {
+    if (!isTemporaryStatusActive(userData) || !userData?.temporaryDirectStats) {
+      return createEmptyDirectStats();
+    }
+    return normalizeDirectStats(userData.temporaryDirectStats);
+  }
+
+  function getUserDirectStats(userData, member = null) {
+    return addDirectStats(
+      getMenhCachDirectStats(userData?.menhCach),
+      getHuyenMachDirectStats(userData?.huyenMach),
+      getEquippedPhapBaoDirectStats(userData),
+      getDaoNgheDirectStats(userData),
+      getTemporaryStatusDirectStats(userData),
+    );
+  }
+
+  function getMenhCachBuffValue(result) {
+    return statMultiplier(getMenhCachDirectStats(result).tuVi);
+  }
+
+  function getHuyenMachBuffValue(result) {
+    return statMultiplier(getHuyenMachDirectStats(result).tuVi);
+  }
+
+  function getMenhCachBuffText(result) {
+    if (!result?.name) return 'Chưa khai mệnh cách.';
+    return formatDirectStats(getMenhCachDirectStats(result));
+  }
+
+  function getHuyenMachBuffText(result) {
+    if (!result?.name) return 'Chưa khai đạo thể.';
+    return formatDirectStats(getHuyenMachDirectStats(result));
+  }
+
+  function formatProfileDestinyBuff(result, type = 'menh') {
+    if (!result?.name) {
+      return type === 'dao' ? 'Chưa khai đạo thể.' : 'Chưa khai mệnh cách.';
+    }
+    return formatDirectStats(type === 'dao' ? getHuyenMachDirectStats(result) : getMenhCachDirectStats(result));
+  }
+
+  function getArchetypeBuffByKey(table, key, name = null) {
+    const found = table.find((entry) => entry.key === key || (name && entry.name === name));
+    return found?.buff ?? null;
+  }
+
+  function hydrateDestinyBuffs(userData) {
+    return userData;
+  }
+
+  function getDestinyBuffMultiplier(userData) {
+    const stats = addDirectStats(getMenhCachDirectStats(userData?.menhCach), getHuyenMachDirectStats(userData?.huyenMach));
+    return {
+      value: statMultiplier(stats.tuVi),
+      summary: formatDirectStats(stats),
+    };
+  }
+
+  function getTotalTuViMultiplier(userData) {
+    return statMultiplier(getUserDirectStats(userData).tuVi);
+  }
+
+  function addTuViExp(userData, amount, member = null) {
+    const stats = getUserDirectStats(userData, member);
+    const finalAmount = applyDirectPercent(amount, stats.tuVi);
+    userData.tuViExp = Math.max(0, (Number(userData.tuViExp) || 0) + finalAmount);
+    return finalAmount;
+  }
+
+  function adjustTamMaChance(userData, basePercent) {
+    const stats = getUserDirectStats(userData);
+    return Math.max(0, Math.min(95, Math.round((Number(basePercent) || 0) * statMultiplier(stats.tamMaRisk))));
+  }
+
+  function adjustInjuryDuration(userData, durationMs) {
+    const stats = getUserDirectStats(userData);
+    return Math.max(5 * 60 * 1000, Math.floor((Number(durationMs) || 0) * statMultiplier(stats.trongThuongDuration)));
+  }
+
+  function adjustTuViLossPercent(userData, percent) {
+    const stats = getUserDirectStats(userData);
+    return Math.max(0, Math.min(0.95, (Number(percent) || 0) * statMultiplier(stats.tuViLoss)));
+  }
+
+  function adjustStatusDuration(userData, durationMs) {
+    const stats = getUserDirectStats(userData);
+    return Math.max(60 * 1000, Math.floor((Number(durationMs) || 0) * statMultiplier(stats.statusDuration)));
   }
 
   function getLinhCanQualityBonus(member) {
@@ -4573,6 +15318,10 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       'Thượng Phẩm Linh Căn': 10,
       'Cực Phẩm Linh Căn': 15,
       'Thiên Phẩm Linh Căn': 20,
+      'Thánh Phẩm Linh Căn': 25,
+      'Tiên Phẩm Linh Căn': 30,
+      'Hỗn Độn Linh Căn': 36,
+      'Đạo Nguyên Linh Căn': 45,
     };
     const roleName = QUALITY_ROLES.find((name) => member.roles.cache.some((role) => role.name === name));
 
@@ -4602,6 +15351,10 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       'Thượng Phẩm Linh Căn': 1.06,
       'Cực Phẩm Linh Căn': 1.1,
       'Thiên Phẩm Linh Căn': 1.15,
+      'Thánh Phẩm Linh Căn': 1.22,
+      'Tiên Phẩm Linh Căn': 1.30,
+      'Hỗn Độn Linh Căn': 1.42,
+      'Đạo Nguyên Linh Căn': 1.60,
     };
     const roleName = QUALITY_ROLES.find((name) => member.roles.cache.some((role) => role.name === name));
 
@@ -4612,11 +15365,11 @@ const AUTO_DISCIPLE_THRESHOLDS = [
   }
 
   function getCongPhapMultiplier(member) {
-    const roleName = CONG_PHAP_ROLE_NAMES.find((name) => member.roles.cache.some((role) => role.name === name));
+    const option = getMemberCongPhapOption(member);
 
     return {
-      value: roleName ? 1.05 : 1,
-      text: roleName ?? 'Chưa chọn công pháp',
+      value: option ? 1.05 : 1,
+      text: option?.roleName ?? 'Chưa chọn công pháp',
     };
   }
 
@@ -4634,8 +15387,10 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       userData.storageBag = DEFAULT_STORAGE_BAG;
     }
 
-    if (userData.equippedArtifact && !userData.inventory.some((entry) => getInventoryItemKey(entry) === userData.equippedArtifact)) {
-      userData.equippedArtifact = null;
+    for (const slot of ['equippedArtifact', 'equippedWeapon', 'equippedArmor', 'equippedTool', 'equippedTalisman']) {
+      if (userData[slot] && !userData.inventory.some((entry) => getInventoryItemKey(entry) === userData[slot])) {
+        userData[slot] = null;
+      }
     }
 
     if (typeof userData.congHienBalance !== 'number') {
@@ -4646,6 +15401,7 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     userData.beQuanUntil = Number(userData.beQuanUntil || userData.temporaryStatusExpireAt) || 0;
     userData.beQuanReward = Number(userData.beQuanReward || userData.beQuanRewardExp) || 0;
     normalizeMissionUserData(userData);
+    normalizeDaoNgheData(userData);
 
     return userData;
   }
@@ -4748,20 +15504,380 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     return ['pill', 'talisman', 'upgrade_stone'].includes(item?.type);
   }
 
-  function getShopPages() {
+
+  function clampIndex(index, length) {
+    if (!Number.isFinite(index) || length <= 0) return 0;
+    return Math.max(0, Math.min(length - 1, Math.trunc(index)));
+  }
+
+  function getShopCategoryConfigs() {
+    return [
+      { type: 'artifact', emoji: '⚔️', title: 'Đạo Cụ Source', note: 'Vũ khí, pháp bảo và giáp theo 12 loại lỗi; có phẩm chất, chỉ số Source và độ ổn định.' },
+      { type: 'tool', emoji: '🧰', title: 'Pháp Cụ Debug/Patch', note: 'Dụng cụ hỗ trợ nghề nghiệp, sự cố, craft và chống lỗi.' },
+      { type: 'pill', emoji: '💊', title: 'Source Đan/Dịch', note: 'Đan dược Source dùng trực tiếp bằng /dung item.' },
+      { type: 'talisman', emoji: '📜', title: 'Lệnh/Phù Source', note: 'Patch, rollback, firewall, xác minh và hộ thân theo loại lỗi.' },
+      { type: 'upgrade_stone', emoji: '💎', title: 'Source Refactor Thạch', note: 'Đá nâng phẩm cho /nangpham, đồng bộ hệ Source Phẩm.' },
+      { type: 'bag', emoji: '🎒', title: 'Cache Túi / Storage', note: 'Mở rộng sức chứa hành trang theo Data/Cache Source.' },
+    ];
+  }
+
+  function getShopCategoryByType(type) {
+    return getShopCategoryConfigs().find((category) => category.type === type) ?? getShopCategoryConfigs()[0];
+  }
+
+  function getShopItemsByType(type, member = null) {
+    const categoryTypes = type === 'artifact' ? ['artifact', 'weapon', 'armor'] : [type];
+    return getDailyShopUnlockedItems(member).filter((item) => categoryTypes.includes(item.type));
+  }
+
+  function getRoleSuggestedShopItems(member = null) {
+    const tier = getShopTierForMember(member);
+    const dailyItems = getDailyShopUnlockedItems(member);
+    const phapBao = dailyItems
+      .filter((item) => ['artifact', 'weapon', 'armor'].includes(item.type) && (item.minShopTier === tier || (!item.minShopTier && tier === 'tap_dich')) && isShopItemUnlockedForMember(item, member))
+      .slice(0, 2);
+    const support = dailyItems
+      .filter((item) => ['pill', 'talisman', 'upgrade_stone'].includes(item.type) && isShopItemUnlockedForMember(item, member))
+      .slice(0, 1);
+    return [...phapBao, ...support].slice(0, 3);
+  }
+
+  function buildShopMenuEmbed(userData, member = null) {
+    const tier = getShopTierForMember(member);
+    const categories = getShopCategoryConfigs().slice(0, 6);
+
+    return new EmbedBuilder()
+      .setColor(GOLD)
+      .setTitle('Tông Môn Bảo Khố · Đạo Nghiệp')
+      .setDescription([
+        `Cấp shop: **${getShopTierLabel(tier)}**`,
+        `Cống hiến: **${getSpendableCongHien(userData)}**`,
+        `Hôm nay: **${DAILY_SHOP_LIMIT} món**`,
+        'Shop chỉ bày Đạo Cụ Source, Source đan, Cache túi và Refactor thạch; đồ bảo khố cũ đã ẩn khỏi danh sách.',
+      ].join('\n'))
+      .addFields({
+        name: 'Danh mục',
+        value: categories.map((category, index) => `**${index + 1}.** ${category.emoji} ${category.title}`).join('\n'),
+        inline: false,
+      })
+      .setFooter({ text: '6 mục · 2 hàng · chọn bên dưới' });
+  }
+
+
+  function buildShopMenuRows(userId) {
+    const buttons = getShopCategoryConfigs().slice(0, 6).map((category) =>
+      new ButtonBuilder()
+        .setCustomId(`${SHOP_CATEGORY_BUTTON_PREFIX}${userId}:${category.type}`)
+        .setLabel(`${category.emoji} ${category.title}`.slice(0, 80))
+        .setStyle(ButtonStyle.Primary),
+    );
+
+    // Mục lục chính cố định 6 mục, chia 2 hàng x 3 nút cho cân.
+    return [
+      new ActionRowBuilder().addComponents(...buttons.slice(0, 3)),
+      new ActionRowBuilder().addComponents(...buttons.slice(3, 6)),
+    ];
+  }
+
+
+  function buildShopItemEmbed(userData, type, itemIndex = 0, member = null) {
+    const category = getShopCategoryByType(type);
+    const items = getShopItemsByType(category.type, member);
+    const pageSize = 3;
+    const pageCount = Math.max(1, Math.ceil(items.length / pageSize));
+    const safePage = clampIndex(Number(itemIndex) || 0, pageCount);
+    const visibleItems = items.slice(safePage * pageSize, safePage * pageSize + pageSize);
+    const tierLabel = getShopTierLabel(getShopTierForMember(member));
+    const spendable = getSpendableCongHien(userData);
+
+    if (visibleItems.length === 0) {
+      return new EmbedBuilder()
+        .setColor(GOLD)
+        .setTitle(`Bảo Khố · ${category.title}`)
+        .setDescription('Danh mục này chưa có vật phẩm.');
+    }
+
+    const embed = new EmbedBuilder()
+      .setColor(GOLD)
+      .setTitle(`Bảo Khố · ${category.title}`)
+      .setDescription([
+        `**Cấp shop:** ${tierLabel}`,
+        `**Cống hiến:** ${spendable}`,
+        `**Hiển thị:** 3 món/trang`,
+      ].join('\n'));
+
+    visibleItems.forEach((item, index) => {
+      const ownedCount = countInventoryItem(userData, item.key);
+      const price = getShopItemPrice(item, member);
+      const itemType = getItemTypeText(item.type);
+      const qualityLine = isPhapBaoItem(item)
+        ? `Cấp rơi: **${getPhapBaoQualityRollText(item)}**`
+        : null;
+      const classLine = item.itemClass ? `Đẳng cấp: **${getSourceItemClass(item.itemClass).name}**` : (item.weaponGrade ? `Cấp nền: **${item.weaponGrade}**` : null);
+      const rarityLine = item.itemRarity ? `Độ hiếm: **${getSourceItemRarity(item.itemRarity).name}**` : null;
+      const sourceFamily = item.sourceFamilyName || getSourceDefectFamily(item.sourceFamily || item.family)?.name || null;
+      const sourceGroup = item.sourceItemGroupName || getSourceItemGroup(item.sourceItemGroup)?.name || null;
+      const sourceLine = sourceFamily || sourceGroup ? `Source: **${[sourceFamily, sourceGroup].filter(Boolean).join(' · ')}**` : null;
+      const stabilityLine = Number.isFinite(Number(item.stability)) ? `Ổn định: **${item.stability}/100**` : null;
+      const professionLine = `Nghề hợp: **${getItemProfessionText(item)}**`;
+      const sourceStatsLine = item.sourceStats ? `Source stat: ${formatSourceStatsCompact(item.sourceStats)}${item.riskStats ? ` · Rủi ro: ${formatSourceRiskStatsCompact(item.riskStats)}` : ''}` : null;
+      embed.addFields({
+        name: `${safePage * pageSize + index + 1}. ${item.name}`,
+        value: [
+          `Loại: **${itemType}** · Giá: **${price}** · Sở hữu: **${ownedCount}**`,
+          qualityLine,
+          classLine,
+          rarityLine,
+          sourceLine,
+          stabilityLine,
+          professionLine,
+          sourceStatsLine,
+          `Chỉ số:\n${formatDirectStatsCompact(getItemDirectStats(item))}`,
+        ].filter(Boolean).join('\n'),
+        inline: false,
+      });
+    });
+
+    return embed.setFooter({ text: `Trang ${safePage + 1}/${pageCount}` });
+  }
+
+
+  function buildShopItemRows(userId, type, itemIndex = 0, member = null) {
+    const category = getShopCategoryByType(type);
+    const items = getShopItemsByType(category.type, member);
+    const pageSize = 3;
+    const pageCount = Math.max(1, Math.ceil(items.length / pageSize));
+    const safePage = clampIndex(Number(itemIndex) || 0, pageCount);
+    const previousPage = safePage <= 0 ? pageCount - 1 : safePage - 1;
+    const nextPage = safePage >= pageCount - 1 ? 0 : safePage + 1;
+    const visibleItems = items.slice(safePage * pageSize, safePage * pageSize + pageSize);
+
+    const buyButtons = visibleItems.map((item, index) =>
+      new ButtonBuilder()
+        .setCustomId(`${SHOP_BUY_BUTTON_PREFIX}${userId}:${item.key}`)
+        .setLabel(`Đổi ${safePage * pageSize + index + 1}`.slice(0, 80))
+        .setStyle(ButtonStyle.Success),
+    );
+
+    const navButtons = [
+      new ButtonBuilder()
+        .setCustomId(`${SHOP_ITEM_BUTTON_PREFIX}${userId}:${category.type}:prev:${previousPage}`)
+        .setLabel('◀ Trước')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(pageCount <= 1),
+      new ButtonBuilder()
+        .setCustomId(`${SHOP_ITEM_BUTTON_PREFIX}${userId}:${category.type}:view:${safePage}`)
+        .setLabel(`Trang ${safePage + 1}/${pageCount}`)
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(true),
+      new ButtonBuilder()
+        .setCustomId(`${SHOP_ITEM_BUTTON_PREFIX}${userId}:${category.type}:next:${nextPage}`)
+        .setLabel('Sau ▶')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(pageCount <= 1),
+      new ButtonBuilder()
+        .setCustomId(`${SHOP_BACK_BUTTON_PREFIX}${userId}`)
+        .setLabel('Mục lục')
+        .setStyle(ButtonStyle.Primary),
+    ];
+
+    const rows = [];
+    if (buyButtons.length > 0) {
+      rows.push(new ActionRowBuilder().addComponents(...buyButtons.slice(0, 3)));
+    }
+    rows.push(new ActionRowBuilder().addComponents(...dedupeButtonsByCustomId(navButtons).slice(0, 5)));
+    return rows;
+  }
+
+
+  function getShopItemUsageText(item) {
+    if (!item) return 'Không rõ.';
+    if (item.type === 'artifact') return `Trang bị: \`/trangbi item:${item.key}\`\nHiến tông: \`/banphapbao item:${item.key}\``;
+    if (item.type === 'weapon') return `Trang bị: \`/trangbi item:${item.key}\`\nHiến tông: \`/banphapbao item:${item.key}\``;
+    if (item.type === 'armor') return `Trang bị giáp: \`/trangbi item:${item.key}\`\nHiến tông: \`/banphapbao item:${item.key}\``;
+    if (item.type === 'bag') return `Trang bị túi: \`/trangbi item:${item.key}\``;
+    if (item.type === 'tool') return `Trang bị hỗ trợ combat/nhiệm vụ: \`/trangbi item:${item.key}\``;
+    if (item.type === 'pill') return `Dùng: \`/dung item:${item.key}\``;
+    if (item.type === 'upgrade_stone') return `Dùng để nâng phẩm: \`/nangpham item:<mã_vật_phẩm>\``;
+    if (item.type === 'talisman') return `Trang bị hộ thân hoặc giữ để cơ chế tự dùng: \`/trangbi item:${item.key}\``;
+    return 'Giữ trong túi để dùng cho cơ chế tương ứng.';
+  }
+
+  function chunkComponents(components, size = 5) {
+    const chunks = [];
+    for (let i = 0; i < components.length; i += size) {
+      chunks.push(components.slice(i, i + size));
+    }
+    return chunks;
+  }
+
+  function getInventoryTypeConfigs() {
+    return getShopCategoryConfigs();
+  }
+
+  function getInventoryEntriesByType(userData, type) {
+    normalizeInventoryData(userData);
+    const categoryTypes = type === 'artifact' ? ['artifact', 'weapon', 'armor'] : [type];
+    return userData.inventory.filter((entry) => {
+      const item = getShopItemByKey(getInventoryItemKey(entry));
+      return categoryTypes.includes(item?.type ?? 'unknown');
+    });
+  }
+
+  function buildTuiDoMenuEmbed(member, userData) {
+    const bag = getStorageBag(userData);
+    const equippedGear = getEquippedCombatItems(userData);
+    const equippedPhapBao = equippedGear[0] || null;
+    const categoryLines = getInventoryTypeConfigs()
+      .map((category) => {
+        const count = getInventoryEntriesByType(userData, category.type).length;
+        return count > 0 ? `${category.emoji} **${category.title}** · ${count}` : null;
+      })
+      .filter(Boolean);
+
+    return new EmbedBuilder()
+      .setColor(GOLD)
+      .setTitle(`Túi Đồ · ${member.displayName}`)
+      .setDescription([
+        `Túi: **${bag.name}** · ${getInventoryUsed(userData)}/${getStorageCapacity(userData)} ô`,
+        `Trang bị: **${equippedGear.length > 0 ? equippedGear.map((item) => item.name).join(' · ') : 'Chưa trang bị'}**`,
+        `Cống hiến: **${getSpendableCongHien(userData)}**`,
+      ].join('\n'))
+      .addFields({
+        name: 'Danh mục có vật phẩm',
+        value: categoryLines.length > 0 ? categoryLines.join('\n') : 'Túi đang trống.',
+        inline: false,
+      })
+      .setFooter({ text: 'Chọn danh mục để xem vật phẩm' });
+  }
+
+
+  function buildTuiDoMenuRows(viewerId, targetId, userData) {
+    const buttons = getInventoryTypeConfigs()
+      .filter((category) => getInventoryEntriesByType(userData, category.type).length > 0)
+      .map((category) =>
+        new ButtonBuilder()
+          .setCustomId(`${TUIDO_CATEGORY_BUTTON_PREFIX}${viewerId}:${targetId}:${category.type}`)
+          .setLabel(`${category.emoji} ${category.title}`.slice(0, 80))
+          .setStyle(ButtonStyle.Primary),
+      );
+
+    
+    const safeButtons = dedupeButtonsByCustomId(buttons);
+    return chunkComponents(safeButtons, 5).map((rowButtons) => new ActionRowBuilder().addComponents(...rowButtons));
+  }
+
+
+  function buildTuiDoItemEmbed(member, userData, type, itemIndex = 0) {
+    const category = getShopCategoryByType(type);
+    const entries = getInventoryEntriesByType(userData, category.type);
+    const safeIndex = clampIndex(itemIndex, entries.length);
+    const entry = entries[safeIndex];
+    const itemKey = getInventoryItemKey(entry);
+    const item = getShopItemByKey(itemKey);
+    const quality = getInventoryItemQuality(entry);
+    const curse = getInventoryItemCurse(entry);
+    const displayName = item?.name ?? itemKey ?? 'Không rõ';
+
+    if (!entry) {
+      return new EmbedBuilder()
+        .setColor(GOLD)
+        .setTitle(`Túi Đồ · ${member.displayName}`)
+        .setDescription(`Không có vật phẩm trong **${category.title}**.`);
+    }
+
+    return new EmbedBuilder()
+      .setColor(quality.color ?? GOLD)
+      .setTitle(`${category.emoji} ${displayName}`)
+      .setDescription([
+        `Mã: \`${itemKey}\``,
+        `Loại: **${getItemTypeText(item?.type)}**`,
+        `Phẩm chất: **${quality.name}**`,
+        curse ? `Nguyền: **${curse.name}** · ${uiTrim(curse.effect, 120)}` : 'Nguyền: Không',
+      ].join('\n'))
+      .addFields(
+        { name: 'Đạo nghiệp hợp', value: getItemProfessionText(item), inline: true },
+        { name: 'Chỉ số', value: formatDirectStatsCompact(getItemDirectStats(item, entry)), inline: false },
+        { name: 'Combat', value: getItemCombatProfile(item, entry)?.text || 'Không có hiệu ứng combat trực tiếp.', inline: false },
+        { name: 'Cơ chế riêng', value: [item?.itemSet ? `Set: **${ITEM_SET_DEFINITIONS[item.itemSet]?.name || item.itemSet}**` : null, item?.passiveEffect ? `Nội tại: ${item.passiveEffect}` : null, item?.activeEffect ? `Kích hoạt: ${item.activeEffect}` : null, item?.procEffect ? `Proc: ${item.procEffect}` : null].filter(Boolean).join('\n') || 'Không có cơ chế riêng.', inline: false },
+        { name: 'Cách dùng', value: item ? getShopItemUsageText(item) : 'Không rõ.', inline: false },
+      )
+      .setFooter({ text: `${safeIndex + 1}/${entries.length}` });
+  }
+
+
+  function buildTuiDoItemRows(viewerId, targetId, userData, type, itemIndex = 0) {
+    const category = getShopCategoryByType(type);
+    const entries = getInventoryEntriesByType(userData, category.type);
+    const safeIndex = clampIndex(itemIndex, entries.length);
+    const previousIndex = safeIndex <= 0 ? entries.length - 1 : safeIndex - 1;
+    const nextIndex = safeIndex >= entries.length - 1 ? 0 : safeIndex + 1;
+    const pageLabel = entries.length > 0 ? `${safeIndex + 1}/${entries.length}` : '0/0';
+    const buttons = [];
+
+    if (entries.length > 1) {
+      if (previousIndex === nextIndex) {
+        // Khi danh mục chỉ có 2 vật phẩm, Trước và Sau đều trỏ cùng một item.
+        // Discord không cho 2 button trong cùng message trùng custom_id, nên chỉ giữ 1 nút chuyển.
+        buttons.push(
+          new ButtonBuilder()
+            .setCustomId(`${TUIDO_ITEM_BUTTON_PREFIX}${viewerId}:${targetId}:${category.type}:${nextIndex}`)
+            .setLabel('Món còn lại')
+            .setStyle(ButtonStyle.Primary),
+        );
+      } else {
+        buttons.push(
+          new ButtonBuilder()
+            .setCustomId(`${TUIDO_ITEM_BUTTON_PREFIX}${viewerId}:${targetId}:${category.type}:${previousIndex}`)
+            .setLabel('◀ Trước')
+            .setStyle(ButtonStyle.Secondary),
+          new ButtonBuilder()
+            .setCustomId(`${TUIDO_ITEM_BUTTON_PREFIX}${viewerId}:${targetId}:${category.type}:${nextIndex}`)
+            .setLabel('Sau ▶')
+            .setStyle(ButtonStyle.Primary),
+        );
+      }
+    }
+
+    if (entries.length > 0) {
+      buttons.splice(
+        Math.min(1, buttons.length),
+        0,
+        new ButtonBuilder()
+          .setCustomId(`${TUIDO_ITEM_BUTTON_PREFIX}${viewerId}:${targetId}:${category.type}:view:${safeIndex}`)
+          .setLabel(pageLabel)
+          .setStyle(ButtonStyle.Secondary)
+          .setDisabled(true),
+      );
+    }
+
+    buttons.push(
+      new ButtonBuilder()
+        .setCustomId(`${TUIDO_BACK_BUTTON_PREFIX}${viewerId}:${targetId}`)
+        .setLabel('Mục lục túi')
+        .setStyle(ButtonStyle.Secondary),
+    );
+
+    const safeButtons = dedupeButtonsByCustomId(buttons);
+
+    return chunkComponents(safeButtons, 5).map((rowButtons) => new ActionRowBuilder().addComponents(...rowButtons));
+  }
+
+
+  function getShopPages(member = null) {
     const configs = [
-      { type: 'artifact', title: 'Pháp Bảo', note: 'Trang bị để tăng hiệu quả chiến đấu và tu luyện.' },
-      { type: 'tool', title: 'Dụng Cụ Quét Dọn', note: 'Tăng hiệu quả nhiệm vụ quét dọn và cơ duyên.' },
+      { type: 'artifact', title: 'Đạo Khí & Giáp', note: 'Gộp vũ khí, pháp bảo, giáp; 1440 món có set, passive/proc, phẩm chất.' },
+      { type: 'tool', title: 'Dụng Cụ Quét Dọn', note: 'Tăng hiệu quả nhiệm vụ quét dọn và kỳ ngộ.' },
       { type: 'pill', title: 'Đan Dược', note: 'Dùng trực tiếp bằng /dung item.' },
       { type: 'talisman', title: 'Phù Lục', note: 'Dùng hỗ trợ nhiệm vụ, nâng phẩm hoặc phòng thân.' },
       { type: 'upgrade_stone', title: 'Refactor Linh Thạch', note: 'Vật phẩm đặc biệt dùng nâng phẩm với /nangpham.' },
       { type: 'bag', title: 'Túi Trữ Vật', note: 'Mở rộng sức chứa hành trang.' },
     ];
-    const pageSize = 8;
+    const pageSize = 3;
     const pages = [];
 
     for (const config of configs) {
-      const items = SHOP_ITEMS.filter((item) => item.type === config.type);
+      const items = getShopItemsByType(config.type, member);
       for (let offset = 0; offset < Math.max(1, items.length); offset += pageSize) {
         pages.push({ ...config, offset, pageSize });
       }
@@ -4770,43 +15886,71 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     return pages;
   }
 
-  function buildShopEmbed(userData, pageIndex = 0) {
-    const pages = getShopPages();
+  function buildShopEmbed(userData, pageIndex = 0, member = null) {
+    const pages = getShopPages(member);
     const safePageIndex = Math.max(0, Math.min(pages.length - 1, pageIndex));
     const page = pages[safePageIndex];
-    const items = SHOP_ITEMS
-      .filter((item) => item.type === page.type)
+    const items = getShopItemsByType(page.type, member)
       .slice(page.offset, page.offset + page.pageSize);
-    const lines = items.map((item) => `\`${item.key}\` - **${item.name}**\nGiá: ${item.price} cống hiến\n${item.effect}`);
+    const lines = items.map((item) => `\`${item.key}\` - **${item.name}**\nGiá: ${getShopItemPrice(item, member)} cống hiến\n${item.effect}`);
 
     return new EmbedBuilder()
       .setColor(GOLD)
       .setTitle(`Shop Tông Môn - ${page.title}`)
       .setDescription([
+        `Cấp shop: **${getShopTierLabel(getShopTierForMember(member))}**`,
         `Cống hiến khả dụng: **${getSpendableCongHien(userData)}**`,
-        `Trang ${safePageIndex + 1}/${pages.length} - ${page.note}`,
-        'Dùng `/mua item:<mã_vật_phẩm>` để đổi vật phẩm. Ví dụ: `/mua item:git_kiem`.',
+        `Shop hôm nay: **${DAILY_SHOP_LIMIT} món**, giá Ký Danh linh động từ **120** cống hiến`,
+        page.note,
+        'Dùng `/mua item:<mã_vật_phẩm>` để đổi vật phẩm.',
       ].join('\n'))
-      .addFields({ name: page.title, value: lines.join('\n\n') || 'Trang này chưa có vật phẩm.', inline: false });
+      .addFields({ name: page.title, value: lines.join('\n\n') || 'Chưa có vật phẩm.', inline: false });
   }
 
-  function buildShopPageRows(userId, pageIndex = 0) {
-    const pages = getShopPages();
+  function buildShopPageRows(userId, pageIndex = 0, member = null) {
+    const pages = getShopPages(member);
+    if (pages.length <= 0) return [];
+
     const previousPage = pageIndex <= 0 ? pages.length - 1 : pageIndex - 1;
     const nextPage = pageIndex >= pages.length - 1 ? 0 : pageIndex + 1;
+    const buttons = [];
 
-    return [
-      new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`${SHOP_PAGE_BUTTON_PREFIX}${userId}:${previousPage}`)
-          .setLabel('Trang trước')
-          .setStyle(ButtonStyle.Secondary),
+    if (pages.length > 1) {
+      if (previousPage === nextPage) {
+        buttons.push(
+          new ButtonBuilder()
+            .setCustomId(`${SHOP_PAGE_BUTTON_PREFIX}${userId}:${nextPage}`)
+            .setLabel(`Trang khác ${nextPage + 1}`)
+            .setStyle(ButtonStyle.Primary),
+        );
+      } else {
+        buttons.push(
+          new ButtonBuilder()
+            .setCustomId(`${SHOP_PAGE_BUTTON_PREFIX}${userId}:${previousPage}`)
+            .setLabel('◀ Trước')
+            .setStyle(ButtonStyle.Secondary),
+        );
+      }
+    }
+
+    buttons.push(
+      new ButtonBuilder()
+        .setCustomId(`${SHOP_PAGE_BUTTON_PREFIX}${userId}:view:${pageIndex}`)
+        .setLabel(`Trang ${pageIndex + 1}/${pages.length}`)
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(true),
+    );
+
+    if (pages.length > 1 && previousPage !== nextPage) {
+      buttons.push(
         new ButtonBuilder()
           .setCustomId(`${SHOP_PAGE_BUTTON_PREFIX}${userId}:${nextPage}`)
-          .setLabel('Trang sau')
+          .setLabel('Sau ▶')
           .setStyle(ButtonStyle.Primary),
-      ),
-    ];
+      );
+    }
+
+    return [new ActionRowBuilder().addComponents(...dedupeButtonsByCustomId(buttons).slice(0, 5))];
   }
 
   function getStorageBag(userData) {
@@ -4828,9 +15972,19 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     return getInventoryUsed(userData) + slots <= getStorageCapacity(userData);
   }
 
+  function getInventoryFullMessage(userData, slots = 1) {
+    normalizeInventoryData(userData);
+    const used = getInventoryUsed(userData);
+    const capacity = getStorageCapacity(userData);
+    const after = used + slots;
+    return `Túi trữ vật không đủ chỗ (**${used}/${capacity} ô**, cần thêm **${slots}**, sau thao tác sẽ là **${after}/${capacity}**). Hãy đổi túi cao hơn, dùng bớt hoặc tặng bớt vật phẩm.`;
+  }
+
   function addItemToInventory(userData, key, options = {}) {
     normalizeInventoryData(userData);
-    userData.inventory.push(createInventoryItem(key, options));
+    const entry = createInventoryItem(key, options);
+    userData.inventory.push(entry);
+    return entry;
   }
 
   function getInventoryItemIndex(userData, key, predicate = null) {
@@ -4879,10 +16033,12 @@ const AUTO_DISCIPLE_THRESHOLDS = [
   function getItemTypeText(type) {
     return {
       artifact: 'Pháp bảo',
-      tool: 'Dụng cụ quét dọn',
-      pill: 'Đan dược',
-      talisman: 'Phù lục',
-      upgrade_stone: 'Refactor Linh Thạch',
+      weapon: 'Vũ khí',
+      armor: 'Giáp/Đạo bào',
+      tool: 'Pháp cụ nghề',
+      pill: 'Đan/Dịch mã',
+      talisman: 'Lệnh/Phù',
+      upgrade_stone: 'Refactor Thạch',
       bag: 'Túi trữ vật',
     }[type] ?? 'Vật phẩm';
   }
@@ -4894,9 +16050,11 @@ const AUTO_DISCIPLE_THRESHOLDS = [
 
   function addCongHien(userData, amount) {
     normalizeInventoryData(userData);
-    const value = Number(amount) || 0;
+    const stats = getUserDirectStats(userData);
+    const value = applyDirectPercent(amount, stats.congHien);
     userData.congHienExp = Math.max(0, (Number(userData.congHienExp) || 0) + value);
     userData.congHienBalance = Math.max(0, (Number(userData.congHienBalance) || 0) + value);
+    return value;
   }
 
   function getBestInventoryEntryByKey(userData, key) {
@@ -4906,10 +16064,11 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     return entries.sort((a, b) => getQualityIndex(getInventoryItemQuality(b).key) - getQualityIndex(getInventoryItemQuality(a).key))[0];
   }
 
-  function getEquippedArtifact(userData) {
+  function getEquippedPhapBao(userData) {
     normalizeInventoryData(userData);
-    const item = getShopItemByKey(userData.equippedArtifact);
-    if (item?.type !== 'artifact') return null;
+    const key = userData.equippedArtifact || userData.equippedWeapon || userData.equippedArmor;
+    const item = getShopItemByKey(key);
+    if (!isPhapBaoItem(item)) return null;
     const entry = getBestInventoryEntryByKey(userData, item.key);
     const quality = getInventoryItemQuality(entry);
     const curse = getInventoryItemCurse(entry);
@@ -4922,67 +16081,44 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     };
   }
 
-  function getEquippedArtifactMultiplier(userData, member, source = 'general', context = {}) {
-    const artifact = getEquippedArtifact(userData);
-    const parts = [];
-    let value = 1;
+  function getEquippedArtifact(userData) {
+    return getEquippedPhapBao(userData);
+  }
 
-    if (!artifact) {
-      return { value, summary: 'Không có pháp bảo đang trang bị.' };
-    }
+  function getEquippedWeapon(userData) {
+    return getEquippedPhapBao(userData);
+  }
 
-    const qualityMultiplier = artifact.quality?.multiplier ?? 1;
-    const qualityBonus = 1 + ((qualityMultiplier - 1) * 0.35);
-    value *= qualityBonus;
-    if (qualityBonus > 1) {
-      parts.push(`${artifact.quality.name} tăng hiệu ứng pháp bảo x${qualityBonus.toFixed(2)}`);
-    }
-
-    if (artifact.cursed) {
-      value *= 1.08;
-      parts.push(`Đồ bị nguyền [${artifact.curse?.name ?? 'Không rõ'}] mạnh hơn nhưng có tác dụng phụ.`);
-    }
-
-    if (artifact.key === 'ban_phim_linh_khi') {
-      value *= 1.03;
-      parts.push('Bàn Phím Linh Khí +3% mọi nguồn tu vi');
-    }
-
-    if (source === 'github' && artifact.key === 'git_kiem') {
-      value *= 1.05;
-      parts.push('Git Kiếm +5% tu vi GitHub');
-    }
-
-    if (source === 'github' && artifact.key === 'chuot_tram_bug' && /fix|bug|hotfix/i.test(context.messageText ?? '')) {
-      value *= 1.05;
-      parts.push('Chuột Trảm Bug +5% vì đạo tích trảm bug');
-    }
-
-    if (artifact.key === 'sql_tran_ban' && getMemberCongPhapText(member).includes('database')) {
-      value *= 1.05;
-      parts.push('SQL Trận Bàn +5% do hợp database công pháp');
-    }
-
-    if (artifact.key === 'docker_ho_lo' && getMemberCongPhapText(member).includes('devops')) {
-      value *= 1.05;
-      parts.push('Docker Hồ Lô +5% do hợp devops công pháp');
-    }
-
+  function getEquippedWeaponMultiplier(userData, member, source = 'general') {
+    const stats = getEquippedPhapBaoDirectStats(userData);
     return {
-      value,
-      summary: parts.length > 0 ? parts.join('\n') : `${artifact.displayName} đang trang bị, không có bonus cho nguồn này.`,
+      value: source === 'dauphap' ? statMultiplier(stats.lucChien) : 1,
+      summary: formatDirectStats(stats),
+    };
+  }
+
+  function getEquippedArtifactMultiplier(userData, member, source = 'general', context = {}) {
+    const stats = getEquippedPhapBaoDirectStats(userData);
+    return {
+      value: statMultiplier(stats.tuVi),
+      summary: formatDirectStats(stats),
     };
   }
 
   function applyArtifactTuViBonus(userData, member, amount, source = 'general', context = {}) {
-    const artifact = getEquippedArtifactMultiplier(userData, member, source, context);
-    const finalAmount = Math.floor((Number(amount) || 0) * artifact.value);
+    const stats = getUserDirectStats(userData, member);
+    const tamMa = getTamMaMultiplier(userData);
+    const tuLinh = getTuLinhMultiplier(userData);
+    const finalMultiplier = statMultiplier(stats.tuVi) * tamMa.value * tuLinh.value;
+    const finalAmount = Math.floor((Number(amount) || 0) * finalMultiplier);
 
     return {
       amount: finalAmount,
-      summary: artifact.value > 1
-        ? `${artifact.summary}\nHệ số pháp bảo: x${artifact.value.toFixed(2)}`
-        : artifact.summary,
+      summary: [
+        formatDirectStats(stats),
+        `Tâm Ma/Tụ Linh: x${(tamMa.value * tuLinh.value).toFixed(2)}`,
+        `Tổng tu vi: x${finalMultiplier.toFixed(2)}`,
+      ].join('\n'),
     };
   }
 
@@ -5007,7 +16143,7 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     }, {});
 
     return Object.values(counts).map(({ key, item, quality, curse, count }) => {
-      const equippedMark = userData.equippedArtifact === key || userData.storageBag === key ? ' `[đang dùng]`' : '';
+      const equippedMark = getEquippedGearKeys(userData).includes(key) || userData.storageBag === key ? ' `[đang dùng]`' : '';
       const curseText = curse ? ` [Nguyền: ${curse.name}]` : '';
       return item
         ? `\`${key}\` - **${item.name}** - ${quality.name}${curseText} x${count}${equippedMark}`
@@ -5022,6 +16158,58 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       && (userData.beQuanUntil > 0 || userData.temporaryStatusExpireAt > 0);
   }
 
+
+  const BE_QUAN_READONLY_COMMANDS = new Set([
+    'profile',
+    'tuvi',
+    'trangthai',
+    'skill',
+    'capcongphap',
+    'xuatquan',
+  ]);
+
+  function isReadOnlyCommandDuringBeQuan(interaction) {
+    const commandName = String(interaction?.commandName || '').toLowerCase();
+    if (BE_QUAN_READONLY_COMMANDS.has(commandName)) return true;
+    if (commandName === 'congphap') {
+      const action = interaction.options?.getString?.('hanhdong') || 'xem';
+      return action === 'xem';
+    }
+    return false;
+  }
+
+  function getBeQuanBlockedActionMessage() {
+    return 'Đạo hữu đang **Bế Quan**. Trong thời gian này chỉ được xem chỉ số qua `/profile`, `/tuvi`, `/trangthai`, `/skill`, `/capcongphap`, `/congphap hanhdong:xem` hoặc dùng `/xuatquan`.';
+  }
+
+  async function shouldBlockInteractionForBeQuan(interaction) {
+    if (!interaction.inGuild?.()) {
+      return false;
+    }
+
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    normalizeInventoryData(userData);
+
+    if (!isInBeQuan(userData)) {
+      return false;
+    }
+
+    if (interaction.isChatInputCommand?.() && isReadOnlyCommandDuringBeQuan(interaction)) {
+      return false;
+    }
+
+    const payload = { content: getBeQuanBlockedActionMessage(), flags: MessageFlags.Ephemeral };
+
+    if (interaction.deferred || interaction.replied) {
+      await interaction.followUp(payload).catch(() => null);
+    } else {
+      await interaction.reply(payload).catch(() => null);
+    }
+
+    return true;
+  }
+
   function clearBeQuanState(userData) {
     userData.beQuanStartedAt = 0;
     userData.beQuanUntil = 0;
@@ -5032,6 +16220,7 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     if (userData.temporaryStatus === 'Bế Quan') {
       userData.temporaryStatus = null;
       userData.temporaryStatusExpireAt = 0;
+      userData.temporaryDirectStats = null;
     }
   }
 
@@ -5044,10 +16233,10 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     const remaining = endAt - Date.now();
 
     if (remaining <= 0) {
-      return `Bế quan đã viên mãn. Dùng \`/xuatquan\` để nhận +${userData.beQuanReward || userData.beQuanRewardExp || 0} tu vi.`;
+      return `Bế quan đã viên mãn. Dùng \`/xuatquan\` để nhận +${userData.beQuanReward || userData.beQuanRewardExp || 0} tu vi. Trong lúc chờ xuất quan, đạo hữu vẫn chỉ được xem chỉ số.`;
     }
 
-    return `Đang bế quan. Còn lại: ${getRemainingTimeText(remaining)}. Thưởng dự kiến: +${userData.beQuanReward || userData.beQuanRewardExp || 0} tu vi.`;
+    return `Đang bế quan. Còn lại: ${getRemainingTimeText(remaining)}. Thưởng dự kiến: +${userData.beQuanReward || userData.beQuanRewardExp || 0} tu vi. Trong trạng thái này chỉ được xem chỉ số.`;
   }
 
   function getRemainingTimeText(ms) {
@@ -5076,13 +16265,19 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     const classification = getLinhCanClassificationMultiplier(member);
     const quality = getLinhCanQualityMultiplier(member);
     const artifact = getEquippedArtifactMultiplier(userData, member, source, context);
-    const value = statusMultiplier * congPhap.value * classification.value * quality.value * artifact.value;
+    const destiny = getDestinyBuffMultiplier(userData);
+    const tamMa = getTamMaMultiplier(userData);
+    const tuLinh = getTuLinhMultiplier(userData);
+    const value = statusMultiplier * congPhap.value * classification.value * quality.value * artifact.value * destiny.value * tamMa.value * tuLinh.value;
     const parts = [
-      `Cơ duyên/trạng thái x${statusMultiplier.toFixed(2)}`,
+      `Kỳ ngộ/trạng thái x${statusMultiplier.toFixed(2)}`,
       `${congPhap.text} x${congPhap.value.toFixed(2)}`,
       `${classification.text} x${classification.value.toFixed(2)}`,
       `${quality.text} x${quality.value.toFixed(2)}`,
       `${artifact.summary} x${artifact.value.toFixed(2)}`,
+      `${destiny.summary} x${destiny.value.toFixed(2)}`,
+      `${tamMa.summary} x${tamMa.value.toFixed(2)}`,
+      `${tuLinh.summary} x${tuLinh.value.toFixed(2)}`,
     ];
 
     return {
@@ -5122,6 +16317,8 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       chance += 10;
     }
 
+    chance += Math.round(getUserDirectStats(userData, member).dotPha);
+
     return Math.max(10, Math.min(90, chance));
   }
 
@@ -5145,17 +16342,18 @@ const AUTO_DISCIPLE_THRESHOLDS = [
 
     return new EmbedBuilder()
       .setColor(GOLD)
-      .setTitle(finalText ? 'Thiên Lôi Đã Dứt' : 'Thiên Lôi Độ Kiếp')
-      .setDescription(finalText ?? `${member} đang từ **${event.fromRealm} Đỉnh Phong** vượt lên **${event.toRealm} Sơ Kỳ**.`)
+      .setTitle(finalText ? 'Độ Kiếp · Kết Thúc' : 'Độ Kiếp')
+      .setDescription(finalText ?? `${member} · **${event.fromRealm} Đỉnh Phong** → **${event.toRealm} Sơ Kỳ**`)
       .addFields(
-        { name: 'Đợt thiên lôi', value: `${event.strikeCount}`, inline: true },
+        { name: 'Thiên lôi', value: `${event.strikeCount}`, inline: true },
         { name: 'Hộ kiếp', value: `${event.supportPower ?? 0}`, inline: true },
         { name: 'Đánh lén', value: `${event.sneakPower ?? 0}`, inline: true },
-        { name: 'Tỉ lệ hiện tại', value: `${chance ?? '?'}%`, inline: true },
+        { name: 'Tỉ lệ', value: `${chance ?? '?'}%`, inline: true },
         { name: 'Kết thúc', value: formatTimestamp(event.endsAt), inline: true },
       )
-      .setFooter({ text: `Mỗi lần Hộ Kiếp/Đánh Lén tiêu ${TRIBULATION_ACTION_COST} tu vi exp.` });
+      .setFooter({ text: `Mỗi hành động: ${TRIBULATION_ACTION_COST} tu vi` });
   }
+
 
   async function refreshTribulationMessage(clientInstance, event) {
     const channel = await clientInstance.channels.fetch(event.channelId).catch(() => null);
@@ -5365,22 +16563,25 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       month: '2-digit',
     });
 
-    return `${userData.temporaryStatus} (đến ${expireText})`;
+    const statsText = userData.temporaryDirectStats ? ` · ${formatDirectStatsCompact(userData.temporaryDirectStats)}` : '';
+    return `${userData.temporaryStatus} (đến ${expireText})${statsText}`;
   }
 
   function setTemporaryStatus(userData, statusName, durationMs, options = {}) {
     const now = Date.now();
+    const adjustedDurationMs = adjustStatusDuration(userData, durationMs);
 
     userData.temporaryStatus = statusName;
-    userData.temporaryStatusExpireAt = now + durationMs;
+    userData.temporaryStatusExpireAt = now + adjustedDurationMs;
     userData.tuViMultiplierUntil = options.tuViMultiplierValue
-      ? now + durationMs
+      ? now + adjustedDurationMs
       : userData.tuViMultiplierUntil;
     userData.tuViMultiplierValue = options.tuViMultiplierValue
       ? Math.max(userData.tuViMultiplierValue ?? 1, options.tuViMultiplierValue)
       : userData.tuViMultiplierValue;
-    userData.dotPhaPenaltyUntil = options.dotPhaPenalty ? now + durationMs : userData.dotPhaPenaltyUntil;
-    userData.dotPhaBonusUntil = options.dotPhaBonus ? now + durationMs : userData.dotPhaBonusUntil;
+    userData.dotPhaPenaltyUntil = options.dotPhaPenalty ? now + adjustedDurationMs : userData.dotPhaPenaltyUntil;
+    userData.dotPhaBonusUntil = options.dotPhaBonus ? now + adjustedDurationMs : userData.dotPhaBonusUntil;
+    userData.temporaryDirectStats = options.directStats ? normalizeDirectStats(options.directStats) : null;
 
     if (statusName === 'Bế Quan') {
       userData.beQuanStartedAt = now;
@@ -5389,10 +16590,23 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     }
   }
 
+  function getRestingStatusRoleName(userData) {
+    if (!isResting(userData)) return null;
+
+    const reason = String(userData?.restingReason || '').toLowerCase();
+
+    if (reason.includes('nhiễm') || reason.includes('uế')) return 'Nhiễm Uế Khí';
+    if (reason.includes('trọng') || reason.includes('thương')) return 'Trọng Thương';
+
+    return 'Tĩnh Dưỡng';
+  }
+
   async function syncTemporaryStatusRole(guild, member, userData) {
     await guild.roles.fetch();
 
-    const activeStatus = isTemporaryStatusActive(userData) ? userData.temporaryStatus : null;
+    const activeStatus = isTemporaryStatusActive(userData)
+      ? userData.temporaryStatus
+      : getRestingStatusRoleName(userData);
     const oldStatusRoles = member.roles.cache.filter(
       (role) => TEMPORARY_STATUS_ROLE_NAMES.includes(role.name) && role.name !== activeStatus,
     );
@@ -5440,69 +16654,10 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       userData.temporaryStatusExpireAt = 0;
       userData.tuViMultiplierUntil = 0;
       userData.tuViMultiplierValue = 1;
+      userData.temporaryDirectStats = null;
     }
 
     return syncTemporaryStatusRole(guild, member, userData);
-  }
-
-  function pickCoDuyenEvent(userData) {
-    const catDuyenEvents = [
-      { key: 'tang_kinh_chuong_co', effectKey: 'tang_kinh', name: 'Tàng Kinh Các Khai Mở', group: 'Cát duyên', description: 'Tiếng chuông cổ vọng ra từ Tàng Kinh Các. Một quyển tàn kinh tự bay đến trước mặt.' },
-      { key: 'tang_kinh_thu_lau', effectKey: 'tang_kinh', name: 'Thư Lâu Tự Khai', group: 'Cát duyên', description: 'Kệ sách phủ bụi bỗng hé mở, để lộ một đoạn tâm pháp bị thất truyền.' },
-      { key: 'tang_kinh_ngoc_gian', effectKey: 'tang_kinh', name: 'Ngọc Giản Phát Quang', group: 'Cát duyên', description: 'Một mảnh ngọc giản nóng lên trong tay áo, linh văn trên đó tự hiện thành đạo ý.' },
-      { key: 'tang_kinh_kinh_van', effectKey: 'tang_kinh', name: 'Kinh Văn Vọng Tâm', group: 'Cát duyên', description: 'Một câu kinh vô danh vang trong thức hải, giúp kinh mạch vận chuyển thông thuận hơn.' },
-      { key: 'tang_kinh_bia_da', effectKey: 'tang_kinh', name: 'Bia Đá Lưu Ảnh', group: 'Cát duyên', description: 'Trên bia đá sau núi, vết kiếm cũ hóa thành hình ảnh tiền nhân diễn pháp.' },
-      { key: 'tang_kinh_muc_truc', effectKey: 'tang_kinh', name: 'Mộc Trúc Tàng Pháp', group: 'Cát duyên', description: 'Một ống trúc mục nát rơi xuống, bên trong giấu vài dòng khẩu quyết cổ.' },
-      { key: 'tang_kinh_dao_am', effectKey: 'tang_kinh', name: 'Đạo Âm Sót Lại', group: 'Cát duyên', description: 'Gió qua mái điện mang theo đạo âm mơ hồ, ngươi chợt hiểu thêm một tầng tu luyện.' },
-      { key: 'cao_nhan_lao_gia', effectKey: 'cao_nhan', name: 'Cao Nhân Chỉ Điểm', group: 'Cát duyên', description: 'Một vị lão giả không rõ lai lịch nhìn qua đạo tâm rồi cười nhạt: “Sai ở chỗ tâm chưa tĩnh.”' },
-      { key: 'cao_nhan_kiem_tu', effectKey: 'cao_nhan', name: 'Kiếm Tu Ghé Núi', group: 'Cát duyên', description: 'Một kiếm tu đi ngang cổng tông môn, chỉ một câu đã phá tan nghi hoặc trong lòng ngươi.' },
-      { key: 'cao_nhan_dan_su', effectKey: 'cao_nhan', name: 'Đan Sư Đàm Đạo', group: 'Cát duyên', description: 'Đan sư trong nội viện giảng về hỏa hầu, ngươi nghe mà tâm cảnh sáng rõ.' },
-      { key: 'cao_nhan_tran_su', effectKey: 'cao_nhan', name: 'Trận Sư Bày Lời', group: 'Cát duyên', description: 'Một trận sư già mượn bàn cờ nói đạo, từng nước đi đều như gỡ nút thắt trong lòng.' },
-      { key: 'cao_nhan_an_si', effectKey: 'cao_nhan', name: 'Ẩn Sĩ Bên Suối', group: 'Cát duyên', description: 'Bên suối sau núi, một ẩn sĩ nhắc ngươi bớt nóng vội, đạo tâm nhờ đó yên lại.' },
-      { key: 'cao_nhan_thu_tich', effectKey: 'cao_nhan', name: 'Thủ Tịch Khai Ngộ', group: 'Cát duyên', description: 'Một thủ tịch đệ tử để lại vài lời nhận xét, đúng vào chỗ tu luyện còn thiếu của ngươi.' },
-      { key: 'cao_nhan_mong_chi', effectKey: 'cao_nhan', name: 'Mộng Trung Chỉ Pháp', group: 'Cát duyên', description: 'Trong mộng, một bóng người điểm nhẹ vào mi tâm, tạp niệm theo đó tiêu tan.' },
-      { key: 'linh_khi_bao_phat', effectKey: 'linh_khi', name: 'Linh Khí Bạo Phát', group: 'Cát duyên', description: 'Linh khí trong động phủ cuộn trào, kinh mạch mở rộng, đạo cơ rung chuyển.' },
-      { key: 'linh_khi_tuyen_nhan', effectKey: 'linh_khi', name: 'Linh Tuyền Nhận Chủ', group: 'Cát duyên', description: 'Một mạch linh tuyền nhỏ hiện dưới chân núi, hơi nước thấm vào kinh mạch.' },
-      { key: 'linh_khi_tinh_vu', effectKey: 'linh_khi', name: 'Tinh Vũ Tẩy Thân', group: 'Cát duyên', description: 'Mưa sao rơi qua đêm, từng điểm sáng như rửa sạch bụi trần trên đạo thể.' },
-      { key: 'linh_khi_dong_phu', effectKey: 'linh_khi', name: 'Động Phủ Khai Mạch', group: 'Cát duyên', description: 'Vách động phủ nứt ra một khe nhỏ, linh khí tinh thuần theo đó tràn vào.' },
-      { key: 'linh_khi_nguyen_ha', effectKey: 'linh_khi', name: 'Nguyên Hà Dâng Sóng', group: 'Cát duyên', description: 'Dòng nguyên hà sau núi dâng sóng, hơi linh lực như thủy triều vỗ vào đạo cơ.' },
-      { key: 'linh_khi_thanh_lien', effectKey: 'linh_khi', name: 'Thanh Liên Tụ Khí', group: 'Cát duyên', description: 'Một đóa thanh liên nở trong ao tĩnh, hương sen kéo linh khí tụ quanh thân.' },
-      { key: 'linh_khi_tu_truc', effectKey: 'linh_khi', name: 'Tử Trúc Sinh Quang', group: 'Cát duyên', description: 'Rừng tử trúc phát sáng trong sương sớm, mỗi nhịp thở đều thấm linh khí.' },
-      { key: 'dao_tam_tinh_toa', effectKey: 'dao_tam', name: 'Đạo Tâm Kiên Định', group: 'Cát duyên', description: 'Sau một đêm tĩnh tọa, ngươi không còn bị tạp niệm quấy nhiễu.' },
-      { key: 'dao_tam_pha_vong', effectKey: 'dao_tam', name: 'Phá Vọng Minh Tâm', group: 'Cát duyên', description: 'Ngươi nhìn thẳng vào điều mình sợ hãi, vọng niệm tan ra như sương sớm.' },
-      { key: 'dao_tam_kiem_tam', effectKey: 'dao_tam', name: 'Kiếm Tâm Bất Loạn', group: 'Cát duyên', description: 'Một tiếng kiếm reo trong tâm hồ, mọi dao động bỗng trở nên tĩnh lặng.' },
-      { key: 'dao_tam_thien_dinh', effectKey: 'dao_tam', name: 'Thiền Định Vô Trần', group: 'Cát duyên', description: 'Hơi thở chìm vào tĩnh lặng, bụi niệm không còn bám được lên đạo tâm.' },
-      { key: 'dao_tam_bach_nguyet', effectKey: 'dao_tam', name: 'Bạch Nguyệt Chiếu Tâm', group: 'Cát duyên', description: 'Ánh trăng phủ lên sân đá, tâm cảnh của ngươi trong vắt như nước.' },
-      { key: 'dao_tam_co_tung', effectKey: 'dao_tam', name: 'Cổ Tùng Ngộ Đạo', group: 'Cát duyên', description: 'Dưới gốc cổ tùng, ngươi hiểu ra đạo không ở xa, chỉ ở một niệm bền bỉ.' },
-      { key: 'dao_tam_tam_an', effectKey: 'dao_tam', name: 'Tâm An Như Sơn', group: 'Cát duyên', description: 'Sấm xa vang ngoài núi, còn đạo tâm ngươi vững như bàn thạch.' },
-      { key: 'tan_quyen_co_thu', effectKey: 'tan_quyen', name: 'Nhặt Được Tàn Quyển', group: 'Cát duyên', description: 'Trong đống cổ thư mục nát, ngươi tìm được một mảnh công pháp thất truyền.' },
-      { key: 'tan_quyen_lac_la', effectKey: 'tan_quyen', name: 'Lá Vàng Ghi Pháp', group: 'Cát duyên', description: 'Một chiếc lá vàng rơi xuống lòng bàn tay, gân lá lại là lộ tuyến vận công.' },
-      { key: 'tan_quyen_hoang_truc', effectKey: 'tan_quyen', name: 'Hoàng Trúc Tàn Thiên', group: 'Cát duyên', description: 'Trong ống trúc vàng nứt vỡ, một đoạn pháp quyết còn sót lại chưa tan.' },
-      { key: 'tan_quyen_bach_cot', effectKey: 'tan_quyen', name: 'Bạch Cốt Lưu Văn', group: 'Cát duyên', description: 'Trên xương trắng nơi cổ chiến trường, đạo văn mờ nhạt vẫn còn lưu lại.' },
-      { key: 'tan_quyen_tieu_dao', effectKey: 'tan_quyen', name: 'Tiêu Dao Tàn Chương', group: 'Cát duyên', description: 'Một trang giấy rách bị gió cuốn tới, chữ viết phóng khoáng như muốn thoát khỏi thiên địa.' },
-      { key: 'tan_quyen_thach_bich', effectKey: 'tan_quyen', name: 'Thạch Bích Tàng Chương', group: 'Cát duyên', description: 'Vách đá sau thác nước lộ ra nửa đoạn công pháp khi ánh nắng chiếu đúng giờ.' },
-      { key: 'tan_quyen_huyen_an', effectKey: 'tan_quyen', name: 'Huyền Án Vỡ Khóa', group: 'Cát duyên', description: 'Một chiếc án gỗ cũ tự bật khóa, trong ngăn rỗng chỉ có một tàn chương mỏng.' },
-    ];
-    const hungDuyenEvents = [
-      { key: 'tam_ma_that_bai', effectKey: 'tam_ma', name: 'Tâm Ma Quấy Nhiễu', group: 'Hung duyên', description: 'Trong lúc nhập định, ngươi thấy chính mình ở một tương lai thất bại, đạo tâm dao động.' },
-      { key: 'tam_ma_huyen_anh', effectKey: 'tam_ma', name: 'Huyễn Ảnh Tự Thân', group: 'Hung duyên', description: 'Một bóng người giống hệt ngươi đứng trong thức hải, cười nhạo mọi lựa chọn đã qua.' },
-      { key: 'tam_ma_vong_niem', effectKey: 'tam_ma', name: 'Vọng Niệm Trùng Sinh', group: 'Hung duyên', description: 'Những ý nghĩ tưởng đã buông xuống bỗng quay lại, quấn lấy đạo tâm như tơ độc.' },
-      { key: 'tam_ma_ac_mong', effectKey: 'tam_ma', name: 'Ác Mộng Nhập Định', group: 'Hung duyên', description: 'Một giấc mộng dài khiến tâm thần hao tổn, khi tỉnh dậy linh lực vẫn còn rối loạn.' },
-      { key: 'tam_ma_nghiep_am', effectKey: 'tam_ma', name: 'Nghiệp Âm Gõ Cửa', group: 'Hung duyên', description: 'Tiếng gõ cửa vang lên lúc nửa đêm, nhưng ngoài động phủ không có một bóng người.' },
-      { key: 'nghich_luu_kinh_mach', effectKey: 'nghich_luu', name: 'Linh Khí Nghịch Lưu', group: 'Hung duyên', description: 'Linh khí hấp thu quá nhanh khiến kinh mạch rối loạn.' },
-      { key: 'nghich_luu_hoa_doc', effectKey: 'nghich_luu', name: 'Hỏa Độc Rối Mạch', group: 'Hung duyên', description: 'Một tia hỏa khí lẫn trong linh lực khiến vận công phải dừng lại giữa chừng.' },
-      { key: 'nghich_luu_am_han', effectKey: 'nghich_luu', name: 'Âm Hàn Phản Phệ', group: 'Hung duyên', description: 'Khí lạnh từ lòng đất tràn lên, linh lực trong đan điền khựng lại.' },
-      { key: 'nghich_luu_tap_khi', effectKey: 'nghich_luu', name: 'Tạp Khí Xâm Thân', group: 'Hung duyên', description: 'Một luồng tạp khí lẫn vào hơi thở, khiến buổi tu luyện hôm nay phải bỏ dở.' },
-      { key: 'nghich_luu_mach_tac', effectKey: 'nghich_luu', name: 'Mạch Tắc Nửa Chu Thiên', group: 'Hung duyên', description: 'Chu thiên vận hành đến nửa vòng thì nghẽn lại, may mà chưa tổn thương căn cơ.' },
-      { key: 'thien_co_may_mu', effectKey: 'thien_co', name: 'Thiên Cơ Che Mờ', group: 'Hung duyên', description: 'Thiên đạo hôm nay không đáp lại lời cầu duyên của ngươi.' },
-      { key: 'thien_co_quai_tuong', effectKey: 'thien_co', name: 'Quẻ Tượng Vô Văn', group: 'Hung duyên', description: 'Quẻ bói hiện ra trắng xóa, như có màn sương che kín mọi dấu hiệu.' },
-      { key: 'thien_co_tinh_lac', effectKey: 'thien_co', name: 'Tinh Lạc Không Tiếng', group: 'Hung duyên', description: 'Một vì sao rơi qua trời đêm nhưng không để lại điềm báo nào rõ ràng.' },
-      { key: 'thien_co_van_mai', effectKey: 'thien_co', name: 'Vân Mải Che Đạo', group: 'Hung duyên', description: 'Mây dày phủ kín đỉnh núi, đạo ý hôm nay lặng im như chưa từng tới.' },
-    ];
-    const catDuyenChance = Math.min(85, 60 + (userData.coDuyenLuckBonus ?? 0));
-    const pool = Math.random() * 100 < catDuyenChance ? catDuyenEvents : hungDuyenEvents;
-
-    return pool[Math.floor(Math.random() * pool.length)];
   }
 
   function isTicketWithPrefix(channel, topicPrefix) {
@@ -5537,6 +16692,634 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     }
 
     return null;
+  }
+
+
+  function pickRandomEntry(entries) {
+    return entries[Math.floor(Math.random() * entries.length)] ?? entries[0];
+  }
+
+  function getTamMaMultiplier(userData) {
+    if (isTemporaryStatusActive(userData, 'Tâm Ma Quấn Thân')) {
+      const hasGuard = hasInventoryItem(userData, 'dao_tam_ho_phu') || hasInventoryItem(userData, 'tinh_tam_dan');
+      const value = hasGuard ? 0.92 : 0.85;
+      return { value, summary: hasGuard ? 'Tâm Ma Quấn Thân đã được hộ phù áp chế' : 'Tâm Ma Quấn Thân giảm tu vi nhận được' };
+    }
+
+    return { value: 1, summary: 'Đạo tâm bình ổn' };
+  }
+
+  function getTuLinhMultiplier(userData) {
+    const level = Math.max(1, Math.min(TU_LINH_LEVEL_CAP, Number(userData?.tuLinhLevel) || 1));
+    const value = 1 + (level - 1) * 0.02;
+    return {
+      value,
+      summary: level > 1 ? `Tụ Linh Trận Lv.${level} tăng tu vi mọi nguồn` : 'Tụ Linh Trận Lv.1 chưa có bonus thêm',
+    };
+  }
+
+  function getTuLinhUpgradeCost(level) {
+    const safeLevel = Math.max(1, Math.min(TU_LINH_LEVEL_CAP, Number(level) || 1));
+    return {
+      congHien: Math.floor(220 * Math.pow(safeLevel, 1.65)),
+      exp: Math.floor(40 * Math.pow(safeLevel, 1.35)),
+    };
+  }
+
+  function getTuLinhStatusText(userData) {
+    const level = Math.max(1, Math.min(TU_LINH_LEVEL_CAP, Number(userData.tuLinhLevel) || 1));
+    const multiplier = getTuLinhMultiplier(userData).value;
+    const cost = level >= TU_LINH_LEVEL_CAP ? null : getTuLinhUpgradeCost(level);
+    const cooldownLeft = Math.max(0, TU_LINH_HARVEST_COOLDOWN_MS - (Date.now() - (Number(userData.lastTuLinhAt) || 0)));
+
+    return [
+      `Cấp trận: **Lv.${level}/${TU_LINH_LEVEL_CAP}**`,
+      `Điểm trận văn: **${Number(userData.tuLinhExp) || 0}**`,
+      `Buff tu vi: **x${multiplier.toFixed(2)}**`,
+      cost ? `Nâng cấp cần: **${cost.congHien} cống hiến** + **${cost.exp} điểm trận văn**` : 'Tụ Linh Trận đã viên mãn.',
+      cooldownLeft > 0 ? `Tụ luyện còn hồi: **${getRemainingTimeText(cooldownLeft)}**` : 'Có thể tụ luyện ngay.',
+    ].join('\n');
+  }
+
+  function getKyNgoBuffStats(event = {}) {
+    if (event.directStats) return normalizeDirectStats(event.directStats);
+    const group = String(event.group || '').toLowerCase();
+    const isHung = group.includes('hung') || group.includes('phản') || event.status?.name?.includes('Tâm Ma');
+    const seed = deterministicScoreForKey('kyngo-stats', `${event.key || event.name || ''}:${event.group || ''}`);
+    const rarity = group.includes('truyền') ? 'legendary' : group.includes('hiếm') || group.includes('dị') ? 'rare' : isHung ? 'hung' : 'common';
+    const magnitude = rarity === 'legendary' ? 12 + (seed % 4) : rarity === 'rare' ? 6 + (seed % 3) : rarity === 'hung' ? 4 + (seed % 5) : 2 + (seed % 3);
+    const mode = seed % 6;
+    const stats = createEmptyDirectStats();
+    if (isHung) {
+      stats.tuVi = -Math.ceil(magnitude * 0.5);
+      stats.tamMaRisk = magnitude + 4;
+      stats.trongThuongDuration = Math.ceil(magnitude * 0.8);
+      if (mode % 2 === 0) stats.dotPha = -Math.ceil(magnitude * 0.45);
+      return normalizeDirectStats(stats);
+    }
+    if (mode === 0) stats.tuVi = magnitude;
+    else if (mode === 1) stats.lucChien = magnitude;
+    else if (mode === 2) stats.congHien = magnitude;
+    else if (mode === 3) stats.dotPha = Math.ceil(magnitude * 0.8);
+    else if (mode === 4) stats.tamMaRisk = -magnitude;
+    else stats.trongThuongDuration = -magnitude;
+    if (rarity === 'legendary') {
+      stats.tuVi += 4;
+      stats.lucChien += 3;
+      stats.dotPha += 2;
+      stats.tamMaRisk -= 3;
+    }
+    return normalizeDirectStats(stats);
+  }
+
+  function getKyNgoDurationHours(event = {}) {
+    const group = String(event.group || '').toLowerCase();
+    if (group.includes('truyền')) return 24;
+    if (group.includes('hiếm') || group.includes('dị')) return 12;
+    if (group.includes('hung')) return 6;
+    return 8;
+  }
+
+  function applyKyNgoEvent(userData, member, event) {
+    const resultLines = [];
+    const directStats = getKyNgoBuffStats(event);
+    const hours = getKyNgoDurationHours(event);
+    const statusName = event.status?.name?.includes('Tâm Ma') || (directStats.tamMaRisk > 8 && directStats.tuVi < 0)
+      ? 'Tâm Ma Quấn Thân'
+      : directStats.dotPha > 0
+        ? 'Đạo Tâm Kiên Định'
+        : 'Kỳ Ngộ Gia Thân';
+
+    setTemporaryStatus(userData, statusName, hours * 60 * 60 * 1000, {
+      directStats,
+      dotPhaPenalty: statusName.includes('Tâm Ma'),
+      dotPhaBonus: directStats.dotPha > 0,
+    });
+
+    resultLines.push(`${statusName} ${hours} giờ`);
+    resultLines.push(formatDirectStatsCompact(directStats));
+    userData.kyNgoCount = Math.max(0, Number(userData.kyNgoCount) || 0) + 1;
+    return resultLines;
+  }
+
+  async function handleKyNgo(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Chỉ có thể cầu kỳ ngộ trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    await interaction.deferReply();
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    const member = await interaction.guild.members.fetch(interaction.user.id);
+    const now = Date.now();
+    const cooldownLeft = KY_NGO_COOLDOWN_MS - (now - (Number(userData.lastKyNgoAt) || 0));
+
+    if (cooldownLeft > 0) {
+      await interaction.editReply(`Thiên cơ chưa mở lại. Còn **${getRemainingTimeText(cooldownLeft)}** mới có thể cầu kỳ ngộ.`);
+      return;
+    }
+
+    const event = pickRandomEntry(KY_NGO_EVENTS);
+    const results = applyKyNgoEvent(userData, member, event);
+    userData.lastKyNgoAt = now;
+    await syncTemporaryStatusRole(interaction.guild, member, userData).catch(() => null);
+    saveUsers(users);
+
+    const embed = new EmbedBuilder()
+      .setColor(event.group === 'Hung duyên' ? 0xef4444 : GOLD)
+      .setTitle(`Kỳ Ngộ - ${event.name}`)
+      .setDescription(event.text)
+      .addFields(
+        { name: 'Loại', value: event.group, inline: true },
+        { name: 'Kết quả', value: results.join('\n') || 'Thiên cơ mờ nhạt, không có biến hóa rõ.', inline: false },
+      )
+      .setFooter({ text: 'Kỳ ngộ giờ chỉ tạo buff/debuff phần trăm có thời hạn, không cộng thẳng tài nguyên.' });
+
+    await interaction.editReply({ embeds: [embed] });
+  }
+
+  async function maybeTriggerPassiveKyNgo(message, member, userData) {
+    const now = Date.now();
+    if (now - (Number(userData.lastPassiveKyNgoAt) || 0) < PASSIVE_KY_NGO_COOLDOWN_MS) return false;
+    if (Math.random() > 0.025) return false;
+
+    const event = pickRandomEntry(KY_NGO_EVENTS);
+    const results = applyKyNgoEvent(userData, member, event);
+    userData.lastPassiveKyNgoAt = now;
+    await syncTemporaryStatusRole(message.guild, member, userData).catch(() => null);
+
+    const embed = new EmbedBuilder()
+      .setColor(event.group === 'Hung duyên' ? 0xef4444 : 0x22c55e)
+      .setTitle(`Kỳ Ngộ Bất Chợt - ${event.name}`)
+      .setDescription(`${message.author} ${event.text}`)
+      .addFields({ name: 'Kết quả', value: results.join('\n') || 'Thiên cơ lướt qua rồi biến mất.', inline: false });
+
+    await message.channel.send({ embeds: [embed] }).catch(() => null);
+    return true;
+  }
+
+  async function handleTamMa(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Chỉ có thể xem tâm ma trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const action = interaction.options.getString('hanhdong') ?? 'xem';
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    const member = await interaction.guild.members.fetch(interaction.user.id);
+    await resolveTemporaryStatusEffects(interaction.guild, member, userData).catch(() => null);
+
+    if (action === 'tinhtam') {
+      if (!isTemporaryStatusActive(userData, 'Tâm Ma Quấn Thân')) {
+        await interaction.reply({ content: 'Đạo tâm hiện đang bình ổn, chưa cần tịnh tâm.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      if (!hasInventoryItem(userData, 'tinh_tam_dan')) {
+        await interaction.reply({ content: 'Cần **Tịnh Tâm Đan** trong túi để cưỡng ép hóa giải Tâm Ma.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      removeItemFromInventory(userData, 'tinh_tam_dan');
+      userData.temporaryStatus = null;
+      userData.temporaryStatusExpireAt = 0;
+      userData.dotPhaPenaltyUntil = 0;
+      await resolveTemporaryStatusEffects(interaction.guild, member, userData).catch(() => null);
+      saveUsers(users);
+      await interaction.reply({ content: 'Đã dùng **Tịnh Tâm Đan**. Tâm Ma Quấn Thân được hóa giải.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const active = isTemporaryStatusActive(userData, 'Tâm Ma Quấn Thân');
+    const embed = new EmbedBuilder()
+      .setColor(active ? 0xef4444 : 0x22c55e)
+      .setTitle('Tâm Ma · Nội Cảnh Bất Ổn')
+      .setDescription(active
+        ? 'Tâm Ma đang quấn quanh đạo tâm. Tu vi nhận được bị giảm, đột phá dễ sinh biến.'
+        : 'Đạo tâm bình ổn, không có Tâm Ma hiện hành.')
+      .addFields(
+        { name: 'Trạng thái', value: formatTemporaryStatus(userData), inline: false },
+        { name: 'Ảnh hưởng', value: getTamMaMultiplier(userData).summary, inline: false },
+        { name: 'Hóa giải', value: 'Dùng `/tamma hanhdong:tinhtam` nếu có Tịnh Tâm Đan.', inline: false },
+      );
+    saveUsers(users);
+    await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+  }
+
+  async function handleTuLinh(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Chỉ có thể vận Tụ Linh Trận trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const action = interaction.options.getString('hanhdong') ?? 'xem';
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    const member = await interaction.guild.members.fetch(interaction.user.id);
+    normalizeInventoryData(userData);
+
+    if (action === 'tuluyen') {
+      const cooldownLeft = TU_LINH_HARVEST_COOLDOWN_MS - (Date.now() - (Number(userData.lastTuLinhAt) || 0));
+      if (cooldownLeft > 0) {
+        await interaction.reply({ content: `Tụ Linh Trận chưa hồi khí. Còn **${getRemainingTimeText(cooldownLeft)}**.`, flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const level = Math.max(1, Number(userData.tuLinhLevel) || 1);
+      const baseReward = 55 + level * 28;
+      const rewardInfo = applyArtifactTuViBonus(userData, member, applyTuViMultiplier(userData, baseReward), 'tulinh');
+      userData.tuViExp = Math.max(0, (Number(userData.tuViExp) || 0) + rewardInfo.amount);
+      userData.tuLinhExp = Math.max(0, (Number(userData.tuLinhExp) || 0) + 6 + level * 2);
+      await grantCongPhapMastery(userData, member, 8 + level, 'tulinh');
+      userData.lastTuLinhAt = Date.now();
+      await syncTuViRoles(interaction.guild, member, userData.tuViExp, { fromExp: true }).catch(() => null);
+      saveUsers(users);
+
+      await interaction.reply({ embeds: [new EmbedBuilder()
+        .setColor(GOLD)
+        .setTitle('Tụ Linh Trận - Tụ Luyện')
+        .setDescription(`Tụ Linh Trận Lv.${level} vận chuyển một chu thiên.`)
+        .addFields(
+          { name: 'Nhận được', value: `+${rewardInfo.amount} tu vi\n+${6 + level * 2} điểm trận văn`, inline: false },
+          { name: 'Hệ số', value: rewardInfo.summary.slice(0, 1000), inline: false },
+        )], flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (action === 'nangcap') {
+      const level = Math.max(1, Number(userData.tuLinhLevel) || 1);
+      if (level >= TU_LINH_LEVEL_CAP) {
+        await interaction.reply({ content: 'Tụ Linh Trận đã đạt viên mãn.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      const cost = getTuLinhUpgradeCost(level);
+      if (getSpendableCongHien(userData) < cost.congHien || (Number(userData.tuLinhExp) || 0) < cost.exp) {
+        await interaction.reply({ content: `Chưa đủ tài nguyên. Cần **${cost.congHien} cống hiến** + **${cost.exp} điểm trận văn**.\n${getTuLinhStatusText(userData)}`, flags: MessageFlags.Ephemeral });
+        return;
+      }
+
+      userData.congHienBalance = Math.max(0, getSpendableCongHien(userData) - cost.congHien);
+      userData.tuLinhExp = Math.max(0, (Number(userData.tuLinhExp) || 0) - cost.exp);
+      userData.tuLinhLevel = level + 1;
+      saveUsers(users);
+      await interaction.reply({ content: `Tụ Linh Trận đã nâng lên **Lv.${userData.tuLinhLevel}**. Buff hiện tại: **x${getTuLinhMultiplier(userData).value.toFixed(2)}**.`, flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const embed = new EmbedBuilder()
+      .setColor(GOLD)
+      .setTitle('Tụ Linh Trận Cá Nhân')
+      .setDescription(getTuLinhStatusText(userData))
+      .addFields({ name: 'Liên kết hệ thống', value: 'Tụ Linh Trận tăng tu vi mọi nguồn, nhận điểm trận văn từ kỳ ngộ, sự kiện và tụ luyện.', inline: false });
+    saveUsers(users);
+    await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+  }
+
+  function getActiveGuildEvent(guildId, data = loadSuKien()) {
+    const event = Object.values(data.active).find((entry) => entry.guildId === guildId && entry.status === 'active' && Date.now() < entry.endsAt);
+    return event ?? null;
+  }
+
+  function getGuildEventCreateCooldownLeft(guildId, data = loadSuKien()) {
+    const latest = Object.values(data.active)
+      .filter((entry) => entry.guildId === guildId && Number(entry.createdAt) > 0)
+      .sort((a, b) => Number(b.createdAt) - Number(a.createdAt))[0];
+    if (!latest) return 0;
+    return Math.max(0, SU_KIEN_CREATE_COOLDOWN_MS - (Date.now() - Number(latest.createdAt)));
+  }
+
+  function createGuildEvent(guildId, channelId) {
+    const template = pickRandomEntry(SU_KIEN_TEMPLATES);
+    const id = `sk_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+    return {
+      id,
+      guildId,
+      channelId,
+      templateKey: template.key,
+      name: template.name,
+      description: template.description,
+      target: template.target,
+      actionLabel: template.actionLabel,
+      rewardTuVi: template.rewardTuVi,
+      rewardCongHien: template.rewardCongHien,
+      tuLinhExp: template.tuLinhExp,
+      progress: 0,
+      participantIds: [],
+      status: 'active',
+      createdAt: Date.now(),
+      endsAt: Date.now() + SU_KIEN_DURATION_MS,
+    };
+  }
+
+  function buildSuKienEmbed(event) {
+    const remaining = Math.max(0, event.endsAt - Date.now());
+    return new EmbedBuilder()
+      .setColor(GOLD)
+      .setTitle(`Sự Kiện · ${event.name}`)
+      .setDescription(uiTrim(event.description, 220))
+      .addFields(
+        { name: 'Tiến độ', value: `${event.progress}/${event.target}`, inline: true },
+        { name: 'Còn lại', value: getRemainingTimeText(remaining), inline: true },
+        { name: 'Thưởng dự kiến', value: `+${event.rewardTuVi} tu vi\n+${event.rewardCongHien} cống hiến\n+${event.tuLinhExp} tụ linh`, inline: false },
+      )
+      .setFooter({ text: 'Mỗi người góp sức 1 lần' });
+  }
+
+
+  function buildSuKienRows(event) {
+    return [new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`${SU_KIEN_JOIN_BUTTON_PREFIX}${event.id}`)
+        .setLabel(event.actionLabel || 'Tham Gia')
+        .setStyle(ButtonStyle.Success),
+    )];
+  }
+
+  async function handleSuKien(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Sự kiện chỉ mở trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const data = loadSuKien();
+    let event = getActiveGuildEvent(interaction.guild.id, data);
+
+    if (!event) {
+      const cooldownLeft = getGuildEventCreateCooldownLeft(interaction.guild.id, data);
+      if (cooldownLeft > 0) {
+        await interaction.reply({
+          content: `Tông môn vừa mở sự kiện gần đây. Còn **${getRemainingTimeText(cooldownLeft)}** mới mở sự kiện mới được. Không thể cứ bấm là trời đất động loạn, Discord cũng cần thở.`,
+          flags: MessageFlags.Ephemeral,
+        });
+        return;
+      }
+      event = createGuildEvent(interaction.guild.id, interaction.channel.id);
+      data.active[event.id] = event;
+      saveSuKien(data);
+    }
+
+    await interaction.reply({ embeds: [buildSuKienEmbed(event)], components: buildSuKienRows(event) });
+  }
+
+  async function handleSuKienJoin(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Sự kiện chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const eventId = interaction.customId.slice(SU_KIEN_JOIN_BUTTON_PREFIX.length);
+    const data = loadSuKien();
+    const event = data.active[eventId];
+
+    if (!event || event.status !== 'active' || Date.now() >= event.endsAt) {
+      await interaction.reply({ content: 'Sự kiện đã kết thúc hoặc không còn hiệu lực.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (event.participantIds.includes(interaction.user.id)) {
+      await interaction.reply({ content: 'Đạo hữu đã góp sức trong sự kiện này rồi.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    event.participantIds.push(interaction.user.id);
+    event.progress = Math.min(event.target, event.progress + 1);
+
+    if (event.progress >= event.target) {
+      event.status = 'completed';
+      const users = loadUsers();
+      const rewardLines = [];
+
+      for (const userId of event.participantIds) {
+        const userData = getOrCreateUser(users, userId);
+        const member = await interaction.guild.members.fetch(userId).catch(() => null);
+        if (!member) continue;
+        const rewardInfo = applyArtifactTuViBonus(userData, member, applyTuViMultiplier(userData, event.rewardTuVi), 'sukien');
+        userData.tuViExp = Math.max(0, (Number(userData.tuViExp) || 0) + rewardInfo.amount);
+        const finalCongHien = addCongHien(userData, event.rewardCongHien);
+        userData.tuLinhExp = Math.max(0, (Number(userData.tuLinhExp) || 0) + event.tuLinhExp);
+        userData.suKienJoined = Array.from(new Set([...(userData.suKienJoined || []), event.id]));
+        await syncTuViRoles(interaction.guild, member, userData.tuViExp, { fromExp: true }).catch(() => null);
+        await syncDiscipleRole(interaction.guild, member, userData.congHienExp).catch(() => null);
+        rewardLines.push(`<@${userId}> +${rewardInfo.amount} tu vi, +${finalCongHien} cống hiến`);
+      }
+
+      saveUsers(users);
+      saveSuKien(data);
+      const embed = buildSuKienEmbed(event)
+        .setColor(0x22c55e)
+        .setDescription(`${event.description}\n\n**Sự kiện đã hoàn thành.**`)
+        .addFields({ name: 'Đạo hữu tham gia', value: rewardLines.slice(0, 20).join('\n') || 'Không rõ.', inline: false });
+      await interaction.update({ embeds: [embed], components: [] });
+      return;
+    }
+
+    saveSuKien(data);
+    await interaction.update({ embeds: [buildSuKienEmbed(event)], components: buildSuKienRows(event) });
+  }
+
+  async function handleDauPhap(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Đấu pháp chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const targetUser = interaction.options.getUser('thanhvien', true);
+    if (targetUser.bot || targetUser.id === interaction.user.id) {
+      await interaction.reply({ content: 'Không thể gửi chiến thư cho bot hoặc chính mình.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const users = loadUsers();
+    const challenger = getOrCreateUser(users, interaction.user.id);
+    const now = Date.now();
+    const cooldownLeft = DAU_PHAP_COOLDOWN_MS - (now - (Number(challenger.lastDauPhapAt) || 0));
+
+    if (cooldownLeft > 0) {
+      await interaction.reply({ content: `Đạo lực chưa ổn định. Còn **${getRemainingTimeText(cooldownLeft)}** mới có thể gửi chiến thư đấu pháp tiếp.`, flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const challengerMember = await interaction.guild.members.fetch(interaction.user.id);
+    const targetMember = await interaction.guild.members.fetch(targetUser.id);
+    const challengeId = `${interaction.user.id}_${targetUser.id}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+    const expiresAt = now + DAU_PHAP_CHALLENGE_TTL_MS;
+
+    DAU_PHAP_CHALLENGES.set(challengeId, {
+      id: challengeId,
+      guildId: interaction.guildId,
+      channelId: interaction.channelId,
+      challengerId: interaction.user.id,
+      targetId: targetUser.id,
+      createdAt: now,
+      expiresAt,
+    });
+
+    const embed = new EmbedBuilder()
+      .setColor(GOLD)
+      .setTitle('Chiến Thư Đấu Pháp')
+      .setDescription(`${challengerMember} gửi chiến thư đấu pháp đến ${targetMember}.\n\n${targetMember} cần bấm **Đồng Ý Solo** thì trận đấu mới bắt đầu.`)
+      .addFields(
+        { name: 'Luật đấu pháp', value: 'Hai bên đồng ý mới giao thủ. Thắng và thua đều nhận cống hiến, nhưng người thua sẽ bị hao tổn tu vi.', inline: false },
+        { name: 'Thời hạn', value: `Chiến thư hết hiệu lực sau **${Math.floor(DAU_PHAP_CHALLENGE_TTL_MS / 60000)} phút**.`, inline: false },
+      );
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`${DAU_PHAP_ACCEPT_BUTTON_PREFIX}${challengeId}`)
+        .setLabel('Chấp Nhận Chiến Thư')
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId(`${DAU_PHAP_REJECT_BUTTON_PREFIX}${challengeId}`)
+        .setLabel('Từ Chối Chiến Thư')
+        .setStyle(ButtonStyle.Secondary),
+    );
+
+    await interaction.reply({ content: `${targetMember}`, embeds: [embed], components: [row] });
+  }
+
+  async function handleDauPhapAccept(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Đấu pháp chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const challengeId = interaction.customId.slice(DAU_PHAP_ACCEPT_BUTTON_PREFIX.length);
+    const challenge = DAU_PHAP_CHALLENGES.get(challengeId);
+    if (!challenge || challenge.guildId !== interaction.guildId || Date.now() > challenge.expiresAt) {
+      DAU_PHAP_CHALLENGES.delete(challengeId);
+      await interaction.reply({ content: 'Chiến thư này đã hết hiệu lực.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (interaction.user.id !== challenge.targetId) {
+      await interaction.reply({ content: 'Chỉ người được gửi chiến thư mới có thể đồng ý solo.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    DAU_PHAP_CHALLENGES.delete(challengeId);
+
+    const users = loadUsers();
+    const attacker = getOrCreateUser(users, challenge.challengerId);
+    const defender = getOrCreateUser(users, challenge.targetId);
+    const now = Date.now();
+    const challengerCooldownLeft = DAU_PHAP_COOLDOWN_MS - (now - (Number(attacker.lastDauPhapAt) || 0));
+    const defenderCooldownLeft = DAU_PHAP_COOLDOWN_MS - (now - (Number(defender.lastDauPhapAt) || 0));
+
+    if (challengerCooldownLeft > 0 || defenderCooldownLeft > 0) {
+      const left = Math.max(challengerCooldownLeft, defenderCooldownLeft);
+      await interaction.update({
+        embeds: [new EmbedBuilder()
+          .setColor(0xef4444)
+          .setTitle('Chiến Thư Hết Hiệu Lực')
+          .setDescription(`Một trong hai bên đạo lực chưa ổn định. Còn **${getRemainingTimeText(left)}** mới có thể đấu pháp.`)],
+        components: [],
+      });
+      return;
+    }
+
+    const attackerMember = await interaction.guild.members.fetch(challenge.challengerId).catch(() => null);
+    const defenderMember = await interaction.guild.members.fetch(challenge.targetId).catch(() => null);
+    if (!attackerMember || !defenderMember) {
+      await interaction.update({ content: 'Không tìm thấy một trong hai đạo hữu, chiến thư bị hủy.', embeds: [], components: [] });
+      return;
+    }
+
+    const atkScore = calculateDauPhapPower(attacker, attackerMember);
+    const defScore = calculateDauPhapPower(defender, defenderMember);
+    const attackerUnit = createSkillCombatant({ id: attackerMember.id, label: attackerMember.displayName, userData: attacker, member: attackerMember, power: atkScore, skills: getCombatSkillBookForUser(attackerMember, attacker) });
+    const defenderUnit = createSkillCombatant({ id: defenderMember.id, label: defenderMember.displayName, userData: defender, member: defenderMember, power: defScore, skills: getCombatSkillBookForUser(defenderMember, defender) });
+    const battle = runTurnBasedCombat({ allies: [attackerUnit], enemies: [defenderUnit], maxTurns: 8, title: 'Đấu pháp theo lượt · công pháp xuất chiêu' });
+    const attackerWon = battle.success;
+    const winnerData = attackerWon ? attacker : defender;
+    const loserData = attackerWon ? defender : attacker;
+    const winnerMember = attackerWon ? attackerMember : defenderMember;
+    const loserMember = attackerWon ? defenderMember : attackerMember;
+
+    const tuViReward = 35 + Math.floor(Math.sqrt(Math.max(0, Number(loserData.tuViExp) || 0)) / 4);
+    const winnerCongHienReward = 24;
+    const loserCongHienReward = 8;
+    const loserTuViBefore = Math.max(0, Number(loserData.tuViExp) || 0);
+    const loserCurrentLevel = getCurrentTuViLevel(loserMember, loserTuViBefore);
+    const loserFloorExp = expMinimumForLevel(loserCurrentLevel);
+    const loserAvailableLoss = Math.max(0, loserTuViBefore - loserFloorExp);
+    const loserTuViPenalty = Math.min(Math.max(15, Math.floor(loserTuViBefore * 0.02)), 180, loserAvailableLoss);
+    const rewardInfo = applyArtifactTuViBonus(winnerData, winnerMember, applyTuViMultiplier(winnerData, tuViReward), 'dauphap');
+
+    winnerData.tuViExp = Math.max(0, (Number(winnerData.tuViExp) || 0) + rewardInfo.amount);
+    loserData.tuViExp = Math.max(0, loserTuViBefore - loserTuViPenalty);
+    addCongHien(winnerData, winnerCongHienReward);
+    addCongHien(loserData, loserCongHienReward);
+    winnerData.dauPhapWins = Math.max(0, Number(winnerData.dauPhapWins) || 0) + 1;
+    loserData.dauPhapLosses = Math.max(0, Number(loserData.dauPhapLosses) || 0) + 1;
+    attacker.lastDauPhapAt = now;
+    defender.lastDauPhapAt = now;
+    await grantCongPhapMastery(attacker, attackerMember, attackerWon ? 18 : 10, 'dauphap');
+    await grantCongPhapMastery(defender, defenderMember, attackerWon ? 10 : 18, 'dauphap');
+
+    let tamMaLine = 'Không phát sinh tâm ma.';
+    if (Math.random() < 0.18) {
+      setTemporaryStatus(loserData, 'Tâm Ma Quấn Thân', 60 * 60 * 1000, { dotPhaPenalty: true });
+      tamMaLine = `${loserMember} đạo tâm chấn động, tạm dính **Tâm Ma Quấn Thân**.`;
+    }
+
+    await syncTuViRoles(interaction.guild, winnerMember, winnerData.tuViExp, { fromExp: true }).catch(() => null);
+    await syncTuViRoles(interaction.guild, loserMember, loserData.tuViExp, { fromExp: true }).catch(() => null);
+    await syncDiscipleRole(interaction.guild, winnerMember, winnerData.congHienExp).catch(() => null);
+    await syncDiscipleRole(interaction.guild, loserMember, loserData.congHienExp).catch(() => null);
+    await resolveTemporaryStatusEffects(interaction.guild, loserMember, loserData).catch(() => null);
+    saveUsers(users);
+
+    const embed = new EmbedBuilder()
+      .setColor(attackerWon ? GOLD : 0x60a5fa)
+      .setTitle('Đấu Pháp Đã Kết Thúc')
+      .setDescription(`${attackerMember} và ${defenderMember} đã đồng ý giao thủ tại pháp đàn.`)
+      .addFields(
+        { name: 'Lực chiến nền', value: `${attackerMember.displayName}: **${atkScore}** · ${getMemberCongPhapText(attackerMember)}
+${defenderMember.displayName}: **${defScore}** · ${getMemberCongPhapText(defenderMember)}`, inline: false },
+        { name: 'Diễn biến', value: compactPokemonCombatLog(battle.lines || battle.summary, 6), inline: false },
+        { name: 'Thắng trận', value: `${winnerMember} nhận **+${rewardInfo.amount} tu vi**, **+${winnerCongHienReward} cống hiến**.`, inline: false },
+        { name: 'Bại trận', value: loserTuViPenalty > 0 ? `${loserMember} vẫn nhận **+${loserCongHienReward} cống hiến**, nhưng hao tổn **-${loserTuViPenalty} tu vi**.` : `${loserMember} vẫn nhận **+${loserCongHienReward} cống hiến**. Tu vi đã chạm đáy cảnh giới hiện tại nên không bị tụt thêm.`, inline: false },
+        { name: 'Tâm ma', value: tamMaLine, inline: false },
+      );
+
+    await interaction.update({ embeds: [embed], components: [] });
+  }
+
+  async function handleDauPhapReject(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Đấu pháp chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const challengeId = interaction.customId.slice(DAU_PHAP_REJECT_BUTTON_PREFIX.length);
+    const challenge = DAU_PHAP_CHALLENGES.get(challengeId);
+    if (!challenge || challenge.guildId !== interaction.guildId || Date.now() > challenge.expiresAt) {
+      DAU_PHAP_CHALLENGES.delete(challengeId);
+      await interaction.reply({ content: 'Chiến thư này đã hết hiệu lực.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (interaction.user.id !== challenge.targetId && interaction.user.id !== challenge.challengerId) {
+      await interaction.reply({ content: 'Chỉ hai bên trong chiến thư mới có thể hủy trận này.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    DAU_PHAP_CHALLENGES.delete(challengeId);
+    const challengerMember = await interaction.guild.members.fetch(challenge.challengerId).catch(() => null);
+    const targetMember = await interaction.guild.members.fetch(challenge.targetId).catch(() => null);
+    const embed = new EmbedBuilder()
+      .setColor(0x94a3b8)
+      .setTitle('Chiến Thư Đã Hủy')
+      .setDescription(`${targetMember || `<@${challenge.targetId}>`} chưa tiếp chiến thư của ${challengerMember || `<@${challenge.challengerId}>`}. Trận đấu pháp không diễn ra.`);
+
+    await interaction.update({ embeds: [embed], components: [] });
+  }
+
+  function calculateDauPhapPower(userData, member) {
+    return getCombatPower(userData, member, 'dauphap');
   }
 
   function ensureUsersFile() {
@@ -5651,6 +17434,37 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     );
   }
 
+
+  function ensureSuKienFile() {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+
+    if (!fs.existsSync(SU_KIEN_FILE)) {
+      fs.writeFileSync(SU_KIEN_FILE, JSON.stringify({ active: {} }, null, 2) + '\n', 'utf8');
+    }
+  }
+
+  function loadSuKien() {
+    ensureSuKienFile();
+    ensureBicanhFile();
+
+    try {
+      const raw = fs.readFileSync(SU_KIEN_FILE, 'utf8');
+      const data = raw.trim() ? JSON.parse(raw) : {};
+      return { active: data.active && typeof data.active === 'object' ? data.active : {} };
+    } catch (error) {
+      console.error('Khong the doc data/su_kien.json:', error);
+      return { active: {} };
+    }
+  }
+
+  function saveSuKien(data) {
+    ensureSuKienFile();
+    ensureBicanhFile();
+    fs.writeFileSync(SU_KIEN_FILE, `${JSON.stringify({ active: data.active && typeof data.active === 'object' ? data.active : {} }, null, 2)}\n`, 'utf8');
+  }
+
   function getOrCreateUser(users, userId) {
     if (!users[userId]) {
       users[userId] = createDefaultUserData();
@@ -5672,6 +17486,17 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       normalized.disciples = [];
     }
 
+    if (!Array.isArray(normalized.ketBaiIds)) {
+      normalized.ketBaiIds = [];
+    }
+
+    if (!Array.isArray(normalized.relationLog)) {
+      normalized.relationLog = [];
+    }
+
+    normalized.daoLuId = normalized.daoLuId ? String(normalized.daoLuId) : null;
+    normalized.masterId = normalized.masterId ? String(normalized.masterId) : null;
+
     if (!normalized.githubTotalExp && normalized.githubDailyExp > 0) {
       normalized.githubTotalExp = normalized.githubDailyExp;
     }
@@ -5687,8 +17512,10 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       normalized.storageBag = DEFAULT_STORAGE_BAG;
     }
 
-    if (normalized.equippedArtifact && !normalized.inventory.some((entry) => getInventoryItemKey(entry) === normalized.equippedArtifact)) {
-      normalized.equippedArtifact = null;
+    for (const slot of ['equippedArtifact', 'equippedWeapon', 'equippedArmor', 'equippedTool', 'equippedTalisman']) {
+      if (normalized[slot] && !normalized.inventory.some((entry) => getInventoryItemKey(entry) === normalized[slot])) {
+        normalized[slot] = null;
+      }
     }
 
     if (typeof normalized.congHienBalance !== 'number') {
@@ -5707,12 +17534,67 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     }
 
     normalized.beQuanRewardClaimed = Boolean(normalized.beQuanRewardClaimed);
+    normalized.lastCheckInDate = typeof normalized.lastCheckInDate === 'string' ? normalized.lastCheckInDate : null;
+    normalized.checkInStreak = Math.max(0, Number(normalized.checkInStreak) || 0);
+    normalized.lastCheckInAt = Number(normalized.lastCheckInAt) || 0;
+    normalized.linhCanPurify = Math.max(0, Number(normalized.linhCanPurify) || 0);
+    normalized.lastKyNgoAt = Number(normalized.lastKyNgoAt) || 0;
+    normalized.lastPassiveKyNgoAt = Number(normalized.lastPassiveKyNgoAt) || 0;
+    normalized.kyNgoCount = Math.max(0, Number(normalized.kyNgoCount) || 0);
+    normalized.tuLinhLevel = Math.max(1, Math.min(TU_LINH_LEVEL_CAP, Number(normalized.tuLinhLevel) || 1));
+    normalized.tuLinhExp = Math.max(0, Number(normalized.tuLinhExp) || 0);
+    normalized.lastTuLinhAt = Number(normalized.lastTuLinhAt) || 0;
+    normalized.dauPhapWins = Math.max(0, Number(normalized.dauPhapWins) || 0);
+    normalized.dauPhapLosses = Math.max(0, Number(normalized.dauPhapLosses) || 0);
+    normalized.lastDauPhapAt = Number(normalized.lastDauPhapAt) || 0;
+    normalized.suKienJoined = Array.isArray(normalized.suKienJoined) ? normalized.suKienJoined : [];
+    normalized.menhCach = normalized.menhCach && typeof normalized.menhCach === 'object' ? normalized.menhCach : null;
+    normalized.huyenMach = normalized.huyenMach && typeof normalized.huyenMach === 'object' ? normalized.huyenMach : null;
+    normalized.temporaryDirectStats = normalized.temporaryDirectStats && typeof normalized.temporaryDirectStats === 'object'
+      ? normalizeDirectStats(normalized.temporaryDirectStats)
+      : null;
+    normalizeUserSourceState(normalized);
+    normalizeCongPhapProgress(normalized);
+    hydrateDestinyBuffs(normalized);
 
     for (const field of LEGACY_USER_FIELDS) {
       delete normalized[field];
     }
 
     return normalized;
+  }
+
+  function normalizeUserSourceState(userData) {
+    userData.sourcePath = ['neutral', 'commit', 'force_push'].includes(userData.sourcePath) ? userData.sourcePath : 'neutral';
+    userData.congDucSource = Math.max(0, Number(userData.congDucSource) || 0);
+    userData.nghiepLuc = Math.max(0, Number(userData.nghiepLuc) || 0);
+    userData.technicalDebt = Math.max(0, Number(userData.technicalDebt) || 0);
+    userData.entropy = Math.max(0, Number(userData.entropy) || 0);
+    const profile = userData.sourceProfile && typeof userData.sourceProfile === 'object' ? userData.sourceProfile : {};
+    userData.sourceProfile = {
+      sourcePower: Math.max(0, Number(profile.sourcePower) || 0),
+      runtime: Math.max(0, Number(profile.runtime) || 0),
+      integrity: Math.max(0, Number(profile.integrity) || 0),
+      logic: Math.max(0, Number(profile.logic) || 0),
+      throughput: Math.max(0, Number(profile.throughput) || 0),
+      stability: Math.max(0, Number(profile.stability) || 0),
+    };
+    const pathPoints = userData.sourcePathPoints && typeof userData.sourcePathPoints === 'object' ? userData.sourcePathPoints : {};
+    userData.sourcePathPoints = {
+      commit: Math.max(0, Number(pathPoints.commit) || 0),
+      neutral: Math.max(0, Number(pathPoints.neutral) || 0),
+      force_push: Math.max(0, Number(pathPoints.force_push) || 0),
+    };
+    const topPath = Object.entries(userData.sourcePathPoints).sort((a, b) => b[1] - a[1])[0];
+    if (topPath && topPath[1] > 0) userData.sourcePath = topPath[0];
+    if (!userData.lastXuatSonDate || typeof userData.lastXuatSonDate !== 'string') userData.lastXuatSonDate = null;
+    userData.dailyXuatSonCount = Math.max(0, Number(userData.dailyXuatSonCount) || 0);
+    if (!userData.lastDoiCongHienDate || typeof userData.lastDoiCongHienDate !== 'string') userData.lastDoiCongHienDate = null;
+    userData.dailyDoiCongHien = Math.max(0, Number(userData.dailyDoiCongHien) || 0);
+    userData.activeXuatSon = userData.activeXuatSon && typeof userData.activeXuatSon === 'object' ? userData.activeXuatSon : null;
+    userData.xuatSonCases = userData.xuatSonCases && typeof userData.xuatSonCases === 'object' ? userData.xuatSonCases : {};
+    userData.weeklyContribution = userData.weeklyContribution && typeof userData.weeklyContribution === 'object' ? userData.weeklyContribution : {};
+    return userData;
   }
 
   function createDefaultUserData() {
@@ -5731,11 +17613,13 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       lastMessageCongHienAt: 0,
       dailyMessageCongHien: 0,
       dailyMessageDate: getTodayString(),
-      lastCoDuyenAt: 0,
-      coDuyenLuckBonus: 0,
+      lastCheckInDate: null,
+      checkInStreak: 0,
+      lastCheckInAt: 0,
       tanQuyenCount: 0,
       temporaryStatus: null,
       temporaryStatusExpireAt: 0,
+      temporaryDirectStats: null,
       tuViMultiplierUntil: 0,
       tuViMultiplierValue: 1,
       dotPhaPenaltyUntil: 0,
@@ -5750,11 +17634,48 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       inventory: [],
       storageBag: DEFAULT_STORAGE_BAG,
       equippedArtifact: null,
+      equippedWeapon: null,
+      equippedArmor: null,
+      equippedTool: null,
+      equippedTalisman: null,
       lastMissionDate: null,
       restingUntil: 0,
       restingReason: null,
       masterId: null,
       disciples: [],
+      ketBaiIds: [],
+      daoLuId: null,
+      relationLog: [],
+      linhCan: null,
+      linhCanPurify: 0,
+      lastKyNgoAt: 0,
+      lastPassiveKyNgoAt: 0,
+      kyNgoCount: 0,
+      tuLinhLevel: 1,
+      tuLinhExp: 0,
+      lastTuLinhAt: 0,
+      dauPhapWins: 0,
+      dauPhapLosses: 0,
+      lastDauPhapAt: 0,
+      suKienJoined: [],
+      menhCach: null,
+      huyenMach: null,
+      congPhapProgress: {},
+      daoNghe: { key: null, exp: 0, lastWorkDate: null, lastCraftDate: null, lastCraftAt: 0, materials: {}, knownBlueprints: [], craftingSpec: 'on_dinh', craftedCount: 0, craftSuccessCount: 0, craftFailCount: 0, decomposeCount: 0 },
+      sourcePath: 'neutral',
+      sourcePathPoints: { commit: 0, neutral: 0, force_push: 0 },
+      congDucSource: 0,
+      nghiepLuc: 0,
+      technicalDebt: 0,
+      entropy: 0,
+      sourceProfile: { sourcePower: 0, runtime: 0, integrity: 0, logic: 0, throughput: 0, stability: 0 },
+      activeXuatSon: null,
+      xuatSonCases: {},
+      weeklyContribution: {},
+      lastXuatSonDate: null,
+      dailyXuatSonCount: 0,
+      lastDoiCongHienDate: null,
+      dailyDoiCongHien: 0,
     };
   }
 
@@ -5775,12 +17696,17 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     const realmIndex = Math.floor(clampedLevel / MINOR_REALMS.length);
     const minorIndex = clampedLevel % MINOR_REALMS.length;
 
+    const realm = TU_VI_REALMS[realmIndex];
+    const minor = MINOR_REALMS[minorIndex];
+
     return {
       level: clampedLevel,
       realmIndex,
       minorIndex,
-      realm: TU_VI_REALMS[realmIndex],
-      minor: MINOR_REALMS[minorIndex],
+      realm,
+      minor,
+      title: getTuViDaoTitle(realm),
+      roleName: getTuViRoleName(realm, minor),
     };
   }
 
@@ -5866,9 +17792,28 @@ const AUTO_DISCIPLE_THRESHOLDS = [
   }
 
   function getAssignedTuViLevel(member) {
-    const realmIndex = TU_VI_REALMS.findIndex((roleName) =>
+    if (!member?.roles?.cache) return null;
+
+    const compactEntry = TU_VI_COMPACT_ROLE_ENTRIES.find((entry) =>
+      member.roles.cache.some((role) => role.name === entry.roleName),
+    );
+
+    if (compactEntry) {
+      return compactEntry.level;
+    }
+
+    const legacyBareRealm = LEGACY_BARE_TU_VI_REALMS.find((roleName) =>
       member.roles.cache.some((role) => role.name === roleName),
     );
+    let realmIndex = legacyBareRealm ? TU_VI_REALMS.indexOf(legacyBareRealm) : -1;
+
+    if (realmIndex < 0) {
+      const legacyName = LEGACY_TU_VI_REALMS.find((roleName) =>
+        member.roles.cache.some((role) => role.name === roleName),
+      );
+      if (legacyName) realmIndex = LEGACY_TU_VI_REALM_MAP[legacyName] ?? -1;
+    }
+
     const minorIndex = MINOR_REALMS.findIndex((roleName) =>
       member.roles.cache.some((role) => role.name === roleName),
     );
@@ -5889,105 +17834,142 @@ const AUTO_DISCIPLE_THRESHOLDS = [
         ? getLevelFromExp(tuViExp)
         : getAssignedTuViLevel(member) ?? 0;
     const tuVi = getTuViByLevel(targetLevel);
-    const realmRole = findRoleByName(guild, tuVi.realm);
-    const minorRole = findRoleByName(guild, tuVi.minor);
-    const missing = [
-      realmRole ? null : tuVi.realm,
-      minorRole ? null : tuVi.minor,
-    ].filter(Boolean);
+    const stageRoleName = getTuViRoleName(tuVi.realm, tuVi.minor);
+    const stageRole = findRoleByName(guild, stageRoleName);
 
-    if (missing.length > 0) {
+    if (!stageRole) {
       return {
         ok: false,
-        message: `Thiếu role tu vi: ${missing.join(', ')}. Hãy chạy \`npm run create:roles\` rồi thử lại.`,
+        message: `Thiếu role tu vi: ${stageRoleName}. Hãy chạy \`npm run create:roles\` rồi thử lại.`,
       };
     }
 
-    const oldRealmRoles = member.roles.cache.filter(
-      (role) => TU_VI_REALMS.includes(role.name) && role.id !== realmRole.id,
+    const oldTuViRoles = member.roles.cache.filter(
+      (role) => (ALL_TU_VI_REALM_ROLE_NAMES.includes(role.name) || MINOR_REALMS.includes(role.name)) && role.id !== stageRole.id,
     );
-    const oldMinorRoles = member.roles.cache.filter(
-      (role) => MINOR_REALMS.includes(role.name) && role.id !== minorRole.id,
-    );
-    const rolesToAdd = [realmRole, minorRole].filter((role) => !member.roles.cache.has(role.id));
+    const rolesToAdd = member.roles.cache.has(stageRole.id) ? [] : [stageRole];
     const blocker = await getTuViRoleManageBlocker(guild, [
       ...rolesToAdd,
-      ...oldRealmRoles.values(),
-      ...oldMinorRoles.values(),
+      ...oldTuViRoles.values(),
     ]);
 
     if (blocker) {
       return { ok: false, message: blocker };
     }
 
-    if (oldRealmRoles.size > 0) {
-      await member.roles.remove(oldRealmRoles, 'Dong bo role canh gioi tu vi.');
-    }
-
-    if (oldMinorRoles.size > 0) {
-      await member.roles.remove(oldMinorRoles, 'Dong bo role tieu canh tu vi.');
+    if (oldTuViRoles.size > 0) {
+      await member.roles.remove(oldTuViRoles, 'Dong bo role canh gioi tu vi.');
     }
 
     if (rolesToAdd.length > 0) {
       await member.roles.add(rolesToAdd, 'Dong bo role tu vi.');
     }
 
-    return { ok: true, tuVi };
+    return { ok: true, tuVi: { ...tuVi, roleName: stageRoleName } };
   }
 
-  async function syncDiscipleRole(guild, member, congHienExp) {
+  async function syncDiscipleRole(guild, member, congHienExp, options = {}) {
     await guild.roles.fetch();
 
     const autoRoleNames = AUTO_DISCIPLE_THRESHOLDS.map((entry) => entry.roleName);
+    const sectRole = findRoleByName(guild, DAI_DAO_TONG_ROLE_NAME);
     const sectPosition = getMemberSectPosition(member);
+    const allowAutoRankSync = Boolean(options.allowAutoRankSync);
+
+    if (!sectRole) {
+      return {
+        ok: false,
+        message: `Thiếu role tông môn: ${DAI_DAO_TONG_ROLE_NAME}. Hãy chạy \`npm run create:roles\` rồi thử lại.`,
+      };
+    }
 
     if (sectPosition) {
-      const oldRoles = member.roles.cache.filter((role) => autoRoleNames.includes(role.name));
+      const oldAutoRoles = member.roles.cache.filter((role) => autoRoleNames.includes(role.name));
+      const rolesToAdd = member.roles.cache.has(sectRole.id) ? [] : [sectRole];
+      const blocker = await getDiscipleRoleManageBlocker(guild, [
+        ...rolesToAdd,
+        ...oldAutoRoles.values(),
+      ]);
 
-      if (oldRoles.size > 0) {
-        const blocker = await getDiscipleRoleManageBlocker(guild, [...oldRoles.values()]);
+      if (blocker) {
+        return { ok: false, message: blocker };
+      }
 
-        if (blocker) {
-          return { ok: false, message: blocker };
-        }
+      if (oldAutoRoles.size > 0) {
+        await member.roles.remove(oldAutoRoles, 'Xoa cap de tu tu dong cho chuc vi tong mon.');
+      }
 
-        await member.roles.remove(oldRoles, 'Xoa cap de tu tu dong cho chuc vi tong mon.');
+      if (rolesToAdd.length > 0) {
+        await member.roles.add(rolesToAdd, 'Dong bo role Dai Dao Tong cho chuc vi tong mon.');
       }
 
       return { ok: true, rank: { roleName: sectPosition } };
     }
 
-    const rank = getDiscipleRankFromContribution(congHienExp);
-    const currentAutoRank = getMemberHighestAutoDiscipleRank(member);
-    const targetRank = getHigherDiscipleRank(currentAutoRank, rank.roleName);
-    const targetRole = findRoleByName(guild, targetRank);
+    // Mặc định KHÔNG tự nâng thân phận theo tổng cống hiến nữa.
+    // Thân phận đệ tử chỉ được nâng qua /nangthanphan để tránh vừa chat/điểm danh/làm nghề là role tự nhảy.
+    if (allowAutoRankSync) {
+      const targetRank = getDiscipleRankFromContribution(Number(congHienExp) || 0);
+      const targetRole = findRoleByName(guild, targetRank.roleName);
 
-    if (!targetRole) {
-      return {
-        ok: false,
-        message: `Thiếu role cấp đệ tử: ${targetRank}. Hãy chạy \`npm run create:roles\` rồi thử lại.`,
-      };
+      if (!targetRole) {
+        return {
+          ok: false,
+          message: `Thiếu role thân phận: ${targetRank.roleName}. Hãy chạy \`npm run create:roles\` rồi thử lại.`,
+        };
+      }
+
+      const oldRoles = member.roles.cache.filter(
+        (role) => DISCIPLE_RANK_ROLES.includes(role.name) && role.id !== targetRole.id,
+      );
+      const rolesToAdd = [sectRole, targetRole].filter((role) => !member.roles.cache.has(role.id));
+      const blocker = await getDiscipleRoleManageBlocker(guild, [
+        ...rolesToAdd,
+        ...oldRoles.values(),
+      ]);
+
+      if (blocker) {
+        return { ok: false, message: blocker };
+      }
+
+      if (oldRoles.size > 0) {
+        await member.roles.remove(oldRoles, 'Dong bo than phan: xoa role cu.');
+      }
+
+      if (rolesToAdd.length > 0) {
+        await member.roles.add(rolesToAdd, 'Dong bo Dai Dao Tong va than phan theo cong hien.');
+      }
+
+      return { ok: true, rank: { roleName: targetRank.roleName } };
     }
 
-    const oldRoles = member.roles.cache.filter(
-      (role) => autoRoleNames.includes(role.name) && role.id !== targetRole.id,
-    );
-    const rolesToAdd = member.roles.cache.has(targetRole.id) ? [] : [targetRole];
-    const blocker = await getDiscipleRoleManageBlocker(guild, [...rolesToAdd, ...oldRoles.values()]);
+    const currentRank = getMemberDiscipleRank(member);
+    const duplicateRankRoles = currentRank
+      ? member.roles.cache.filter((role) => DISCIPLE_RANK_ROLES.includes(role.name) && role.name !== currentRank)
+      : member.roles.cache.filter((role) => DISCIPLE_RANK_ROLES.includes(role.name));
+    const rolesToAdd = currentRank && !member.roles.cache.has(sectRole.id) ? [sectRole] : [];
+    const blocker = await getDiscipleRoleManageBlocker(guild, [
+      ...rolesToAdd,
+      ...duplicateRankRoles.values(),
+    ]);
 
     if (blocker) {
       return { ok: false, message: blocker };
     }
 
-    if (oldRoles.size > 0) {
-      await member.roles.remove(oldRoles, 'Dong bo cap de tu theo diem cong hien.');
+    if (duplicateRankRoles.size > 0) {
+      await member.roles.remove(duplicateRankRoles, 'Don role than phan trung lap, khong tu nang cap.');
     }
 
     if (rolesToAdd.length > 0) {
-      await member.roles.add(rolesToAdd, 'Dong bo cap de tu theo diem cong hien.');
+      await member.roles.add(rolesToAdd, 'Dong bo role Dai Dao Tong cho than phan hien co.');
     }
 
-    return { ok: true, rank: { roleName: targetRank } };
+    return {
+      ok: true,
+      rank: { roleName: currentRank || (member.roles.cache.has(sectRole.id) ? DAI_DAO_TONG_ROLE_NAME : 'Tán Tu') },
+      skippedAutoRank: true,
+    };
   }
 
   function getDiscipleRankFromContribution(congHienExp) {
@@ -6151,6 +18133,9 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     addCongHien(userData, 1);
     userData.lastMessageCongHienAt = now;
     userData.dailyMessageCongHien += 1;
+
+    await maybeTriggerPassiveKyNgo(message, member, userData);
+
     saveUsers(users);
 
     const syncResult = await syncDiscipleRole(message.guild, member, userData.congHienExp);
@@ -6172,6 +18157,420 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     const day = parts.find((part) => part.type === 'day')?.value;
 
     return `${year}-${month}-${day}`;
+  }
+
+  function hashStringToNumber(value) {
+    const text = String(value ?? '');
+    let hash = 2166136261;
+    for (let index = 0; index < text.length; index += 1) {
+      hash ^= text.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return Math.abs(hash >>> 0);
+  }
+
+  function getElementIndex(element) {
+    return Math.max(0, ELEMENTS.indexOf(element));
+  }
+
+  function buildBirthElementScores(ngay, thang, nam, userId = '') {
+    const canIndex = normalizeModulo(nam - 4, 10);
+    const chiIndex = normalizeModulo(nam - 4, 12);
+    const baseSources = [getCanElement(canIndex), getChiElement(chiIndex), getMonthElement(thang), getDayElement(ngay)];
+    const scores = Object.fromEntries(ELEMENTS.map((element) => [element, 0]));
+    baseSources.forEach((element, index) => {
+      scores[element] += 12 - index * 2;
+    });
+    const seed = hashStringToNumber(`${ngay}/${thang}/${nam}:${userId}`);
+    ELEMENTS.forEach((element, index) => {
+      scores[element] += ((seed >> (index * 4)) & 15) + normalizeModulo(ngay * (index + 3) + thang * (index + 5) + sumDigits(nam), 9);
+    });
+    scores[getDayElement(sumDigits(nam) + thang)] += 7;
+    scores[getMonthElement(normalizeModulo(ngay + thang, 12) + 1)] += 5;
+    return { scores, canIndex, chiIndex, canChi: `${CAN_NAMES[canIndex]} ${CHI_NAMES[chiIndex]}`, baseSources, seed };
+  }
+
+  function getRarityFromScore(score) {
+    if (score >= 985) return 'Thiên mệnh';
+    if (score >= 940) return 'Cấm kỵ';
+    if (score >= 880) return 'Cực hiếm';
+    if (score >= 720) return 'Hiếm';
+    if (score >= 500) return 'Dị biến';
+    return 'Ổn định';
+  }
+
+  function pickArchetypeByElement(table, element, seed, rarityBias = '') {
+    const matching = table.filter((entry) => entry.element === element);
+    const pool = matching.length > 0 ? matching : table;
+    const rareMatches = rarityBias ? pool.filter((entry) => entry.rarity === rarityBias) : [];
+    const finalPool = rareMatches.length > 0 && seed % 100 >= 72 ? rareMatches : pool;
+    return finalPool[seed % finalPool.length];
+  }
+
+  function calculateMenhCach(ngay, thang, nam, userId, displayName = '') {
+    const linhCan = calculateLinhCan(ngay, thang, nam);
+    const birth = buildBirthElementScores(ngay, thang, nam, userId);
+    const sorted = getSortedElementScores(birth.scores);
+    const primaryElement = sorted[0].element;
+    const secondaryElement = sorted[1]?.element ?? primaryElement;
+    const nameSeed = hashStringToNumber(displayName);
+    const menhSo = normalizeModulo(ngay * 31 + thang * 37 + nam * 13 + birth.seed + nameSeed + linhCan.doThuan * 7 + linhCan.count * 19, 1000);
+    const daoTam = clampNumber(35 + linhCan.doThuan * 0.45 + (menhSo % 27) - linhCan.count * 4, 1, 100);
+    const nghiepLuc = clampNumber((birth.seed % 61) + linhCan.count * 6 - Math.floor(linhCan.doThuan / 8), 0, 100);
+    const phucDuyen = clampNumber(100 - nghiepLuc + Math.floor(daoTam / 3) + (sumDigits(nam) % 17), 0, 100);
+    const resultRarity = getRarityFromScore(menhSo);
+    const archetype = pickArchetypeByElement(MENH_CACH_ARCHETYPES, primaryElement, birth.seed + menhSo, resultRarity);
+    return {
+      key: archetype.key,
+      name: archetype.name,
+      rarity: archetype.rarity,
+      resultRarity,
+      canChi: birth.canChi,
+      primaryElement,
+      secondaryElement,
+      menhSo,
+      daoTam: Math.round(daoTam),
+      nghiepLuc: Math.round(nghiepLuc),
+      phucDuyen: Math.round(phucDuyen),
+      formula: `(${ngay}×31 + ${thang}×37 + ${nam}×13 + khí số + ${linhCan.doThuan}×7 + ${linhCan.count}×19) mod 1000`,
+      elementScores: birth.scores,
+      dao: archetype.dao,
+      boon: archetype.boon,
+      flaw: archetype.flaw,
+      buff: archetype.buff ?? null,
+      createdAt: Date.now(),
+    };
+  }
+
+  function calculateHuyenMach(ngay, thang, nam, userId, displayName = '') {
+    const linhCan = calculateLinhCan(ngay, thang, nam);
+    const birth = buildBirthElementScores(ngay, thang, nam, `${userId}:huyenmach`);
+    const sorted = getSortedElementScores(birth.scores);
+    const primaryElement = sorted[0].element;
+    const secondaryElement = sorted[1]?.element ?? primaryElement;
+    const nameSeed = hashStringToNumber(`${displayName}:dao-the`);
+    const huyetSo = normalizeModulo(ngay * ngay + thang * 89 + sumDigits(nam) * 144 + birth.seed + nameSeed + linhCan.doThuan * 11 + getElementIndex(primaryElement) * 53, 1000);
+    const purity = clampNumber(20 + Math.floor(huyetSo / 13) + linhCan.doThuan * 0.35 - linhCan.count * 3, 1, 100);
+    const awakening = clampNumber((huyetSo % 100) + Math.floor(purity / 5) + getElementIndex(secondaryElement) * 3, 1, 100);
+    const stability = clampNumber(100 - Math.abs(purity - awakening) + (birth.seed % 21), 1, 100);
+    const resultRarity = getRarityFromScore(huyetSo);
+    const archetype = pickArchetypeByElement(HUYEN_MACH_ARCHETYPES, primaryElement, birth.seed + huyetSo, resultRarity);
+    return {
+      key: archetype.key,
+      name: archetype.name,
+      rarity: archetype.rarity,
+      resultRarity,
+      canChi: birth.canChi,
+      primaryElement,
+      secondaryElement,
+      huyetSo,
+      purity: Math.round(purity),
+      awakening: Math.round(awakening),
+      stability: Math.round(stability),
+      formula: `(${ngay}² + ${thang}×89 + tổng chữ số năm×144 + khí số + ${linhCan.doThuan}×11 + hành chủ×53) mod 1000`,
+      elementScores: birth.scores,
+      effect: archetype.effect,
+      awakeningName: archetype.awakening,
+      buff: archetype.buff ?? null,
+      createdAt: Date.now(),
+    };
+  }
+
+  function calculateThienTuong(guildId, today) {
+    const [year, month, day] = today.split('-').map(Number);
+    const seed = hashStringToNumber(`${guildId}:${today}:thien-tuong`);
+    const scores = Object.fromEntries(ELEMENTS.map((element) => [element, 0]));
+    ELEMENTS.forEach((element, index) => {
+      scores[element] = normalizeModulo(day * (index + 5) + month * (index + 7) + year + ((seed >> (index * 3)) & 31), 100);
+    });
+    scores[getDayElement(day)] += 18;
+    scores[getMonthElement(month)] += 12;
+    const sorted = getSortedElementScores(scores);
+    const element = sorted[0].element;
+    const skyScore = normalizeModulo(day * 37 + month * 71 + year * 13 + seed, 997);
+    const pressure = clampNumber(25 + (skyScore % 76), 1, 100);
+    const archetype = pickArchetypeByElement(THIEN_TUONG_ARCHETYPES, element, seed + skyScore);
+    return { date: today, key: archetype.key, name: archetype.name, element, omen: archetype.omen, effect: archetype.effect, skyScore, pressure: Math.round(pressure), scores };
+  }
+
+  function normalizeDestinyPage(page) {
+    const parsed = Number(page);
+    if (!Number.isInteger(parsed)) return 0;
+    return clampNumber(parsed, 0, DESTINY_PAGE_COUNT - 1);
+  }
+
+  function buildDestinyPageButtonId(kind, userId, page) {
+    return `${DESTINY_PAGE_BUTTON_PREFIX}${kind}:${userId}:${normalizeDestinyPage(page)}`;
+  }
+
+  function buildDestinyPagerRow(kind, page, userId) {
+    const safePage = normalizeDestinyPage(page);
+    return new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(buildDestinyPageButtonId(kind, userId, safePage - 1))
+        .setLabel('◀ Trước')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(safePage <= 0),
+      new ButtonBuilder()
+        .setCustomId(`${DESTINY_PAGE_BUTTON_PREFIX}noop:${userId}:${safePage}`)
+        .setLabel(`${safePage + 1}/${DESTINY_PAGE_COUNT}`)
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(true),
+      new ButtonBuilder()
+        .setCustomId(buildDestinyPageButtonId(kind, userId, safePage + 1))
+        .setLabel('Sau ▶')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(safePage >= DESTINY_PAGE_COUNT - 1),
+    );
+  }
+
+  function buildDestinyResultComponents(kind, page, userId, discipleRoleName = 'Tán Tu', includeOnboarding = false) {
+    const rows = [buildDestinyPagerRow(kind, page, userId)];
+
+    if (includeOnboarding) {
+      rows.push(buildOnboardingCoreRow());
+      rows.push(buildCongPhapSelectRow());
+      rows.push(...buildLinhCanActionRows(discipleRoleName));
+    }
+
+    return rows.slice(0, 5);
+  }
+
+  async function handleDestinyPage(interaction) {
+    const [, payload = ''] = interaction.customId.split(DESTINY_PAGE_BUTTON_PREFIX);
+    const [kind, targetUserId, pageText] = payload.split(':');
+
+    if (!['menh', 'huyen', 'onboard'].includes(kind)) {
+      await interaction.reply({ content: 'Trang này không còn hiệu lực.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (!interaction.inGuild() || !targetUserId) {
+      await interaction.reply({ content: 'Không thể mở trang căn cơ ngoài tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (interaction.user.id !== targetUserId) {
+      await interaction.reply({ content: 'Chỉ chủ đạo hồ mới được lật trang căn cơ này.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, targetUserId);
+    const member = await interaction.guild.members.fetch(targetUserId);
+    const page = normalizeDestinyPage(Number(pageText));
+    const includeOnboarding = isLinhCanTicket(interaction.channel);
+    const discipleRole = includeOnboarding ? getMemberOnboardingSectStatus(member) : (getMemberDiscipleRank(member) ?? 'Tán Tu');
+
+    if (kind === 'onboard') {
+      const ensured = ensureOnboardingDestinyData(userData, member);
+      if (!ensured.ok) {
+        await interaction.reply({ content: ensured.message, flags: MessageFlags.Ephemeral });
+        return;
+      }
+      saveUsers(users);
+      await interaction.update({
+        embeds: [buildOnboardingFlowEmbed(member, userData, page)],
+        components: buildOnboardingFlowComponents(page, targetUserId, discipleRole),
+      });
+      return;
+    }
+
+    const result = kind === 'menh' ? userData.menhCach : userData.huyenMach;
+
+    if (!result?.name) {
+      await interaction.reply({ content: 'Đạo hồ chưa có dữ liệu để lật trang.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    await interaction.update({
+      embeds: [kind === 'menh' ? buildMenhCachEmbed(member, result, true, page) : buildHuyenMachEmbed(member, result, true, page)],
+      components: buildDestinyResultComponents(kind, page, targetUserId, discipleRole, includeOnboarding),
+    });
+  }
+
+  function ensureOnboardingDestinyData(userData, member) {
+    const date = getStoredBirthDate(userData);
+    if (!date) {
+      return { ok: false, message: 'Chưa có ngày sinh. Hãy bấm Bắt Đầu Khai Đạo Hồ trước.' };
+    }
+
+    const { ngay, thang, nam } = date;
+    userData.linhCan = userData.linhCan?.displayName ? userData.linhCan : calculateLinhCan(ngay, thang, nam);
+    userData.huyenMach = userData.huyenMach?.name ? userData.huyenMach : calculateHuyenMach(ngay, thang, nam, member.id, member.displayName);
+    userData.menhCach = userData.menhCach?.name ? userData.menhCach : calculateMenhCach(ngay, thang, nam, member.id, member.displayName);
+    hydrateDestinyBuffs(userData);
+    return { ok: true };
+  }
+
+  function buildOnboardingFlowComponents(page, userId, discipleRoleName = 'Tán Tu') {
+    const safePage = normalizeDestinyPage(page);
+    const rows = [buildDestinyPagerRow('onboard', safePage, userId)];
+
+    if (safePage === 3) {
+      rows.push(buildCongPhapSelectRow());
+    }
+
+    if (safePage === 4) {
+      rows.push(...buildLinhCanActionRows(discipleRoleName));
+    }
+
+    return rows.slice(0, 5);
+  }
+
+  function buildOnboardingFlowEmbed(member, userData, page = 0) {
+    ensureOnboardingDestinyData(userData, member);
+    const safePage = normalizeDestinyPage(page);
+    const linh = userData.linhCan;
+    const huyen = userData.huyenMach;
+    const menh = userData.menhCach;
+    const congPhap = getMemberCongPhapText(member);
+    const sectStatus = getMemberOnboardingSectStatus(member);
+    const discipleRank = getMemberDiscipleRank(member) ?? 'Chưa có';
+    const date = getStoredBirthDate(userData);
+    const progress = ['Linh Căn', 'Đạo Thể', 'Mệnh Cách', 'Công Pháp', 'Nhập Tông']
+      .map((label, index) => index === safePage ? `**[${index + 1}. ${label}]**` : `${index + 1}. ${label}`)
+      .join('  →  ');
+
+    const embed = new EmbedBuilder()
+      .setColor(GOLD)
+      .setTitle(`Động Phủ Nhập Môn — ${safePage + 1}/5`)
+      .setDescription([`${member}`, progress].join('\n'));
+
+    if (safePage === 0) {
+      embed
+        .addFields(
+          { name: 'Linh Căn', value: `**${linh.displayName}**\n${linh.quality} · ${linh.classification}`, inline: true },
+          { name: 'Căn số', value: `Can Chi: **${linh.canChi}**\nNgày sinh: **${date ? `${date.ngay}/${date.thang}/${date.nam}` : 'đã khắc'}**`, inline: true },
+          { name: 'Đọc nhanh', value: `Độ thuần **${linh.doThuan}/100** · Điểm phân loại **${linh.phanLoaiScore}/99**\n${formatElementScores(linh.scores)}`, inline: false },
+          { name: 'Tẩy Tủy', value: formatLinhCanPurifyProgress(userData), inline: false },
+        );
+    } else if (safePage === 1) {
+      embed
+        .addFields(
+          { name: 'Đạo Thể', value: `**${huyen.name}**\n${huyen.rarity} / ${huyen.resultRarity}`, inline: true },
+          { name: 'Mạch chính', value: `**${huyen.primaryElement}** chủ mạch\n**${huyen.secondaryElement}** phụ mạch`, inline: true },
+          { name: 'Tam chỉ số', value: `Tinh thuần **${huyen.purity}/100** · Thức tỉnh **${huyen.awakening}/100** · Ổn định **${huyen.stability}/100**`, inline: false },
+          { name: 'Thiên phú', value: `${huyen.awakeningName ?? 'Chưa hiện ấn thức'} — ${huyen.effect ?? 'Thiên phú đang ẩn.'}`, inline: false },
+          { name: 'Buff đạo thể', value: getHuyenMachBuffText(huyen), inline: false },
+        );
+    } else if (safePage === 2) {
+      embed
+        .addFields(
+          { name: 'Mệnh Cách', value: `**${menh.name}**\n${menh.rarity} / ${menh.resultRarity}`, inline: true },
+          { name: 'Mệnh chủ', value: `**${menh.primaryElement}** chủ mệnh\n**${menh.secondaryElement}** phụ mệnh`, inline: true },
+          { name: 'Mệnh bàn', value: `Đạo tâm **${menh.daoTam}/100** · Nghiệp lực **${menh.nghiepLuc}/100** · Phúc duyên **${menh.phucDuyen}/100**`, inline: false },
+          { name: 'Đạo luận', value: menh.dao, inline: false },
+          { name: 'Buff mệnh cách', value: getMenhCachBuffText(menh), inline: false },
+        );
+    } else if (safePage === 3) {
+      embed
+        .addFields(
+          { name: 'Công Pháp Chủ Tu', value: `Hiện tại: **${congPhap}**`, inline: false },
+          { name: 'Chọn nhanh', value: 'Dùng menu bên dưới. Nên chọn theo vai trò muốn build: Frontend/UI, Backend/Database, Fullstack, DevOps/Security, Game/AI/System.', inline: false },
+          { name: 'Sau khi chọn', value: 'Bot sẽ quay về trang 5 để gửi đơn **Xin Gia Nhập Tông Môn**.', inline: false },
+        );
+    } else {
+      embed
+        .addFields(
+          { name: 'Đạo hồ đã khắc', value: [`Linh căn: **${linh.displayName}**`, `Đạo thể: **${huyen.name}**`, `Mệnh cách: **${menh.name}**`, `Công pháp: **${congPhap}**`].join('\n'), inline: false },
+          { name: 'Thân phận', value: `Tông môn: **${sectStatus}**\nCấp đệ tử: **${discipleRank}**`, inline: true },
+          { name: 'Việc cuối', value: getLinhCanActionHint(sectStatus), inline: false },
+        );
+    }
+
+    return embed.setFooter({ text: `Trang ${safePage + 1}/5 · Gọn.` });
+  }
+  function buildMenhCachEmbed(member, result, isExisting, page = 0) {
+    const safePage = normalizeDestinyPage(page);
+    const embed = new EmbedBuilder()
+      .setColor(GOLD)
+      .setTitle(isExisting ? 'Mệnh Cách Đã Định' : 'Thiên Cơ Khai Mệnh')
+      .setDescription(`${member} hiện mệnh cách **${result.name}**.`);
+
+    if (safePage === 0) {
+      embed.addFields(
+        { name: 'Mệnh cách', value: `${result.name}
+Độ hiếm: ${result.rarity} / ${result.resultRarity}`, inline: true },
+        { name: 'Can Chi', value: result.canChi, inline: true },
+        { name: 'Chủ hành', value: `${result.primaryElement} chủ mệnh
+${result.secondaryElement} phụ mệnh`, inline: true },
+        { name: 'Dấu mệnh', value: `Mệnh số đã khắc: **${result.menhSo}/999**.
+Kết quả đã khắc vào đạo hồ.`, inline: false },
+      );
+    } else if (safePage === 1) {
+      embed.addFields(
+        { name: 'Mệnh bàn ngũ hành', value: formatElementScores(result.elementScores), inline: false },
+        { name: 'Hành chủ đạo', value: `${result.primaryElement} giữ vai trò chủ mệnh; ${result.secondaryElement} là phụ mệnh trợ lực.`, inline: false },
+      );
+    } else if (safePage === 2) {
+      embed.addFields(
+        { name: 'Tam chỉ số mệnh bàn', value: [`Đạo tâm: **${result.daoTam}/100**`, `Nghiệp lực: **${result.nghiepLuc}/100**`, `Phúc duyên: **${result.phucDuyen}/100**`].join('\n'), inline: false },
+        { name: 'Cách đọc nhanh', value: 'Đạo tâm ổn định · Phúc duyên tăng cơ hội · Nghiệp lực tăng rủi ro.', inline: false },
+      );
+    } else if (safePage === 3) {
+      embed.addFields(
+        { name: 'Chỉ số mệnh cách', value: getMenhCachBuffText(result), inline: false },
+      );
+    } else {
+      embed.addFields(
+        { name: 'Mặt trái', value: result.flaw, inline: false },
+        { name: 'Đường nên đi', value: 'Chọn công pháp, nhập tông, rồi đi nhiệm vụ/bí cảnh đúng cấp.', inline: false },
+      );
+    }
+
+    return embed.setFooter({ text: `Trang ${safePage + 1}/${DESTINY_PAGE_COUNT} • Mệnh cách đã khắc.` });
+  }
+
+  function buildHuyenMachEmbed(member, result, isExisting, page = 0) {
+    const safePage = normalizeDestinyPage(page);
+    const embed = new EmbedBuilder()
+      .setColor(GOLD)
+      .setTitle(isExisting ? 'Huyền Mạch Đã Khắc' : 'Huyền Mạch Khai Ấn')
+      .setDescription(`${member} thức tỉnh **${result.name}**.`);
+
+    if (safePage === 0) {
+      embed.addFields(
+        { name: 'Đạo thể / Huyền mạch', value: `${result.name}
+Độ hiếm: ${result.rarity} / ${result.resultRarity}`, inline: true },
+        { name: 'Can Chi', value: result.canChi, inline: true },
+        { name: 'Chủ hành', value: `${result.primaryElement} chủ mạch
+${result.secondaryElement} phụ mạch`, inline: true },
+        { name: 'Dấu huyết mạch', value: `Huyết số đã khắc: **${result.huyetSo}/999**.
+Kết quả đã khắc vào đạo hồ.`, inline: false },
+      );
+    } else if (safePage === 1) {
+      embed.addFields(
+        { name: 'Mạch tượng ngũ hành', value: formatElementScores(result.elementScores), inline: false },
+        { name: 'Hành chủ mạch', value: `${result.primaryElement} là mạch chính; ${result.secondaryElement} là mạch phụ hỗ trợ khi tu luyện.`, inline: false },
+      );
+    } else if (safePage === 2) {
+      embed.addFields(
+        { name: 'Tam chỉ số huyền mạch', value: [`Độ tinh thuần: **${result.purity}/100**`, `Thức tỉnh: **${result.awakening}/100**`, `Ổn định: **${result.stability}/100**`].join('\n'), inline: false },
+        { name: 'Cách đọc nhanh', value: 'Tinh thuần là nền · Thức tỉnh là bộc phát · Ổn định giảm rủi ro.', inline: false },
+      );
+    } else if (safePage === 3) {
+      embed.addFields(
+        { name: 'Ấn thức', value: result.awakeningName, inline: true },
+        { name: 'Thiên phú', value: result.effect, inline: false },
+        { name: 'Buff đạo thể', value: getHuyenMachBuffText(result), inline: false },
+      );
+    } else {
+      embed.addFields(
+        { name: 'Chỉ số đạo thể', value: getHuyenMachBuffText(result), inline: false },
+        { name: 'Bước tiếp theo', value: 'Soi Mệnh Cách, chọn Công Pháp, rồi xin nhập tông.', inline: false },
+      );
+    }
+
+    return embed.setFooter({ text: `Trang ${safePage + 1}/${DESTINY_PAGE_COUNT} • Đạo thể đã khắc.` });
+  }
+
+  function formatSavedMenhCach(result) {
+    return result?.name ? `${result.name} (${result.rarity ?? result.resultRarity ?? 'chưa rõ'})` : 'Chưa xem mệnh';
+  }
+
+  function formatSavedHuyenMach(result) {
+    return result?.name ? `${result.name} (${result.rarity ?? result.resultRarity ?? 'chưa rõ'})` : 'Chưa dò huyền mạch';
   }
 
   function calculateLinhCan(ngay, thang, nam) {
@@ -6210,6 +18609,7 @@ const AUTO_DISCIPLE_THRESHOLDS = [
       },
       scores,
       doThuan: qualityResult.doThuan,
+      rawDoThuan: qualityResult.rawDoThuan,
       quality: qualityResult.name,
       strongestElement: qualityResult.strongestElement,
       classification: classification.name,
@@ -6257,47 +18657,64 @@ const AUTO_DISCIPLE_THRESHOLDS = [
     const top1 = top1Entry.score;
     const top2 = top2Entry.score;
     const strongestElement = top1Entry.element;
-    let doThuan = top1 * 20 + (top1 - top2) * 15 + (5 - soHe) * 10;
+    let rawDoThuan = top1 * 20 + (top1 - top2) * 15 + (5 - soHe) * 10;
 
     if (sourceElements.canElement === strongestElement) {
-      doThuan += 5;
+      rawDoThuan += 5;
     }
 
     if (sourceElements.chiElement === strongestElement) {
-      doThuan += 5;
+      rawDoThuan += 5;
     }
 
     if (sourceElements.monthElement === strongestElement) {
-      doThuan += 5;
+      rawDoThuan += 5;
     }
 
-    doThuan = Math.max(0, Math.min(100, doThuan));
+    const doThuan = Math.max(0, Math.min(100, rawDoThuan));
 
     return {
       doThuan,
+      rawDoThuan,
       strongestElement,
-      name: getQualityName(doThuan),
+      name: getQualityName(doThuan, rawDoThuan),
     };
   }
 
-  function getQualityName(doThuan) {
-    if (doThuan <= 29) {
-      return 'Hạ Phẩm Linh Căn';
+  function getQualityName(doThuan, rawDoThuan = doThuan) {
+    if (rawDoThuan >= 190) {
+      return 'Đạo Nguyên Linh Căn';
     }
 
-    if (doThuan <= 54) {
-      return 'Trung Phẩm Linh Căn';
+    if (rawDoThuan >= 165) {
+      return 'Hỗn Độn Linh Căn';
     }
 
-    if (doThuan <= 74) {
-      return 'Thượng Phẩm Linh Căn';
+    if (rawDoThuan >= 135) {
+      return 'Tiên Phẩm Linh Căn';
     }
 
-    if (doThuan <= 89) {
+    if (rawDoThuan >= 110) {
+      return 'Thánh Phẩm Linh Căn';
+    }
+
+    if (doThuan >= 90) {
+      return 'Thiên Phẩm Linh Căn';
+    }
+
+    if (doThuan >= 75) {
       return 'Cực Phẩm Linh Căn';
     }
 
-    return 'Thiên Phẩm Linh Căn';
+    if (doThuan >= 55) {
+      return 'Thượng Phẩm Linh Căn';
+    }
+
+    if (doThuan >= 30) {
+      return 'Trung Phẩm Linh Căn';
+    }
+
+    return 'Hạ Phẩm Linh Căn';
   }
 
   function getCanElement(canIndex) {
@@ -6377,11 +18794,8 @@ const AUTO_DISCIPLE_THRESHOLDS = [
   }
 
   function resolveResultRoles(guild, result) {
-    const requiredRoleNames = [
-      result.classification,
-      ...result.elements.map((element) => `${element} Linh Căn`),
-      result.quality,
-    ];
+    const compactLinhCanRoleName = getLinhCanCompactRoleName(result.quality, result.classification);
+    const requiredRoleNames = [compactLinhCanRoleName];
     const roles = [];
     const missing = [];
 
@@ -6402,7 +18816,6 @@ const AUTO_DISCIPLE_THRESHOLDS = [
   function isLinhCanTicket(channel) {
     return (
       channel?.type === ChannelType.GuildText &&
-      channel.name?.startsWith('linh-can-') &&
       channel.topic?.startsWith(TICKET_TOPIC_PREFIX)
     );
   }
@@ -6443,5 +18856,1851 @@ const AUTO_DISCIPLE_THRESHOLDS = [
 
     return slug || fallback;
   }
+
+
+  // ===== Bí Cảnh v31 · daily conquest 1440 content override =====
+  const DAILY_BICANH_MAX_PARTY_SIZE = 3;
+  const DAILY_BICANH_BASE_LIVES = 3;
+  const DAILY_BICANH_TURN_TIMEOUT_MS = 60 * 1000;
+  const DAILY_BICANH_PLACES = [
+    ['log_vach_da', 'Vách Log Cổ', 'những dòng stack trace hóa đạo văn trên vách đá'],
+    ['cache_linh_tuyen', 'Linh Tuyền Cache', 'mạch linh khí mát lạnh chảy qua các layer cache'],
+    ['api_thach_mon', 'API Thạch Môn', 'cổng đá khắc request/response xoay vần'],
+    ['git_hon_kieu', 'Git Hồn Kiều', 'chiếc cầu làm từ vô số nhánh commit dang dở'],
+    ['css_huyen_lang', 'Huyễn Diện Lang', 'hành lang màu sắc thay đổi theo từng bước chân'],
+    ['sql_dia_mach', 'SQL Địa Mạch', 'long mạch dữ liệu cuộn sâu dưới nền đá'],
+    ['docker_thap_tang', 'Docker Thập Tầng', 'từng lớp container xếp như bảo tháp'],
+    ['auth_am_dien', 'Auth Ám Điện', 'phù văn quyền hạn phủ đầy điện tối'],
+    ['readme_tang_kinh', 'README Tàng Kinh', 'giá sách cũ chất đầy guide nửa mất nửa còn'],
+    ['test_luyen_tam', 'Test Luyện Tâm Đài', 'pháp đài kiểm nghiệm đạo tâm bằng test case'],
+    ['queue_hoang_mac', 'Queue Hoang Mạc', 'hàng đợi cát vàng kéo dài tới tận chân trời'],
+    ['monitor_thien_nhan', 'Monitor Thiên Nhãn', 'mắt trận quan sát từng nhịp linh khí'],
+    ['legacy_huyet_mach', 'Legacy Huyết Mạch', 'mạch máu code cũ vẫn đập dưới lòng đất'],
+    ['prompt_me_cung', 'Prompt Mê Cung', 'câu lệnh mơ hồ biến thành lối rẽ vô tận'],
+    ['kernel_thach_that', 'Kernel Thạch Thất', 'thạch thất tĩnh lặng như lõi hệ thống'],
+    ['deploy_loi_dai', 'Deploy Lôi Đài', 'mây đen production cuộn trên võ đài'],
+    ['ui_ao_anh', 'UI Ảo Ảnh Hồ', 'mặt hồ phản chiếu giao diện không tồn tại'],
+    ['security_cam_mon', 'Security Cấm Môn', 'cửa cấm treo đầy phong ấn bảo mật'],
+    ['refactor_co_mo', 'Refactor Cổ Mộ', 'mộ cổ chôn những hàm dài như long mạch'],
+    ['source_tinh_hai', 'Source Tinh Hải', 'biển sao chiếu thành từng dòng source cổ'],
+  ].map(([key, name, text]) => ({ key, name, text }));
+
+  const DAILY_BICANH_INCIDENTS = [
+    { key: 'tieu_bug_chan_duong', name: 'Tiểu Bug Chặn Đường', type: 'monster', tone: 'Một bug nhỏ ngửi thấy linh khí sống liền bò ra thử đạo hạnh.' },
+    { key: 'ruong_cache_cu', name: 'Rương Cache Cũ', type: 'treasure', tone: 'Một rương cache phủ bụi hiện ra, khóa đã mục nhưng vẫn có linh quang.' },
+    { key: 'ngo_dao_trace', name: 'Ngộ Đạo Trace', type: 'kyngo', tone: 'Dấu vết lỗi nối nhau thành một đường đạo lý khó hiểu.' },
+    { key: 'lint_can_nhiep', name: 'Lint Can Nhiễu', type: 'trap', tone: 'Một trận lint vô hình bắt đầu soi từng tạp niệm trong thức hải.' },
+    { key: 'linh_tuyen_debug', name: 'Linh Tuyền Debug', type: 'spring', tone: 'Dòng linh tuyền trong vắt rửa bớt bug khí bám trên kinh mạch.' },
+    { key: 'nga_ba_quyet_dinh', name: 'Ngã Ba Quyết Định', type: 'choice', tone: 'Ba lối rẽ hiện ra: an toàn, ngộ đạo hoặc tham lam.' },
+    { key: 'tinh_anh_an_nap', name: 'Tinh Anh Ẩn Nấp', type: 'elite', tone: 'Một khí tức tinh anh giấu mình sau lớp log im lặng.' },
+    { key: 'dao_van_vo_ra', name: 'Đạo Văn Vỡ Ra', type: 'kyngo', tone: 'Đạo văn vỡ thành mảnh nhỏ, mỗi mảnh giống một dòng code tự vận hành.' },
+    { key: 'rung_stacktrace', name: 'Rừng Stack Trace', type: 'monster', tone: 'Stack trace mọc thành rừng, tiếng lá khua như tiếng lỗi runtime.' },
+    { key: 'bach_bao_tui_roi', name: 'Túi Bách Bảo Rơi', type: 'treasure', tone: 'Một túi nhỏ rơi bên cạnh pháp trận, không rõ chủ cũ còn sống hay không.' },
+    { key: 'tam_ma_warning', name: 'Warning Tâm Ma', type: 'trap', tone: 'Warning đỏ rực nảy trong thức hải, càng nhìn càng thấy đạo tâm dao động.' },
+    { key: 'testcase_thien_y', name: 'Test Case Thiên Ý', type: 'choice', tone: 'Thiên ý đặt ra một test case: đi chắc, đi sâu, hay phá luật.' },
+    { key: 'phong_an_quyen_han', name: 'Phong Ấn Quyền Hạn', type: 'trap', tone: 'Một phong ấn permission chặn đường, động vào có thể phản phệ.' },
+    { key: 'linh_thao_doc_ky', name: 'Linh Thảo Đọc Kỹ', type: 'spring', tone: 'Một nhánh linh thảo mọc cạnh comment cổ: đọc kỹ thì thuốc lành, đọc lướt thì độc.' },
+    { key: 'bug_linh_bay_dan', name: 'Bug Linh Bầy Đàn', type: 'monster', tone: 'Bug linh không mạnh, nhưng kéo tới thành bầy như warning không dứt.' },
+    { key: 'co_quyen_tam_dac', name: 'Cổ Quyển Tâm Đắc', type: 'kyngo', tone: 'Một cổ quyển ghi lại kinh nghiệm debug của tiền nhân.' },
+    { key: 'boss_phu_bi_an', name: 'Boss Phụ Bí Ẩn', type: 'elite', tone: 'Một bóng đen mạnh hơn tầng này lẽ ra nên có, nhưng vẫn chưa tới mức tuyệt cảnh.' },
+    { key: 'thuong_nhan_an_danh', name: 'Thương Nhân Ẩn Danh', type: 'treasure', tone: 'Một thương nhân che mặt đổi vài món lặt vặt lấy chút thiện duyên.' },
+    { key: 'cuu_vien_de_tu_lac', name: 'Cứu Viện Đệ Tử Lạc', type: 'rescue', tone: 'Một đệ tử lạc đội bị kẹt trong vòng lặp cảnh giới, cần kéo ra trước khi tâm ma học được cách dùng GPS.' },
+    { key: 'giai_tran_source', name: 'Giải Trận Source', type: 'puzzle', tone: 'Pháp trận khóa bằng logic, độ toàn vẹn và một chút ác ý của tiền nhân.' },
+    { key: 'do_tham_an_tuyen', name: 'Dò Đường An Toàn', type: 'scout', tone: 'Dấu vết lỗi tách thành nhiều nhánh. Đọc đúng đường sẽ né bớt giao chiến kế tiếp.' },
+  ];
+
+  function getWeekKey(date = new Date()) {
+    const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
+    return parts;
+  }
+
+  function getDailyBicanhMaxFloors(userData, member = null, dungeon = null) {
+    const info = getAssignedTuViLevel(member, userData?.tuViExp || 0);
+    const realm = Number(info.realmIndex) || 0;
+    const base = realm >= 5 ? 9 : realm >= 2 ? 7 : 5;
+    return Math.max(5, Math.min(9, Number(dungeon?.floors) || base, base));
+  }
+
+  function getDailyBicanhCandidateDungeons(userData, member = null) {
+    const info = getAssignedTuViLevel(member, userData?.tuViExp || 0);
+    const realm = Number(info.realmIndex) || 0;
+    const candidates = DUNGEON_TEMPLATES.filter((d) => Number(d.minRealmIndex || 0) <= realm);
+    return candidates.length ? candidates : DUNGEON_TEMPLATES.slice(0, 3);
+  }
+
+  function pickDailyBicanhDungeon(userId, dayKey, userData, member = null) {
+    const candidates = getDailyBicanhCandidateDungeons(userData, member);
+    const index = deterministicScoreForKey('daily-bicanh-dungeon', `${dayKey}:${userId}`) % candidates.length;
+    return candidates[index] || DUNGEON_TEMPLATES[0];
+  }
+
+  function createDailyBicanhData(dayKey = getWeekKey()) {
+    const dungeon = getWeeklyBicanhTemplate(dayKey);
+    return normalizeWeeklyBicanhData({
+      weekKey: dayKey,
+      dungeonKey: dungeon.key,
+      dailyUses: {},
+      runs: {},
+      pendingMonster: null,
+      lastResult: 'Bí cảnh ngày đã mở. Mỗi đạo hữu có 1 lượt chinh phục hôm nay.',
+      panelChannelId: null,
+      panelMessageId: null,
+      guildId: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+  }
+
+  function normalizeWeeklyBicanhData(data = {}) {
+    const dayKey = typeof data.weekKey === 'string' ? data.weekKey : getWeekKey();
+    return {
+      weekKey: dayKey,
+      dungeonKey: typeof data.dungeonKey === 'string' ? data.dungeonKey : getWeeklyBicanhTemplate(dayKey).key,
+      dailyUses: data.dailyUses && typeof data.dailyUses === 'object' ? data.dailyUses : {},
+      runs: data.runs && typeof data.runs === 'object' ? data.runs : {},
+      pendingMonster: data.pendingMonster && typeof data.pendingMonster === 'object' ? data.pendingMonster : null,
+      lastResult: typeof data.lastResult === 'string' ? data.lastResult : 'Bí cảnh ngày đã mở.',
+      panelChannelId: data.panelChannelId ? String(data.panelChannelId) : null,
+      panelMessageId: data.panelMessageId ? String(data.panelMessageId) : null,
+      guildId: data.guildId ? String(data.guildId) : null,
+      createdAt: Number(data.createdAt) || Date.now(),
+      updatedAt: Number(data.updatedAt) || Date.now(),
+    };
+  }
+
+  function getWeeklyBicanhData() {
+    const dayKey = getWeekKey();
+    const current = normalizeWeeklyBicanhData(loadBicanhData());
+    if (current.weekKey !== dayKey) {
+      const fresh = createDailyBicanhData(dayKey);
+      fresh.panelChannelId = current.panelChannelId || null;
+      fresh.panelMessageId = current.panelMessageId || null;
+      fresh.guildId = current.guildId || null;
+      saveBicanhData(fresh);
+      return fresh;
+    }
+    return current;
+  }
+
+  function repairWeeklyBicanhData(data = {}) {
+    const normalized = normalizeWeeklyBicanhData(data);
+    for (const [runId, run] of Object.entries(normalized.runs || {})) {
+      if (!run || typeof run !== 'object') delete normalized.runs[runId];
+      else {
+        run.id = String(run.id || runId);
+        run.leaderId = String(run.leaderId || runId);
+        run.party = Array.from(new Set((Array.isArray(run.party) ? run.party : [run.leaderId]).map(String).filter(Boolean))).slice(0, DAILY_BICANH_MAX_PARTY_SIZE);
+        run.floor = Math.max(0, Number(run.floor) || 0);
+        run.maxFloors = Math.max(5, Math.min(9, Number(run.maxFloors) || 5));
+        run.lives = Math.max(0, Math.min(5, Number(run.lives) || DAILY_BICANH_BASE_LIVES));
+        run.status = String(run.status || 'running');
+        run.rewards = run.rewards && typeof run.rewards === 'object' ? run.rewards : { tuVi: 0, congHien: 0, mastery: 0, tamDac: 0, items: 0 };
+        run.pressure = normalizeBicanhRunPressure(run.pressure);
+        run.floor = Math.max(0, Math.min(Number(run.maxFloors) || 5, Number(run.floor) || 0));
+        run.floorEvents = run.floorEvents && typeof run.floorEvents === 'object' ? run.floorEvents : {};
+        if (run.pendingMonster?.status === 'pending') {
+          run.pendingMonster.runId = String(run.pendingMonster.runId || run.id);
+          run.pendingMonster.party = Array.from(new Set((Array.isArray(run.pendingMonster.party) ? run.pendingMonster.party : run.party).map(String).filter(Boolean))).slice(0, DAILY_BICANH_MAX_PARTY_SIZE);
+        } else {
+          run.pendingMonster = null;
+        }
+      }
+    }
+    if (normalized.pendingMonster?.status === 'pending') {
+      normalized.pendingMonster.party = Array.from(new Set((Array.isArray(normalized.pendingMonster.party) ? normalized.pendingMonster.party : []).map(String).filter(Boolean))).slice(0, DAILY_BICANH_MAX_PARTY_SIZE);
+      const run = normalized.runs?.[normalized.pendingMonster.runId];
+      if (run && !run.pendingMonster) run.pendingMonster = normalized.pendingMonster;
+    }
+    Object.assign(data, normalized);
+    return data;
+  }
+
+  function getWeeklyBicanhDungeon(data) {
+    return getDungeonTemplateByKey(data?.dungeonKey) || getWeeklyBicanhTemplate(data?.weekKey || getWeekKey());
+  }
+
+  function getDailyBicanhRun(data, userId) {
+    const runs = data.runs || {};
+    const own = runs[String(userId)];
+    if (own && !['completed', 'failed', 'abandoned'].includes(String(own.status))) return own;
+    return Object.values(runs).find((run) => Array.isArray(run.party) && run.party.includes(String(userId)) && !['completed', 'failed', 'abandoned'].includes(String(run.status))) || own || null;
+  }
+
+  function getDailyBicanhProgressLine(run) {
+    if (!run) return 'Chưa vào bí cảnh hôm nay.';
+    const statusLabel = { lobby: 'Lập tổ đội', running: 'Đang đi', choice: 'Chọn hướng', route_choice: 'Chọn lối', event_choice: 'Chọn cách xử lý', pending_monster: 'Chờ giao chiến', completed: 'Hoàn tất', failed: 'Thất bại', abandoned: 'Rút lui' }[String(run.status)] || String(run.status || 'Đang đi');
+    return `Tầng **${Math.min(run.floor, run.maxFloors)}/${run.maxFloors}** · Sinh lực **${run.lives}/${DAILY_BICANH_BASE_LIVES}** · **${statusLabel}**`;
+  }
+
+  function normalizeBicanhRunPressure(value = {}) {
+    const raw = value && typeof value === 'object' ? value : {};
+    return {
+      alert: Math.max(0, Math.min(100, Number(raw.alert) || 0)),
+      greed: Math.max(0, Math.min(100, Number(raw.greed) || 0)),
+      stability: Math.max(0, Math.min(100, Number(raw.stability) || 100)),
+    };
+  }
+
+  function applyBicanhPressure(run, patch = {}) {
+    run.pressure = normalizeBicanhRunPressure(run.pressure);
+    for (const key of ['alert', 'greed', 'stability']) {
+      if (Object.prototype.hasOwnProperty.call(patch, key)) {
+        run.pressure[key] = Math.max(0, Math.min(100, Number(run.pressure[key]) + Number(patch[key] || 0)));
+      }
+    }
+    return run.pressure;
+  }
+
+  function formatBicanhPressure(run) {
+    const p = normalizeBicanhRunPressure(run?.pressure);
+    return `Cảnh giác **${p.alert}/100** · Tham niệm **${p.greed}/100** · Ổn định pháp trận **${p.stability}/100**`;
+  }
+
+  function getBicanhRoutePreviewText() {
+    return [
+      '**Lối An Toàn**: dễ hồi phục/cứu hộ/dò đường · -Cảnh giác · thưởng thấp hơn.',
+      '**Lối Dị Bảo**: dễ rương/tinh anh · +Tham niệm · thưởng cao hơn, boss dễ cáu hơn.',
+      '**Lối Ngộ Đạo**: dễ ngộ đạo/giải trận · +thuần thục · có thể giảm Ổn định nếu đọc quá sâu.',
+    ].join('\n');
+  }
+
+  function getBicanhBossMechanic(monster, pending = {}, run = null) {
+    const family = getSourceDefectFamily(monster?.family || pending?.family || 'runtime');
+    const key = family?.key || 'runtime';
+    const p = normalizeBicanhRunPressure(run?.pressure);
+    const table = {
+      auth: { name: 'Khiên Quyền Hạn', text: 'Độ toàn vẹn thấp làm đội khó xuyên khiên. Dò Mạch/Integrity giúp giảm áp lực.', powerMult: 1.08 + p.alert / 420 },
+      git: { name: 'Rollback Máu', text: 'Đánh kéo dài sẽ bị hồi ngược. Burst nhanh hoặc Throughput cao có lợi.', powerMult: 1.06 + (p.stability < 60 ? 0.08 : 0.04) },
+      hallucination: { name: 'Ảo Giác Mục Tiêu', text: 'Logic thấp dễ chọn sai nhịp. Ngộ Đạo giúp giảm nhiễu.', powerMult: 1.07 + p.greed / 500 },
+      runtime: { name: 'Quá Tải', text: 'Càng để Cảnh giác cao, boss càng tăng áp lực theo lượt.', powerMult: 1.06 + p.alert / 360 },
+      security: { name: 'Phản Kích', text: 'Đánh quá tham dễ ăn phản lực. Lối An Toàn làm kèo dễ thở hơn.', powerMult: 1.08 + p.greed / 420 },
+      memory_leak: { name: 'Rút Cạn Sinh Lực', text: 'Run dài và Ổn định thấp làm rò tài nguyên nặng hơn.', powerMult: 1.05 + Math.max(0, 100 - p.stability) / 450 },
+      deadlock: { name: 'Khóa Lượt', text: 'Cảnh giác cao làm kẹt nhịp giao chiến.', powerMult: 1.07 + p.alert / 480 },
+      dependency: { name: 'Triệu Gọi Phụ Thuộc', text: 'Tham niệm cao kéo thêm dị vật phụ trợ.', powerMult: 1.06 + p.greed / 480 },
+      zero_day: { name: 'Đòn Bất Ngờ', text: 'Ổn định thấp làm đòn đầu rất đau.', powerMult: 1.10 + Math.max(0, 100 - p.stability) / 520 },
+      legacy: { name: 'Di Sản Cũ', text: 'Nợ kỹ thuật của run khiến boss lì hơn.', powerMult: 1.05 + (p.alert + p.greed) / 900 },
+      syntax: { name: 'Sai Một Ly', text: 'Logic đọc lỗi giúp giảm miss. Ngộ Đạo có lợi.', powerMult: 1.04 + Math.max(0, 100 - p.stability) / 600 },
+      css: { name: 'Ảo Diện', text: 'Boss đổi hình, khó đọc chỉ số nếu tham quá nhiều.', powerMult: 1.04 + p.greed / 560 },
+    };
+    return table[key] || { name: 'Dị Lỗi Thức Tỉnh', text: 'Boss nhận buff theo áp lực run.', powerMult: 1.06 + (p.alert + p.greed) / 900 };
+  }
+
+  const DAILY_BICANH_TYPE_LABELS = {
+    monster: '👾 Giao chiến nhỏ', elite: '⚔️ Tinh anh', boss: '👑 Boss', treasure: '🎁 Rương', trap: '⚠️ Bẫy', spring: '💧 Hồi phục', kyngo: '✨ Ngộ đạo', choice: '🧭 Lựa chọn', rescue: '🕯️ Cứu hộ', puzzle: '🧩 Giải trận', scout: '🧭 Dò đường',
+  };
+
+  function getDailyBicanhTypeLabel(type) {
+    return DAILY_BICANH_TYPE_LABELS[String(type)] || '🌫️ Biến cố';
+  }
+
+
+  function getRunPendingMonster(run) {
+    const pending = run?.pendingMonster && typeof run.pendingMonster === 'object' ? run.pendingMonster : null;
+    return pending?.status === 'pending' ? pending : null;
+  }
+
+  function getBicanhPendingForUser(data, userId) {
+    const id = String(userId || '');
+    const runs = Object.values(data?.runs || {});
+    const ownRun = data?.runs?.[id];
+    const candidates = [ownRun, ...runs].filter(Boolean);
+    for (const run of candidates) {
+      const pending = getRunPendingMonster(run);
+      if (pending && Array.isArray(pending.party) && pending.party.map(String).includes(id)) {
+        return { pending, run };
+      }
+    }
+    const globalPending = data?.pendingMonster?.status === 'pending' ? data.pendingMonster : null;
+    if (globalPending && Array.isArray(globalPending.party) && globalPending.party.map(String).includes(id)) {
+      return { pending: globalPending, run: data?.runs?.[globalPending.runId] || null };
+    }
+    return { pending: null, run: null };
+  }
+
+  function setBicanhPending(data, run, pending) {
+    run.pendingMonster = pending;
+    data.pendingMonster = pending;
+  }
+
+  function clearBicanhPending(data, run, pending) {
+    if (run?.pendingMonster?.runId === pending?.runId) {
+      run.pendingMonster = null;
+    }
+    if (data?.pendingMonster?.runId === pending?.runId) {
+      data.pendingMonster = null;
+    }
+  }
+
+  function getBicanhRunActionToken(data, run, statusOverride = null) {
+    if (!data || !run) return String(data?.weekKey || getWeekKey());
+    return [
+      String(data.weekKey || getWeekKey()),
+      String(run.id || run.leaderId || 'run'),
+      String(Math.max(0, Number(run.floor) || 0)),
+      String(statusOverride || run.status || 'unknown'),
+    ].join(':');
+  }
+
+  function parseBicanhRunActionToken(customId, prefix) {
+    const raw = String(customId || '').slice(String(prefix || '').length);
+    const parts = raw.split(':').filter((part) => part !== '');
+    if (parts.length >= 4) {
+      return { legacy: false, weekKey: parts[0], runId: parts[1], floor: Number(parts[2]), status: parts[3], action: parts[4] || '' };
+    }
+    return { legacy: true, weekKey: parts[0] || raw || '', runId: '', floor: null, status: '', action: '' };
+  }
+
+  function isBicanhActionTokenCurrent(data, run, token) {
+    if (!token || token.legacy) return false;
+    if (!data || !run) return false;
+    return String(token.weekKey) === String(data.weekKey)
+      && String(token.runId) === String(run.id)
+      && Number(token.floor) === Math.max(0, Number(run.floor) || 0)
+      && String(token.status) === String(run.status || 'unknown');
+  }
+
+  function clearBicanhCombatTimer(run) {
+    const activeCombatId = run?.combat?.id || run?.activeCombatId || null;
+    if (activeCombatId && BICANH_COMBAT_TIMEOUTS.has(activeCombatId)) {
+      clearTimeout(BICANH_COMBAT_TIMEOUTS.get(activeCombatId));
+      BICANH_COMBAT_TIMEOUTS.delete(activeCombatId);
+    }
+    return activeCombatId;
+  }
+
+  function abandonDailyBicanhRun(data, run, userId, reason = 'rút lui') {
+    if (!run) return null;
+    clearBicanhCombatTimer(run);
+    const pending = getRunPendingMonster(run);
+    if (pending) clearBicanhPending(data, run, pending);
+    if (data?.pendingMonster?.runId === run.id) data.pendingMonster = null;
+    run.status = 'abandoned';
+    run.completedAt = Date.now();
+    run.pendingEvent = null;
+    run.pendingMonster = null;
+    run.combat = null;
+    run.activeCombatId = null;
+    run.currentRoute = null;
+    run.log = [...(run.log || []), `Rút lui khỏi bí cảnh ở tầng ${Math.max(0, Number(run.floor) || 0)}.`].slice(-5);
+    if (data) {
+      data.lastResult = `<@${userId}> ${reason} khỏi bí cảnh ở tầng ${Math.max(0, Number(run.floor) || 0)}/${Math.max(1, Number(run.maxFloors) || 1)}. Đã về tông môn, giữ phần thưởng đã tích.`;
+      data.updatedAt = Date.now();
+    }
+    return run;
+  }
+
+  function getLatestBicanhPending(data) {
+    const globalPending = data?.pendingMonster?.status === 'pending' ? data.pendingMonster : null;
+    if (globalPending) return globalPending;
+    return Object.values(data?.runs || {})
+      .map((run) => getRunPendingMonster(run))
+      .filter(Boolean)
+      .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0] || null;
+  }
+
+
+  function getLatestBicanhLobby(data) {
+    return Object.values(data?.runs || {})
+      .filter((run) => run && String(run.status) === 'lobby' && Array.isArray(run.party) && run.party.length < DAILY_BICANH_MAX_PARTY_SIZE)
+      .sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0] || null;
+  }
+
+  function getDailyBicanhShortTitle(event) {
+    if (!event) return 'Chưa có biến cố';
+    if (event.type === 'boss') return event.monster?.name ? `Boss: ${event.monster.name}` : 'Boss tầng cuối';
+    const place = event.place?.name || '';
+    const incident = event.incident?.name || event.title || 'Biến cố';
+    return place ? `${place} · ${incident}` : incident;
+  }
+
+  function getDailyBicanhShortText(event) {
+    if (!event) return '';
+    const tone = event.incident?.tone || event.text || '';
+    return uiCompactValue(String(tone).replace(/\s+/g, ' ').trim(), 180);
+  }
+
+  function getDailyBicanhRewardLine(run) {
+    const rewards = run?.rewards || {};
+    return `+${rewards.tuVi || 0} tu vi · +${rewards.congHien || 0} cống hiến · +${rewards.mastery || 0} thuần thục${rewards.tamDac ? ` · +${rewards.tamDac} tâm đắc` : ''}${rewards.items ? ` · ${rewards.items} vật phẩm` : ''}`;
+  }
+
+  function compactBicanhResult(lines, limit = 520) {
+    return uiCompactValue((Array.isArray(lines) ? lines : [lines]).filter(Boolean).join('\n'), limit);
+  }
+
+  function getDailyBicanhEvent(dayKey, dungeon, run, floor, forcedBoss = false) {
+    const seed = `${dayKey}:${run.id}:${dungeon.key}:${floor}`;
+    if (forcedBoss || floor >= run.maxFloors) {
+      const monsterIndex = deterministicScoreForKey('daily-boss-monster', seed) % CODE_TU_MONSTERS_360.length;
+      const monster = { ...CODE_TU_MONSTERS_360[monsterIndex], name: dungeon.bossName || CODE_TU_MONSTERS_360[monsterIndex].name };
+      return { key: `boss_${dungeon.key}_${floor}`, index: CONTENT_SYSTEM_TARGET_COUNT, type: 'boss', title: `Boss Tầng ${floor}: ${monster.name}`, place: { name: dungeon.name, text: dungeon.description }, incident: { name: 'Boss Trấn Cảnh', tone: 'Khí tức boss khóa kín tầng cuối.' }, monster, rarity: 'boss' };
+    }
+    const contentIndex = deterministicScoreForKey('daily-bicanh-1440', seed) % CONTENT_SYSTEM_TARGET_COUNT;
+    const place = DAILY_BICANH_PLACES[contentIndex % DAILY_BICANH_PLACES.length];
+    const incident = DAILY_BICANH_INCIDENTS[Math.floor(contentIndex / DAILY_BICANH_PLACES.length) % DAILY_BICANH_INCIDENTS.length];
+    const monsterIndex = deterministicScoreForKey('daily-monster', seed) % CODE_TU_MONSTERS_360.length;
+    const kyNgoIndex = deterministicScoreForKey('daily-kyngo', seed) % BI_CANH_SITUATIONS_360.length;
+    const rarityRoll = deterministicScoreForKey('daily-rarity', seed) % 100;
+    const rarity = rarityRoll >= 96 ? 'legendary' : rarityRoll >= 82 ? 'rare' : rarityRoll <= 8 ? 'hung' : 'common';
+    return {
+      key: `${place.key}_${incident.key}`,
+      index: contentIndex + 1,
+      type: incident.type,
+      title: `${place.name} · ${incident.name}`,
+      text: incident.tone,
+      place,
+      incident,
+      monster: CODE_TU_MONSTERS_360[monsterIndex],
+      kyNgo: BI_CANH_SITUATIONS_360[kyNgoIndex],
+      rarity,
+    };
+  }
+
+  function getStableDailyBicanhFloorEvent(dayKey, dungeon, run, floor, forcedBoss = false) {
+    run.floorEvents = run.floorEvents && typeof run.floorEvents === 'object' ? run.floorEvents : {};
+    const key = String(Math.max(1, Number(floor) || 1));
+    const stored = run.floorEvents[key];
+    if (stored && typeof stored === 'object') return stored;
+    let event = getDailyBicanhEvent(dayKey, dungeon, run, Number(floor) || 1, forcedBoss);
+    event = applyDailyBicanhRouteChoice(dayKey, dungeon, run, event);
+    run.floorEvents[key] = event;
+    return event;
+  }
+
+  function getDailyBicanhRewardBase(run, dungeon, event, success = true) {
+    const tier = getDungeonTier(dungeon);
+    const tierMult = { tap_dich: 1, ngoai_mon: 1.35, noi_mon: 1.8, truong_lao: 2.35 }[tier] || 1;
+    const floorMult = 1 + Math.max(0, Number(run.floor) - 1) * 0.18;
+    const typeMult = event.type === 'boss' ? 2.4 : event.type === 'elite' ? 1.5 : event.type === 'treasure' ? 1.15 : ['rescue', 'puzzle', 'scout'].includes(event.type) ? 1.18 : 1;
+    const route = getDailyBicanhRouteConfig(event.routeKey);
+    const routeMult = route?.rewardMult || 1;
+    const masteryRouteMult = event.routeKey === 'insight' ? 1.22 : 1;
+    const successMult = success ? 1 : 0.35;
+    return {
+      tuVi: Math.max(8, Math.floor(40 * tierMult * floorMult * typeMult * routeMult * successMult * (Number(dungeon.rewardMultiplier) || 1))),
+      congHien: Math.max(5, Math.floor(18 * tierMult * floorMult * typeMult * routeMult * successMult)),
+      mastery: Math.max(4, Math.floor(8 * tierMult * floorMult * typeMult * masteryRouteMult * successMult)),
+      tamDac: event.type === 'kyngo' || event.type === 'boss' ? 1 : 0,
+    };
+  }
+
+  async function applyDailyBicanhReward(guild, userId, userData, member, run, dungeon, event, reward, lines, options = {}) {
+    const finalCong = addCongHien(userData, reward.congHien);
+    const finalTu = addTuViExp(userData, reward.tuVi);
+    if (member) await grantCongPhapMastery(userData, member, reward.mastery, 'bí cảnh ngày');
+    if (reward.tamDac) {
+      const key = member ? getMemberCongPhapKey(member) : 'system';
+      const progress = getCongPhapProgress(userData, key);
+      progress.tamDac = Math.max(0, Number(progress.tamDac) || 0) + reward.tamDac;
+    }
+    run.rewards.tuVi = Math.max(0, Number(run.rewards.tuVi) || 0) + finalTu;
+    run.rewards.congHien = Math.max(0, Number(run.rewards.congHien) || 0) + finalCong;
+    run.rewards.mastery = Math.max(0, Number(run.rewards.mastery) || 0) + reward.mastery;
+    run.rewards.tamDac = Math.max(0, Number(run.rewards.tamDac) || 0) + (reward.tamDac || 0);
+    if (!options.silent) lines.push(`<@${userId}> nhận +${finalTu} tu vi · +${finalCong} cống hiến · +${reward.mastery} thuần thục${reward.tamDac ? ` · +${reward.tamDac} tâm đắc` : ''}`);
+    await syncBicanhMemberAfterReward(guild, member, userData).catch(() => null);
+  }
+
+
+  async function applyDailyBicanhPartyReward(guild, users, run, dungeon, event, reward, lines) {
+    const party = Array.from(new Set((Array.isArray(run.party) && run.party.length ? run.party : [run.leaderId]).map(String).filter(Boolean)));
+    const size = Math.max(1, party.length);
+    const shared = {
+      tuVi: Math.max(0, Math.floor((Number(reward.tuVi) || 0) / size)),
+      congHien: Math.max(0, Math.floor((Number(reward.congHien) || 0) / size)),
+      mastery: Math.max(1, Math.floor((Number(reward.mastery) || 0) / size)),
+      tamDac: Number(reward.tamDac) || 0,
+    };
+    for (const memberId of party) {
+      const userData = getOrCreateUser(users, memberId);
+      const member = guild ? await guild.members.fetch(memberId).catch(() => null) : null;
+      await applyDailyBicanhReward(guild, memberId, userData, member, run, dungeon, event, shared, lines, { silent: true });
+    }
+    lines.push(`Tổ đội nhận mỗi người: +${shared.tuVi} tu vi · +${shared.congHien} cống hiến · +${shared.mastery} thuần thục${shared.tamDac ? ` · +${shared.tamDac} tâm đắc` : ''}.`);
+  }
+
+
+  function getDailyBicanhRouteConfig(key) {
+    return {
+      safe: { key: 'safe', name: 'Lối An Toàn', button: 'Lối An Toàn', rewardMult: 0.92, pressure: { alert: -8, greed: -4, stability: 4 }, note: 'Ít rủi ro, dễ gặp hồi phục/cứu hộ/dò đường.' },
+      treasure: { key: 'treasure', name: 'Lối Dị Bảo', button: 'Lối Dị Bảo', rewardMult: 1.18, pressure: { alert: 7, greed: 12, stability: -3 }, note: 'Dễ có rương hoặc tinh anh giữ rương; boss cuối cũng chú ý hơn.' },
+      insight: { key: 'insight', name: 'Lối Ngộ Đạo', button: 'Lối Ngộ Đạo', rewardMult: 1.05, pressure: { alert: 3, greed: 2, stability: -5 }, note: 'Tăng thuần thục/tâm đắc, dễ gặp giải trận/ngộ đạo.' },
+    }[String(key)] || null;
+  }
+
+  function getDailyBicanhRouteText(run) {
+    const route = getDailyBicanhRouteConfig(run?.currentRoute);
+    if (!route) return 'Chưa chọn lối tầng kế.';
+    return `Đã chọn **${route.name}** · ${route.note}`;
+  }
+
+  function pickDailyBicanhIncidentByType(type, seed) {
+    const pool = DAILY_BICANH_INCIDENTS.filter((entry) => entry.type === type);
+    if (pool.length === 0) return null;
+    return pool[deterministicScoreForKey(`route-incident:${type}`, seed) % pool.length];
+  }
+
+  function applyDailyBicanhRouteChoice(dayKey, dungeon, run, event) {
+    const route = getDailyBicanhRouteConfig(run?.currentRoute);
+    if (!route || !event || event.type === 'boss') return event;
+    const seed = `${dayKey}:${run.id}:${dungeon.key}:${run.floor}:${route.key}`;
+    const roll = deterministicScoreForKey('route-shape', seed) % 100;
+    let next = { ...event, routeKey: route.key, routeName: route.name };
+
+    if (route.key === 'safe') {
+      if (['monster', 'elite', 'trap'].includes(event.type) && roll < 50) {
+        const type = roll < 18 ? 'spring' : roll < 34 ? 'rescue' : 'scout';
+        const incident = pickDailyBicanhIncidentByType(type, seed) || event.incident;
+        next = { ...next, type, incident, title: `${event.place?.name || 'Bí cảnh'} · ${incident.name}`, text: incident.tone };
+      }
+    } else if (route.key === 'treasure') {
+      if (!['treasure', 'elite', 'monster'].includes(event.type) && roll < 42) {
+        const incident = pickDailyBicanhIncidentByType('treasure', seed) || event.incident;
+        next = { ...next, type: 'treasure', incident, title: `${event.place?.name || 'Bí cảnh'} · ${incident.name}`, text: incident.tone };
+      } else if (!['elite', 'monster'].includes(event.type) && roll > 84) {
+        const monster = CODE_TU_MONSTERS_360[deterministicScoreForKey('route-treasure-elite', seed) % CODE_TU_MONSTERS_360.length];
+        next = { ...next, type: 'elite', monster, incident: { name: 'Tinh Anh Giữ Rương', tone: 'Dị bảo có chủ. Tất nhiên rồi, vũ trụ ghét đồ miễn phí.' }, title: `${event.place?.name || 'Bí cảnh'} · Tinh Anh Giữ Rương` };
+      }
+    } else if (route.key === 'insight') {
+      if (['monster', 'elite', 'trap', 'treasure'].includes(event.type) && roll < 48) {
+        const type = roll < 18 ? 'kyngo' : roll < 34 ? 'puzzle' : 'scout';
+        const incident = pickDailyBicanhIncidentByType(type, seed) || event.incident;
+        next = { ...next, type, incident, title: `${event.place?.name || 'Bí cảnh'} · ${incident.name}`, text: incident.tone };
+      }
+    }
+    return next;
+  }
+
+  function buildDailyRouteRows(data, run) {
+    if (!run || String(run.status) !== 'route_choice') return [];
+    const token = `${data.weekKey}:${run.id}:${Math.max(0, Number(run.floor) || 0)}:route_choice`;
+    return [new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`${BICANH_ROUTE_BUTTON_PREFIX}${token}:safe`).setLabel('Lối An Toàn').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`${BICANH_ROUTE_BUTTON_PREFIX}${token}:treasure`).setLabel('Lối Dị Bảo').setStyle(ButtonStyle.Danger),
+      new ButtonBuilder().setCustomId(`${BICANH_ROUTE_BUTTON_PREFIX}${token}:insight`).setLabel('Lối Ngộ Đạo').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`${BICANH_ESCAPE_BUTTON_PREFIX}${getBicanhRunActionToken(data, run)}:abandon`).setLabel('Rút lui').setStyle(ButtonStyle.Secondary),
+    )];
+  }
+
+  function buildDailyEventActionRows(data, run) {
+    const event = run?.pendingEvent;
+    if (!event || !['choice', 'event_choice'].includes(String(run?.status))) return [];
+    const eventId = `${data.weekKey}:${run.id}:${Math.max(0, Number(run.floor) || 0)}:${run.status}`;
+    if (event.type === 'choice') {
+      return [new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`${BICANH_EVENT_ACTION_BUTTON_PREFIX}${eventId}:safe`).setLabel('Đi chắc').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(`${BICANH_EVENT_ACTION_BUTTON_PREFIX}${eventId}:insight`).setLabel('Đọc sâu').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`${BICANH_EVENT_ACTION_BUTTON_PREFIX}${eventId}:greed`).setLabel('Đoạt bảo').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId(`${BICANH_ESCAPE_BUTTON_PREFIX}${getBicanhRunActionToken(data, run)}:abandon`).setLabel('Rút lui').setStyle(ButtonStyle.Secondary),
+      )];
+    }
+    return [new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`${BICANH_EVENT_ACTION_BUTTON_PREFIX}${eventId}:safe`).setLabel('Xử lý an toàn').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`${BICANH_EVENT_ACTION_BUTTON_PREFIX}${eventId}:deep`).setLabel('Khai thác thêm').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`${BICANH_EVENT_ACTION_BUTTON_PREFIX}${eventId}:skip`).setLabel('Bỏ qua').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`${BICANH_ESCAPE_BUTTON_PREFIX}${getBicanhRunActionToken(data, run)}:abandon`).setLabel('Rút lui').setStyle(ButtonStyle.Secondary),
+    )];
+  }
+
+  function buildDailyChoiceRows(data, run) {
+    return buildDailyEventActionRows(data, run);
+  }
+
+  function buildDailyBicanhRunEmbed(data, run = null) {
+    const dungeon = run ? (getDungeonTemplateByKey(run.dungeonKey) || getWeeklyBicanhDungeon(data)) : getWeeklyBicanhDungeon(data);
+    if (!run) {
+      return new EmbedBuilder()
+        .setColor(0x8b5cf6)
+        .setTitle('Bí Cảnh Ngày')
+        .setDescription('Mỗi đạo hữu có **1 lượt/ngày**. Có thể lập tổ đội trước khi vào. Đi 5-9 tầng, tầng cuối có boss.')
+        .addFields(
+          { name: 'Hôm nay', value: `Ngày **${data.weekKey}** · Bí cảnh đề xuất: **${dungeon.name}**`, inline: false },
+          { name: 'Cách chơi', value: 'Bấm **Lập tổ đội/Vào bí cảnh** → đủ người thì đội trưởng bắt đầu → xử lý biến cố → hạ boss cuối.', inline: false },
+        )
+        .setFooter({ text: 'UI rút gọn · nội dung random chạy ngầm.' });
+    }
+
+    const event = run.pendingEvent;
+    const desc = [
+      `**${dungeon.name}**`,
+      getDailyBicanhProgressLine(run),
+      `Tổ đội: ${(run.party || []).map((id) => `<@${id}>`).join(' ') || `<@${run.leaderId}>`}`,
+      event ? `${getDailyBicanhTypeLabel(event.type)} · **${getDailyBicanhShortTitle(event)}**` : (run.status === 'lobby' ? 'Đang lập tổ đội. Đội trưởng bấm **Bắt đầu bí cảnh** khi đủ người.' : run.status === 'route_choice' ? 'Đội trưởng chọn **lối đi tầng kế**: An Toàn / Dị Bảo / Ngộ Đạo.' : 'Bấm **Chọn lối tiếp** để tiếp tục.'),
+      event?.routeName ? `Lối đã chọn: **${event.routeName}**` : null,
+      event ? `_${getDailyBicanhShortText(event)}_` : null,
+    ].filter(Boolean).join('\n');
+
+    const fields = [
+      { name: 'Áp lực run', value: formatBicanhPressure(run), inline: false },
+      { name: 'Tích lũy', value: getDailyBicanhRewardLine(run), inline: false },
+    ];
+    if (run.status === 'route_choice') fields.unshift({ name: 'Chọn lối có hậu quả', value: getBicanhRoutePreviewText(), inline: false });
+    if (run.pendingMonster?.status === 'pending') {
+      const monster = CODE_TU_MONSTERS_360.find((item) => item.key === run.pendingMonster.monsterKey);
+      const mechanic = getBicanhBossMechanic(monster, run.pendingMonster, run);
+      fields.push({ name: run.pendingMonster.isBoss ? 'Cơ chế boss' : 'Cơ chế giao chiến', value: `**${mechanic.name}** · ${mechanic.text}`, inline: false });
+    }
+
+    return new EmbedBuilder()
+      .setColor(run.status === 'pending_monster' ? 0xe74c3c : run.status === 'completed' ? 0x22c55e : run.status === 'failed' ? 0x64748b : 0x8b5cf6)
+      .setTitle(run.status === 'completed' ? 'Bí Cảnh · Đã chinh phục' : run.status === 'failed' ? 'Bí Cảnh · Đã dừng' : 'Bí Cảnh · Đang chinh phục')
+      .setDescription(desc)
+      .addFields(...fields)
+      .setFooter({ text: 'Thua mất sinh lực trước, không mất sạch phần thưởng đã qua.' });
+  }
+
+  function buildWeeklyBicanhEmbed(data = getWeeklyBicanhData()) {
+    const activeRuns = Object.values(data.runs || {}).filter((run) => run && !['completed', 'failed', 'abandoned'].includes(String(run.status))).length;
+    const desc = [
+      `Ngày **${data.weekKey}** · Lượt đang chạy **${activeRuns}**`,
+      '1 lượt/người/ngày · lập tổ đội trước khi vào · 5-9 tầng · boss cuối.',
+      'Bấm **Lập tổ đội/Vào bí cảnh** để chuẩn bị, rồi đội trưởng bắt đầu chinh phục.',
+    ].join('\n');
+    return new EmbedBuilder()
+      .setColor(data.pendingMonster?.status === 'pending' ? 0xe74c3c : 0x8b5cf6)
+      .setTitle('Bí Cảnh Ngày')
+      .setDescription(desc)
+      .addFields({ name: 'Diễn biến gần nhất', value: uiCompactValue(data.lastResult || 'Chưa có diễn biến.', 360), inline: false })
+      .setFooter({ text: 'Giao diện rút gọn · nội dung random chạy ngầm.' });
+  }
+
+  function buildWeeklyBicanhPanelRows(data = getWeeklyBicanhData(), run = null) {
+    const runPending = getRunPendingMonster(run);
+    const latestPending = getLatestBicanhPending(data);
+    const activeLobby = getLatestBicanhLobby(data);
+
+    if (run?.combat?.id) {
+      return [new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`${BICANH_FIGHT_BUTTON_PREFIX}${getBicanhRunActionToken(data, run)}:combat`).setLabel('Vào lại trận').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId(`${BICANH_ESCAPE_BUTTON_PREFIX}${getBicanhRunActionToken(data, run)}:abandon`).setLabel('Rút lui').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`${BICANH_REFRESH_BUTTON_PREFIX}${data.weekKey}`).setLabel('Cập nhật').setStyle(ButtonStyle.Secondary),
+      )];
+    }
+
+    if (String(run?.status) === 'route_choice') {
+      return buildDailyRouteRows(data, run);
+    }
+
+    if (['choice', 'event_choice'].includes(String(run?.status))) {
+      return buildDailyEventActionRows(data, run);
+    }
+
+    if (runPending || run?.status === 'pending_monster') {
+      return [new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`${BICANH_FIGHT_BUTTON_PREFIX}${getBicanhRunActionToken(data, run)}:fight`).setLabel('Đánh theo lượt').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId(`${BICANH_QUICK_FIGHT_BUTTON_PREFIX}${getBicanhRunActionToken(data, run)}:quick`).setLabel('Tự xử lý nhanh').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`${BICANH_ESCAPE_BUTTON_PREFIX}${getBicanhRunActionToken(data, run)}:abandon`).setLabel('Rút lui').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`${BICANH_REFRESH_BUTTON_PREFIX}${data.weekKey}`).setLabel('Cập nhật').setStyle(ButtonStyle.Secondary),
+      )];
+    }
+
+    if (run?.status === 'lobby') {
+      return [new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`${BICANH_EXPLORE_BUTTON_PREFIX}${data.weekKey}`).setLabel('Bắt đầu bí cảnh').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`${BICANH_ESCAPE_BUTTON_PREFIX}${getBicanhRunActionToken(data, run)}:leave`).setLabel('Rời/Giải tán').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`${BICANH_REFRESH_BUTTON_PREFIX}${data.weekKey}`).setLabel('Cập nhật').setStyle(ButtonStyle.Secondary),
+      )];
+    }
+
+    if (run && !['completed', 'failed', 'abandoned'].includes(String(run.status))) {
+      return [new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`${BICANH_EXPLORE_BUTTON_PREFIX}${data.weekKey}`).setLabel('Chọn lối tiếp').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`${BICANH_ESCAPE_BUTTON_PREFIX}${getBicanhRunActionToken(data, run)}:abandon`).setLabel('Rút lui').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`${BICANH_REFRESH_BUTTON_PREFIX}${data.weekKey}`).setLabel('Cập nhật').setStyle(ButtonStyle.Secondary),
+      )];
+    }
+
+    if (activeLobby && !latestPending) {
+      return [new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`${BICANH_JOIN_PARTY_BUTTON_PREFIX}${data.weekKey}`).setLabel('Vào tổ đội').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(`${BICANH_EXPLORE_BUTTON_PREFIX}${data.weekKey}`).setLabel('Lập lượt riêng').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`${BICANH_REFRESH_BUTTON_PREFIX}${data.weekKey}`).setLabel('Cập nhật').setStyle(ButtonStyle.Secondary),
+      )];
+    }
+
+    return [new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`${BICANH_EXPLORE_BUTTON_PREFIX}${data.weekKey}`).setLabel('Lập tổ đội/Vào bí cảnh').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`${BICANH_REFRESH_BUTTON_PREFIX}${data.weekKey}`).setLabel('Cập nhật').setStyle(ButtonStyle.Secondary),
+    )];
+  }
+
+  async function updateWeeklyBicanhPanel(guild, data) {
+    if (!data.panelChannelId || !data.panelMessageId) return;
+    const channel = await guild.channels.fetch(data.panelChannelId).catch(() => null);
+    const message = channel?.messages?.fetch ? await channel.messages.fetch(data.panelMessageId).catch(() => null) : null;
+    if (message) await message.edit({ embeds: [buildWeeklyBicanhEmbed(data)], components: buildWeeklyBicanhPanelRows(data) }).catch(() => null);
+  }
+
+  async function handlePhoBan(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Bí cảnh chỉ mở trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const data = repairWeeklyBicanhData(getWeeklyBicanhData());
+    data.guildId = interaction.guild.id;
+    saveBicanhData(data);
+    const run = getDailyBicanhRun(data, interaction.user.id);
+    await interaction.reply({ embeds: [run ? buildDailyBicanhRunEmbed(data, run) : buildWeeklyBicanhEmbed(data)], components: ['choice', 'event_choice'].includes(String(run?.status)) ? buildDailyEventActionRows(data, run) : buildWeeklyBicanhPanelRows(data, run), flags: MessageFlags.Ephemeral });
+  }
+
+  async function handleSetupPhoBan(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Bí cảnh chỉ dựng được trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({ content: 'Chỉ chưởng quản tông môn mới được đặt bí cảnh ngày.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const data = repairWeeklyBicanhData(getWeeklyBicanhData());
+    data.guildId = interaction.guild.id;
+    const message = await interaction.channel.send({ embeds: [buildWeeklyBicanhEmbed(data)], components: buildWeeklyBicanhPanelRows(data) });
+    data.panelChannelId = interaction.channel.id;
+    data.panelMessageId = message.id;
+    saveBicanhData(data);
+    await interaction.reply({ content: 'Đã đặt **Bí Cảnh Ngày**. Mỗi người bấm bảng để dùng 1 lượt/ngày.', flags: MessageFlags.Ephemeral });
+  }
+
+  async function handleBicanhRefresh(interaction) {
+    if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate().catch(async () => interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => null));
+    const data = repairWeeklyBicanhData(getWeeklyBicanhData());
+    const run = getDailyBicanhRun(data, interaction.user.id);
+    const payload = { embeds: [run ? buildDailyBicanhRunEmbed(data, run) : buildWeeklyBicanhEmbed(data)], components: ['choice', 'event_choice'].includes(String(run?.status)) ? buildDailyEventActionRows(data, run) : buildWeeklyBicanhPanelRows(data, run), content: null };
+    if (interaction.editReply) await interaction.editReply(payload).catch(() => null);
+  }
+
+  async function handleBicanhExploreButton(interaction) {
+    if (!interaction.deferred && !interaction.replied) await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => null);
+    const data = repairWeeklyBicanhData(getWeeklyBicanhData());
+    const buttonWeekKey = String(interaction.customId || '').slice(BICANH_EXPLORE_BUTTON_PREFIX.length);
+    if (buttonWeekKey && buttonWeekKey !== data.weekKey) {
+      await interaction.editReply({ content: 'Nút bí cảnh này đã cũ qua ngày mới. Bấm `/bicanh` để cập nhật.', embeds: [], components: [] }).catch(() => null);
+      return;
+    }
+    data.guildId = interaction.guild.id;
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+    let run = getDailyBicanhRun(data, interaction.user.id);
+
+    if (!run) {
+      if (data.dailyUses?.[interaction.user.id] === data.weekKey) {
+        await interaction.editReply({ content: 'Hôm nay đạo hữu đã dùng lượt bí cảnh. Mai bí cảnh sẽ đổi tầng mới.', embeds: [], components: [] }).catch(() => null);
+        return;
+      }
+      const dungeon = pickDailyBicanhDungeon(interaction.user.id, data.weekKey, userData, member);
+      run = { id: interaction.user.id, leaderId: interaction.user.id, dungeonKey: dungeon.key, party: [interaction.user.id], floor: 0, maxFloors: getDailyBicanhMaxFloors(userData, member, dungeon), lives: DAILY_BICANH_BASE_LIVES, status: 'lobby', rewards: { tuVi: 0, congHien: 0, mastery: 0, tamDac: 0, items: 0 }, pressure: { alert: 0, greed: 0, stability: 100 }, floorEvents: {}, startedAt: Date.now(), pendingEvent: null, pendingMonster: null, combat: null, log: [] };
+      data.runs[run.id] = run;
+      data.lastResult = `<@${interaction.user.id}> đang lập tổ đội bí cảnh.`;
+      saveBicanhData(data);
+      await updateWeeklyBicanhPanel(interaction.guild, data).catch(() => null);
+      await interaction.editReply({ embeds: [buildDailyBicanhRunEmbed(data, run)], components: buildWeeklyBicanhPanelRows(data, run), content: null }).catch(() => null);
+      return;
+    }
+
+    if (run.status === 'lobby') {
+      if (interaction.user.id !== run.leaderId) {
+        await interaction.editReply({ content: `Đang ở tổ đội của <@${run.leaderId}>. Chỉ đội trưởng mới bắt đầu bí cảnh.`, embeds: [buildDailyBicanhRunEmbed(data, run)], components: buildWeeklyBicanhPanelRows(data, run) }).catch(() => null);
+        return;
+      }
+      const blocked = (run.party || []).filter((id) => data.dailyUses?.[id] === data.weekKey);
+      if (blocked.length > 0) {
+        await interaction.editReply({ content: `Không thể bắt đầu: ${blocked.map((id) => `<@${id}>`).join(' ')} đã dùng lượt bí cảnh hôm nay.`, embeds: [buildDailyBicanhRunEmbed(data, run)], components: buildWeeklyBicanhPanelRows(data, run) }).catch(() => null);
+        return;
+      }
+      for (const memberId of run.party || []) data.dailyUses[memberId] = data.weekKey;
+      run.status = 'route_choice';
+      data.lastResult = `Tổ đội của <@${run.leaderId}> bắt đầu bí cảnh. Đội trưởng chọn lối đi tầng đầu.`;
+      data.updatedAt = Date.now();
+      saveUsers(users);
+      saveBicanhData(data);
+      await updateWeeklyBicanhPanel(interaction.guild, data).catch(() => null);
+      await interaction.editReply({ embeds: [buildDailyBicanhRunEmbed(data, run)], components: buildDailyRouteRows(data, run), content: null }).catch(() => null);
+      return;
+    }
+
+    if (String(run.status) === 'route_choice') {
+      await interaction.editReply({ embeds: [buildDailyBicanhRunEmbed(data, run)], components: buildDailyRouteRows(data, run), content: null }).catch(() => null);
+      return;
+    }
+
+    if (String(run.status) === 'running') {
+      run.status = 'route_choice';
+      data.lastResult = `Tầng kế tiếp chờ đội trưởng chọn lối.`;
+      data.updatedAt = Date.now();
+      saveBicanhData(data);
+      await interaction.editReply({ embeds: [buildDailyBicanhRunEmbed(data, run)], components: buildDailyRouteRows(data, run), content: null }).catch(() => null);
+      return;
+    }
+
+    if (interaction.user.id !== run.leaderId && !['choice', 'pending_monster'].includes(String(run.status))) {
+      await interaction.editReply({ content: `Chỉ đội trưởng <@${run.leaderId}> điều khiển tiến tầng. Khi combat bắt đầu, từng thành viên sẽ tự chọn skill.`, embeds: [buildDailyBicanhRunEmbed(data, run)], components: buildWeeklyBicanhPanelRows(data, run) }).catch(() => null);
+      return;
+    }
+
+    if (['choice', 'pending_monster'].includes(run.status)) {
+      await interaction.editReply({ embeds: [buildDailyBicanhRunEmbed(data, run)], components: ['choice', 'event_choice'].includes(String(run.status)) ? buildDailyEventActionRows(data, run) : buildWeeklyBicanhPanelRows(data, run), content: null }).catch(() => null);
+      return;
+    }
+    if (['completed', 'failed', 'abandoned'].includes(run.status)) {
+      await interaction.editReply({ embeds: [buildDailyBicanhRunEmbed(data, run)], components: [], content: null }).catch(() => null);
+      return;
+    }
+    await advanceDailyBicanhRun(interaction, data, users, userData, member, run);
+  }
+
+  async function advanceDailyBicanhRun(interaction, data, users, userData, member, run) {
+    const dungeon = getDungeonTemplateByKey(run.dungeonKey) || getWeeklyBicanhDungeon(data);
+    run.floor = Math.max(0, Math.min(Number(run.maxFloors) || 5, Number(run.floor) || 0));
+    if (run.floor >= run.maxFloors) {
+      run.status = 'completed';
+      run.completedAt = Date.now();
+      data.lastResult = 'Bí cảnh đã hoàn tất. Không còn tầng để tiến tiếp.';
+      saveBicanhData(data);
+      await interaction.editReply({ embeds: [buildDailyBicanhRunEmbed(data, run)], components: [], content: null }).catch(() => null);
+      return;
+    }
+    const nextFloor = Math.min(Number(run.maxFloors) || 5, Number(run.floor) + 1);
+    run.floor = nextFloor;
+    const event = getStableDailyBicanhFloorEvent(data.weekKey, dungeon, run, run.floor, run.floor >= run.maxFloors);
+    run.pendingEvent = event;
+    run.currentRoute = null;
+    const lines = [`Tầng **${run.floor}/${run.maxFloors}** · ${getDailyBicanhTypeLabel(event.type)} · **${getDailyBicanhShortTitle(event)}**`, event.routeName ? `Lối đi: **${event.routeName}**.` : null, getDailyBicanhShortText(event)].filter(Boolean);
+    if (event.type === 'monster' || event.type === 'elite' || event.type === 'boss') {
+      run.status = 'pending_monster';
+      setBicanhPending(data, run, { status: 'pending', runId: run.id, floor: run.floor, isBoss: event.type === 'boss', eventKey: event.key, monsterKey: event.monster.key, monsterName: event.monster.name, dungeonKey: dungeon.key, startedAt: Date.now(), autoFightAt: Date.now() + BICANH_AUTO_RESOLVE_MS, party: [...run.party], leaderId: run.leaderId });
+      lines.push(`${event.type === 'boss' ? 'Boss tầng cuối' : event.type === 'elite' ? 'Tinh anh' : 'Địch nhỏ'} xuất hiện: **${event.monster.name}**.`);
+    } else if (event.type === 'choice') {
+      run.status = 'choice';
+      lines.push('Chọn hướng đi: đi chắc, đọc sâu, hoặc đoạt bảo.');
+    } else {
+      run.status = 'event_choice';
+      lines.push('Chọn cách xử lý biến cố: **Xử lý an toàn**, **Khai thác thêm**, hoặc **Bỏ qua**.');
+    }
+    run.log = [...(run.log || []), lines.join(' ')].slice(-5);
+    data.lastResult = compactBicanhResult(lines, 360);
+    data.updatedAt = Date.now();
+    saveUsers(users);
+    saveBicanhData(data);
+    await updateWeeklyBicanhPanel(interaction.guild, data).catch(() => null);
+    await interaction.editReply({ embeds: [buildDailyBicanhRunEmbed(data, run)], components: ['choice', 'event_choice'].includes(String(run.status)) ? buildDailyEventActionRows(data, run) : buildWeeklyBicanhPanelRows(data, run), content: null }).catch(() => null);
+  }
+
+  function getBicanhPartyIds(run) {
+    return Array.from(new Set((Array.isArray(run?.party) && run.party.length ? run.party : [run?.leaderId]).map(String).filter(Boolean)));
+  }
+
+  async function applyBicanhPartyStatus(guild, users, run, name, durationMs, payloadFactory, lines, label = '') {
+    const party = getBicanhPartyIds(run);
+    for (const memberId of party) {
+      const userData = getOrCreateUser(users, memberId);
+      const member = guild ? await guild.members.fetch(memberId).catch(() => null) : null;
+      const payload = typeof payloadFactory === 'function' ? payloadFactory(userData, member, memberId) : payloadFactory;
+      setTemporaryStatus(userData, name, durationMs, payload);
+      await syncBicanhMemberAfterReward(guild, member, userData).catch(() => null);
+    }
+    if (label) lines.push(label);
+  }
+
+  async function resolveDailyNonCombatEvent(guild, users, data, run, dungeon, event, lines, options = {}) {
+    const mode = ['safe', 'deep', 'skip'].includes(String(options.mode)) ? String(options.mode) : 'safe';
+    const party = getBicanhPartyIds(run);
+    const modeText = mode === 'deep' ? 'Khai thác thêm' : mode === 'skip' ? 'Bỏ qua' : 'Xử lý an toàn';
+    lines.push(`Cách xử lý: **${modeText}**.`);
+    if (mode === 'safe') applyBicanhPressure(run, { alert: -5, greed: -3, stability: 3 });
+    if (mode === 'deep') applyBicanhPressure(run, { alert: 4, greed: 5, stability: -4 });
+
+    if (mode === 'skip') {
+      applyBicanhPressure(run, { alert: -2, greed: -2, stability: 1 });
+      run.status = 'route_choice';
+      run.pendingEvent = null;
+      lines.push('Đã bỏ qua biến cố. Không nhận thưởng tầng này, nhưng cũng không chịu rủi ro thêm. Lạ chưa, đôi khi không bấm vào mọi thứ lại là chiến thuật.');
+      return;
+    }
+
+    const deep = mode === 'deep';
+    const safe = mode === 'safe';
+    let rewardMult = safe ? 0.82 : 1.28;
+    let rewardAllowed = true;
+
+    if (event.type === 'trap') {
+      const avoidChance = safe ? 0.68 : 0.32;
+      const avoided = rollPercent(avoidChance);
+      lines.push(`Tỉ lệ né bẫy: **${Math.round(avoidChance * 100)}%**.`);
+      if (avoided) {
+        const stats = safe ? { dotPha: 2, tamMaRisk: -2 } : { dotPha: 3, lucChien: 2, tamMaRisk: -1 };
+        await applyBicanhPartyStatus(guild, users, run, 'Né Bẫy Bí Cảnh', 2 * 60 * 60 * 1000, { directStats: stats }, lines, `Né bẫy thành công: ${formatDirectStatsCompact(stats)}`);
+        rewardMult = safe ? 0.55 : 0.9;
+      } else {
+        const lifeLoss = deep ? 2 : 1;
+        const stats = deep ? { tuVi: -3, lucChien: -3, dotPha: -3, tamMaRisk: 8, trongThuongDuration: 5 } : { tuVi: -2, lucChien: -2, dotPha: -2, tamMaRisk: 5, trongThuongDuration: 3 };
+        run.lives = Math.max(0, run.lives - lifeLoss);
+        await applyBicanhPartyStatus(guild, users, run, 'Đạo Cơ Rạn Nứt', 2 * 60 * 60 * 1000, { directStats: stats }, lines, `Bẫy phản phệ: -${lifeLoss} sinh lực · ${formatDirectStatsCompact(stats)}`);
+        rewardAllowed = false;
+      }
+    } else if (event.type === 'rescue') {
+      const stats = deep ? { congHien: 8, tamMaRisk: -5, trongThuongDuration: -4 } : { congHien: 5, tamMaRisk: -4, trongThuongDuration: -3 };
+      await applyBicanhPartyStatus(guild, users, run, 'Thiện Duyên Bí Cảnh', 4 * 60 * 60 * 1000, { directStats: stats }, lines, `Cứu hộ thành công: ${formatDirectStatsCompact(stats)}`);
+      run.lives = Math.min(DAILY_BICANH_BASE_LIVES + (deep ? 2 : 1), run.lives + (deep ? 2 : 1));
+      lines.push(`Sinh lực bí cảnh +${deep ? 2 : 1}.`);
+    } else if (event.type === 'puzzle') {
+      const gain = deep ? { logic: 2, integrity: 1, stability: 1, runtime: 1 } : { logic: 1, integrity: 1, stability: 1 };
+      for (const memberId of party) addSourceProfile(getOrCreateUser(users, memberId), gain);
+      lines.push(deep ? 'Giải trận sâu: mỗi thành viên +2 Logic (đọc lỗi) · +1 Toàn vẹn · +1 Ổn định · +1 Nhịp vận hành.' : 'Giải trận an toàn: mỗi thành viên +1 Logic (đọc lỗi) · +1 Toàn vẹn · +1 Ổn định.');
+    } else if (event.type === 'scout') {
+      run.scoutBonus = Math.max(0, Number(run.scoutBonus) || 0) + (deep ? 2 : 1);
+      const stats = deep ? { dotPha: 4, lucChien: 3, tamMaRisk: -1 } : { dotPha: 3, lucChien: 2, tamMaRisk: -2 };
+      await applyBicanhPartyStatus(guild, users, run, 'Thiên Nhãn Dò Mạch', 4 * 60 * 60 * 1000, { directStats: stats }, lines, `Dò đường: ${deep ? '2' : '1'} lần giảm độ khó giao chiến kế tiếp · ${formatDirectStatsCompact(stats)}`);
+    } else if (event.type === 'spring') {
+      const heal = deep ? 2 : 1;
+      run.lives = Math.min(DAILY_BICANH_BASE_LIVES + 1, run.lives + heal);
+      const stats = deep ? { lucChien: 2, dotPha: 2, tamMaRisk: -2 } : { lucChien: 1, tamMaRisk: -2 };
+      await applyBicanhPartyStatus(guild, users, run, 'Linh Tuyền Dưỡng Khí', 3 * 60 * 60 * 1000, { directStats: stats }, lines, `Linh tuyền hồi phục: +${heal} sinh lực · ${formatDirectStatsCompact(stats)}`);
+    } else if (event.type === 'kyngo') {
+      for (const memberId of party) {
+        const userData = getOrCreateUser(users, memberId);
+        const member = guild ? await guild.members.fetch(memberId).catch(() => null) : null;
+        const kyNgoLines = applyKyNgoEvent(userData, member, event.kyNgo || event);
+        if (deep) {
+          const key = member ? getMemberCongPhapKey(member) : 'system';
+          const progress = getCongPhapProgress(userData, key);
+          progress.tamDac = Math.max(0, Number(progress.tamDac) || 0) + 1;
+        }
+        await syncBicanhMemberAfterReward(guild, member, userData).catch(() => null);
+        lines.push(`<@${memberId}> ngộ đạo: ${uiCompactValue(kyNgoLines.join(' · '), 120)}${deep ? ' · +1 tâm đắc' : ''}`);
+      }
+    } else if (event.type === 'treasure') {
+      const dropCount = deep ? 2 : 1;
+      for (let i = 0; i < dropCount; i += 1) {
+        const receiverId = party[deterministicScoreForKey('daily-bicanh-treasure', `${data.weekKey}:${run.id}:${run.floor}:${i}`) % party.length];
+        const receiver = getOrCreateUser(users, receiverId);
+        const drop = rollMissionItemDrop({ type: 'clean', tier: getDungeonTier(dungeon), hiddenLevel: Number(dungeon.minRealmIndex || 0) * MINOR_REALMS.length, family: dungeon.family }, 'clean');
+        if (drop && hasInventorySpace(receiver, 1)) {
+          const quality = rollMissionDropQuality(Number(dungeon.minRealmIndex || 0), true);
+          addItemToInventory(receiver, drop.key, { quality });
+          run.rewards.items = Math.max(0, Number(run.rewards.items) || 0) + 1;
+          lines.push(`Mở rương: <@${receiverId}> nhận **${drop.name} - ${getQualityByKey(quality).name}**.`);
+        } else {
+          lines.push('Mở rương: chỉ còn linh khí vụn hoặc túi đã đầy. Một cái rương biết làm người chơi thất vọng, rất nhập vai.');
+        }
+      }
+    }
+
+    const reward = getDailyBicanhRewardBase(run, dungeon, event, rewardAllowed);
+    reward.tuVi = Math.floor((Number(reward.tuVi) || 0) * rewardMult);
+    reward.congHien = Math.floor((Number(reward.congHien) || 0) * rewardMult);
+    reward.mastery = Math.max(rewardAllowed ? 2 : 1, Math.floor((Number(reward.mastery) || 0) * (safe ? 0.9 : 1.2)));
+    if (deep && ['kyngo', 'puzzle', 'scout'].includes(event.type)) reward.tamDac = Math.max(Number(reward.tamDac) || 0, 1);
+    if (!rewardAllowed) {
+      reward.tuVi = 0;
+      reward.congHien = 0;
+      reward.tamDac = 0;
+    }
+    await applyDailyBicanhPartyReward(guild, users, run, dungeon, event, reward, lines);
+    for (const memberId of party) addWeeklyContribution(getOrCreateUser(users, memberId), deep ? 4 : 2, 'bí cảnh biến cố');
+
+    if (run.floor >= run.maxFloors) {
+      run.status = 'completed';
+      run.completedAt = Date.now();
+      lines.push('Chinh phục hoàn tất.');
+    } else if (run.lives <= 0) {
+      run.status = 'failed';
+      run.completedAt = Date.now();
+      lines.push('Sinh lực bí cảnh cạn, lượt hôm nay kết thúc.');
+    } else {
+      run.status = 'route_choice';
+      run.pendingEvent = null;
+    }
+  }
+
+  async function resolveDailyChoiceEvent(interaction, data, run, choice) {
+    const users = loadUsers();
+    const dungeon = getDungeonTemplateByKey(run.dungeonKey) || getWeeklyBicanhDungeon(data);
+    const label = choice === 'greed' ? 'Đoạt bảo' : choice === 'insight' ? 'Đọc sâu' : 'Đi chắc';
+    const lines = [`Tầng **${run.floor}/${run.maxFloors}** · 🧭 **Lựa chọn**`, `Chọn: **${label}**`];
+    if (choice === 'greed') {
+      applyBicanhPressure(run, { alert: 8, greed: 14, stability: -6 });
+      const monster = CODE_TU_MONSTERS_360[deterministicScoreForKey('daily-choice-greed', `${data.weekKey}:${run.id}:${run.floor}`) % CODE_TU_MONSTERS_360.length];
+      run.pendingEvent = { ...run.pendingEvent, type: 'elite', monster, title: `${run.pendingEvent.title} · Tinh anh giữ rương` };
+      run.status = 'pending_monster';
+      setBicanhPending(data, run, { status: 'pending', runId: run.id, floor: run.floor, isBoss: false, eventKey: run.pendingEvent.key, monsterKey: monster.key, monsterName: monster.name, dungeonKey: dungeon.key, startedAt: Date.now(), autoFightAt: Date.now() + BICANH_AUTO_RESOLVE_MS, party: [...getBicanhPartyIds(run)], leaderId: run.leaderId });
+      lines.push(`Đoạt bảo gọi ra tinh anh **${monster.name}**. Có thể **Tự xử lý nhanh** hoặc **Đánh theo lượt**.`);
+    } else {
+      if (choice === 'insight') {
+        applyBicanhPressure(run, { alert: 3, greed: 2, stability: -3 });
+        await applyBicanhPartyStatus(interaction.guild, users, run, 'Đạo Tâm Kiên Định', 6 * 60 * 60 * 1000, { directStats: { tuVi: 5, dotPha: 3, tamMaRisk: -3 }, dotPhaBonus: true }, lines, `Cả đội ngộ đạo: ${formatDirectStatsCompact({ tuVi: 5, dotPha: 3, tamMaRisk: -3 })}`);
+      } else {
+        applyBicanhPressure(run, { alert: -4, greed: -2, stability: 2 });
+      }
+      const reward = getDailyBicanhRewardBase(run, dungeon, run.pendingEvent, true);
+      if (choice === 'safe') {
+        reward.tuVi = Math.floor(reward.tuVi * 0.85);
+        reward.congHien = Math.floor(reward.congHien * 0.85);
+        reward.mastery = Math.floor(reward.mastery * 0.95);
+      }
+      if (choice === 'insight') { reward.mastery += 8; reward.tamDac += 1; }
+      await applyDailyBicanhPartyReward(interaction.guild, users, run, dungeon, run.pendingEvent, reward, lines);
+      for (const memberId of getBicanhPartyIds(run)) addWeeklyContribution(getOrCreateUser(users, memberId), choice === 'insight' ? 4 : 2, 'bí cảnh lựa chọn');
+      run.status = run.floor >= run.maxFloors ? 'completed' : 'route_choice';
+      run.pendingEvent = null;
+    }
+    data.lastResult = compactBicanhResult(lines, 360);
+    data.updatedAt = Date.now();
+    saveUsers(users);
+    saveBicanhData(data);
+    await updateWeeklyBicanhPanel(interaction.guild, data).catch(() => null);
+    await interaction.editReply({ embeds: [buildDailyBicanhRunEmbed(data, run)], components: buildWeeklyBicanhPanelRows(data, run), content: null }).catch(() => null);
+  }
+
+
+  async function handleBicanhRouteButton(interaction) {
+    if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate().catch(async () => interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => null));
+    if (!interaction.inGuild()) {
+      await interaction.editReply({ content: 'Bí cảnh chỉ mở trong tông môn.', embeds: [], components: [] }).catch(() => null);
+      return;
+    }
+    const raw = String(interaction.customId || '').slice(BICANH_ROUTE_BUTTON_PREFIX.length);
+    const parts = raw.split(':');
+    const [weekKey, runId, floorText, statusText, routeKey] = parts;
+    const data = repairWeeklyBicanhData(getWeeklyBicanhData());
+    if (weekKey && weekKey !== data.weekKey) {
+      await interaction.editReply({ content: 'Nút chọn lối này đã cũ qua ngày mới. Bấm `/bicanh` để cập nhật.', embeds: [], components: [] }).catch(() => null);
+      return;
+    }
+    const run = data.runs?.[runId] || getDailyBicanhRun(data, interaction.user.id);
+    if (!run || String(run.status) !== 'route_choice') {
+      await interaction.editReply({ content: 'Không có lối bí cảnh nào đang chờ chọn.', embeds: run ? [buildDailyBicanhRunEmbed(data, run)] : [], components: run ? buildWeeklyBicanhPanelRows(data, run) : [] }).catch(() => null);
+      return;
+    }
+    if (interaction.user.id !== run.leaderId) {
+      await interaction.editReply({ content: `Chỉ đội trưởng <@${run.leaderId}> được chọn lối cho cả đội.`, embeds: [buildDailyBicanhRunEmbed(data, run)], components: buildDailyRouteRows(data, run) }).catch(() => null);
+      return;
+    }
+    if (Number(run.floor) !== Number(floorText) || String(run.status) !== String(statusText)) {
+      await interaction.editReply({ content: 'Nút chọn lối này đã cũ so với tầng hiện tại. Bấm **Cập nhật** hoặc `/bicanh` để lấy nút mới.', embeds: [buildDailyBicanhRunEmbed(data, run)], components: buildWeeklyBicanhPanelRows(data, run) }).catch(() => null);
+      return;
+    }
+    const route = getDailyBicanhRouteConfig(routeKey) || getDailyBicanhRouteConfig('safe');
+    run.currentRoute = route.key;
+    applyBicanhPressure(run, route.pressure || {});
+    run.status = 'running';
+    run.pendingEvent = null;
+    run.log = [...(run.log || []), `Chọn ${route.name}: ${route.note} · ${formatBicanhPressure(run)}`].slice(-5);
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, run.leaderId || interaction.user.id);
+    const member = await interaction.guild.members.fetch(run.leaderId || interaction.user.id).catch(() => interaction.member);
+    await advanceDailyBicanhRun(interaction, data, users, userData, member, run);
+  }
+
+  async function handleBicanhEventAction(interaction) {
+    if (!interaction.deferred && !interaction.replied) await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => null);
+    const raw = String(interaction.customId || '').slice(BICANH_EVENT_ACTION_BUTTON_PREFIX.length);
+    const parts = raw.split(':');
+    const weekKey = parts[0] || '';
+    const runId = parts[1] || '';
+    const hasToken = parts.length >= 5;
+    const tokenFloor = hasToken ? Number(parts[2]) : null;
+    const tokenStatus = hasToken ? String(parts[3] || '') : null;
+    const action = hasToken ? (parts[4] || 'safe') : (parts[2] || 'safe');
+    const data = repairWeeklyBicanhData(getWeeklyBicanhData());
+    if (weekKey && weekKey !== data.weekKey) {
+      await interaction.editReply({ content: 'Nút bí cảnh này đã cũ qua ngày mới. Bấm `/bicanh` để cập nhật.', embeds: [], components: [] }).catch(() => null);
+      return;
+    }
+    const run = data.runs?.[runId] || getDailyBicanhRun(data, interaction.user.id);
+    if (!run || !run.pendingEvent || !['choice', 'event_choice'].includes(String(run.status))) {
+      await interaction.editReply({ content: 'Không có biến cố bí cảnh nào đang chờ xử lý.', embeds: [], components: [] }).catch(() => null);
+      return;
+    }
+    if (!getBicanhPartyIds(run).includes(interaction.user.id)) {
+      await interaction.editReply({ content: 'Chỉ thành viên trong lượt bí cảnh này mới được chọn hành động.', embeds: [], components: [] }).catch(() => null);
+      return;
+    }
+    if (interaction.user.id !== run.leaderId) {
+      await interaction.editReply({ content: `Chỉ đội trưởng <@${run.leaderId}> được chọn hướng xử lý cho cả đội. Loài người đã chứng minh quá nhiều lần rằng dân chủ bằng button rất dễ thành hỗn loạn.`, embeds: [buildDailyBicanhRunEmbed(data, run)], components: buildWeeklyBicanhPanelRows(data, run) }).catch(() => null);
+      return;
+    }
+    if (hasToken && (Number(run.floor) !== tokenFloor || String(run.status) !== tokenStatus)) {
+      await interaction.editReply({ content: 'Nút này đã cũ so với trạng thái bí cảnh hiện tại. Bấm **Cập nhật** hoặc `/bicanh` để lấy nút mới.', embeds: [buildDailyBicanhRunEmbed(data, run)], components: buildWeeklyBicanhPanelRows(data, run) }).catch(() => null);
+      return;
+    }
+    if (run.status === 'choice' || run.pendingEvent.type === 'choice') {
+      await resolveDailyChoiceEvent(interaction, data, run, ['safe', 'insight', 'greed'].includes(action) ? action : 'safe');
+      return;
+    }
+    const users = loadUsers();
+    const dungeon = getDungeonTemplateByKey(run.dungeonKey) || getWeeklyBicanhDungeon(data);
+    const lines = [`Tầng **${run.floor}/${run.maxFloors}** · ${getDailyBicanhTypeLabel(run.pendingEvent.type)} · **${getDailyBicanhShortTitle(run.pendingEvent)}**`];
+    await resolveDailyNonCombatEvent(interaction.guild, users, data, run, dungeon, run.pendingEvent, lines, { mode: ['safe', 'deep', 'skip'].includes(action) ? action : 'safe' });
+    run.log = [...(run.log || []), lines.join(' ')].slice(-5);
+    data.lastResult = compactBicanhResult(lines, 360);
+    data.updatedAt = Date.now();
+    saveUsers(users);
+    saveBicanhData(data);
+    await updateWeeklyBicanhPanel(interaction.guild, data).catch(() => null);
+    await interaction.editReply({ embeds: [buildDailyBicanhRunEmbed(data, run)], components: buildWeeklyBicanhPanelRows(data, run), content: null }).catch(() => null);
+  }
+
+  async function handleBicanhCellSelect(interaction) {
+    if (!interaction.deferred && !interaction.replied) await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => null);
+    const data = repairWeeklyBicanhData(getWeeklyBicanhData());
+    const runId = String(interaction.customId || '').split(':').pop();
+    const run = data.runs?.[runId] || getDailyBicanhRun(data, interaction.user.id);
+    if (!run || run.status !== 'choice' || !run.pendingEvent) {
+      await interaction.editReply({ content: 'Không có lựa chọn bí cảnh nào đang chờ.', components: [] }).catch(() => null);
+      return;
+    }
+    if (!getBicanhPartyIds(run).includes(interaction.user.id)) {
+      await interaction.editReply({ content: 'Chỉ thành viên trong lượt bí cảnh này mới được chọn.', components: [] }).catch(() => null);
+      return;
+    }
+    if (interaction.user.id !== run.leaderId) {
+      await interaction.editReply({ content: `Chỉ đội trưởng <@${run.leaderId}> được chọn lối cho cả đội.`, embeds: [buildDailyBicanhRunEmbed(data, run)], components: buildWeeklyBicanhPanelRows(data, run) }).catch(() => null);
+      return;
+    }
+    const choice = String(interaction.values?.[0] || 'safe');
+    await resolveDailyChoiceEvent(interaction, data, run, ['safe', 'insight', 'greed'].includes(choice) ? choice : 'safe');
+  }
+
+  function getWeeklyBicanhMonsterInfo(data, users = loadUsers(), pendingOverride = null) {
+    const pending = pendingOverride || getLatestBicanhPending(data);
+    if (!pending || pending.status !== 'pending') return null;
+    const run = data.runs?.[pending.runId] || null;
+    const dungeon = getDungeonTemplateByKey(pending.dungeonKey) || getWeeklyBicanhDungeon(data);
+    const monster = CODE_TU_MONSTERS_360.find((item) => item.key === pending.monsterKey) || CODE_TU_MONSTERS_360[0];
+    const party = Array.isArray(pending.party) && pending.party.length > 0 ? pending.party : [pending.leaderId].filter(Boolean);
+    const partyPower = party.reduce((total, memberId) => total + getMissionMemberPower(getOrCreateUser(users, memberId)), 0);
+    const floor = Number(pending.floor) || Number(run?.floor) || 1;
+    const typeMult = pending.isBoss ? 1.12 : (run?.pendingEvent?.type === 'elite' ? 1.02 : 0.74);
+    const floorMult = 0.86 + floor * 0.045;
+    const monsterMultiplier = clampNumber(Number(monster.powerMultiplier) || 1.1, 0.75, 1.25);
+    const jitter = 0.94 + (deterministicScoreForKey('daily-bicanh-monster-jitter', `${data.weekKey}:${pending.runId}:${floor}`) % 13) / 100;
+    const scoutStacks = Math.max(0, Number(run?.scoutBonus) || 0);
+    const scoutMult = clampNumber(1 - scoutStacks * 0.08, 0.76, 1);
+    const mechanic = getBicanhBossMechanic(monster, pending, run);
+    const pressure = normalizeBicanhRunPressure(run?.pressure);
+    const pressureMult = 1 + Math.max(0, pressure.alert) / 700 + Math.max(0, pressure.greed) / 650 + Math.max(0, 100 - pressure.stability) / 900;
+    const monsterPower = Math.max(1, Math.floor(Math.max(60, partyPower * typeMult * floorMult * monsterMultiplier * jitter * scoutMult * pressureMult * (Number(mechanic.powerMult) || 1))));
+    const ratio = partyPower / Math.max(1, monsterPower);
+    const reward = getDailyBicanhRewardBase(run || { floor, maxFloors: floor, rewards: {} }, dungeon, { type: pending.isBoss ? 'boss' : 'monster' }, true);
+    const injury = getMissionInjury(ratio, pending.isBoss ? 0.04 : 0.02, pending.isBoss ? 0.14 : 0.08, 45 * 60 * 1000, pending.isBoss ? 5 * 60 * 60 * 1000 : 2 * 60 * 60 * 1000);
+    return { pending, run, dungeon, monster, mechanic, party, floor, monsterPower, partyPower, ratio, fightChance: Math.max(0.28, Math.min(0.94, getMissionWinChance(ratio) + (pending.isBoss ? 0.02 : 0.10))), escapeChance: Math.max(0.35, getMissionEscapeChance(ratio)), rewardEach: Math.max(1, Math.floor(reward.congHien / Math.max(1, party.length))), tuViEach: Math.max(1, Math.floor(reward.tuVi / Math.max(1, party.length))), masteryEach: Math.max(2, Math.floor(reward.mastery / Math.max(1, party.length))), injury };
+  }
+
+  async function getWeeklyBicanhMonsterInfoResolved(guild, data, users = loadUsers(), pendingOverride = null) {
+    const info = getWeeklyBicanhMonsterInfo(data, users, pendingOverride);
+    if (!info || !guild?.members?.fetch) return info;
+    let partyPower = 0;
+    for (const memberId of info.party) {
+      const userData = getOrCreateUser(users, memberId);
+      const member = await guild.members.fetch(memberId).catch(() => null);
+      partyPower += getMissionMemberPower(userData, member);
+    }
+    if (partyPower <= 0) return info;
+    const monsterPower = Math.max(1, Math.floor(info.monsterPower * partyPower / Math.max(1, info.partyPower || partyPower)));
+    const ratio = partyPower / Math.max(1, monsterPower);
+    return { ...info, partyPower, monsterPower, ratio, fightChance: Math.max(0.28, Math.min(0.94, getMissionWinChance(ratio) + (info.pending.isBoss ? 0.02 : 0.10))), escapeChance: Math.max(0.35, getMissionEscapeChance(ratio)) };
+  }
+
+  function buildWeeklyBicanhMonsterEmbed(data, users = loadUsers()) {
+    const info = getWeeklyBicanhMonsterInfo(data, users);
+    if (!info) return buildWeeklyBicanhEmbed(data);
+    const kind = info.pending.isBoss ? '👑 Boss' : '👾 Quái';
+    const embed = new EmbedBuilder()
+      .setColor(info.pending.isBoss ? 0xdc2626 : 0xe74c3c)
+      .setTitle(`${kind} · Tầng ${info.floor}`)
+      .setDescription([`**${info.monster.name}**`, `${getMonsterDisplayLine(info.monster)}`, `Tổ đội: ${info.party.map((id) => `<@${id}>`).join(' ')}`, `Tự xử lý nếu bỏ mặc quá lâu: ${formatTimestamp(info.pending.autoFightAt)}`].join('\n'))
+      .addFields(
+        { name: 'Kèo đấu', value: `Đội **${info.partyPower}** / Địch **${info.monsterPower}** · ${getDifficultyLabel(info.ratio)}`, inline: false },
+        { name: info.pending.isBoss ? 'Cơ chế boss' : 'Cơ chế giao chiến', value: `**${info.mechanic?.name || 'Dị Lỗi'}** · ${info.mechanic?.text || 'Cơ chế theo áp lực run.'}`, inline: false },
+        { name: 'Thưởng dự kiến', value: `Mỗi người +${info.tuViEach} tu vi · +${info.rewardEach} cống hiến · +${info.masteryEach} thuần thục`, inline: false },
+      )
+      .setFooter({ text: 'Thua mất 1 sinh lực; boss mới có rủi ro nặng hơn.' });
+    const thumb = getMonsterThumbnailUrl(info.monster);
+    if (thumb) embed.setThumbnail(thumb);
+    return embed;
+  }
+
+  const BICANH_COMBAT_TIMEOUTS = new Map();
+
+  function serializePokemonCombatant(unit) {
+    return {
+      id: String(unit.id),
+      label: unit.label,
+      isMonster: Boolean(unit.isMonster),
+      power: Number(unit.power) || 1,
+      maxHp: Number(unit.maxHp) || 100,
+      hp: Number(unit.hp) || 1,
+      qi: Number(unit.qi) || 35,
+      shield: Number(unit.shield) || 0,
+      atkMod: Number(unit.atkMod) || 1,
+      defMod: Number(unit.defMod) || 1,
+      dotDamage: Number(unit.dotDamage) || 0,
+      dotTurns: Number(unit.dotTurns) || 0,
+      stunTurns: Number(unit.stunTurns) || 0,
+      note: unit.note || null,
+      skills: Array.isArray(unit.skills) && unit.skills.length ? unit.skills : (unit.isMonster ? MONSTER_COMBAT_SKILLS : DEFAULT_COMBAT_SKILLS),
+    };
+  }
+
+  function findBicanhCombatSession(data, combatId) {
+    const id = String(combatId || '');
+    for (const run of Object.values(data.runs || {})) {
+      if (run?.combat?.id === id) {
+        return { run, combat: run.combat };
+      }
+    }
+    return { run: null, combat: null };
+  }
+
+  function getBicanhCombatCurrentActor(combat) {
+    const living = (combat.allies || []).filter(isCombatantAlive);
+    if (living.length === 0) return null;
+    const order = Array.isArray(combat.turnOrder) && combat.turnOrder.length ? combat.turnOrder : living.map((unit) => unit.id);
+    for (let offset = 0; offset < order.length; offset += 1) {
+      const index = (Number(combat.turnIndex) + offset) % order.length;
+      const actor = living.find((unit) => unit.id === order[index]);
+      if (actor) {
+        combat.turnIndex = index;
+        return actor;
+      }
+    }
+    return living[0];
+  }
+
+  function getBicanhCombatEnemy(combat) {
+    return combat.enemy || (Array.isArray(combat.enemies) ? combat.enemies[0] : null);
+  }
+
+  function getBicanhCombatStatusText(combat) {
+    const current = getBicanhCombatCurrentActor(combat);
+    const parts = [];
+    if (current) parts.push(`Lượt: <@${current.id}>`);
+    parts.push(`Hạn: ${formatTimestamp(combat.timeoutAt)}`);
+    return parts.join(' · ');
+  }
+
+  function getPokemonCombatHpLine(unit) {
+    const status = [];
+    if ((Number(unit.shield) || 0) > 0) status.push(`Giáp ${Math.ceil(unit.shield)}`);
+    if ((Number(unit.dotTurns) || 0) > 0) status.push('Ăn mòn');
+    if ((Number(unit.stunTurns) || 0) > 0) status.push('Choáng');
+    if ((Number(unit.atkMod) || 1) > 1.05) status.push('Tăng công');
+    if ((Number(unit.defMod) || 1) > 1.05) status.push('Hộ thể');
+    if ((Number(unit.defMod) || 1) < 0.95) status.push('Giảm thủ');
+    return `${unit.isMonster ? '👾' : '🧍'} **${unit.label}**\nHP ${uiBar(Math.ceil(unit.hp), unit.maxHp, 10)} · Khí ${Math.floor(unit.qi || 0)}/100${status.length ? `\n${status.join(' · ')}` : ''}`;
+  }
+
+  function buildBicanhPokemonCombatEmbed(combat) {
+    const enemy = getBicanhCombatEnemy(combat);
+    const alliesText = (combat.allies || []).map(getPokemonCombatHpLine).join('\n\n');
+    const log = compactPokemonCombatLog(combat.log || [], 4);
+    return new EmbedBuilder()
+      .setColor(enemy && isCombatantAlive(enemy) ? 0xdc2626 : 0x22c55e)
+      .setTitle(`${combat.isBoss ? '👑 Boss Bí Cảnh' : '⚔️ Giao Chiến Bí Cảnh'} · Tầng ${combat.floor}/${combat.maxFloors}`)
+      .setDescription([
+        getBicanhCombatStatusText(combat),
+        '',
+        '**Phe ta**',
+        alliesText || 'Không còn ai đứng vững.',
+        '',
+        '**Địch**',
+        enemy ? getPokemonCombatHpLine(enemy) : 'Địch đã tan biến.',
+      ].join('\n'))
+      .addFields({ name: 'Diễn biến', value: uiCompactValue(log, 420), inline: false })
+      .setFooter({ text: 'Solo tự chọn skill từng lượt. Party xoay lượt từng người; quá hạn tự dùng chiêu 1.' });
+  }
+
+  function buildBicanhPokemonCombatRows(combat) {
+    const actor = getBicanhCombatCurrentActor(combat);
+    if (!actor || !isCombatantAlive(getBicanhCombatEnemy(combat))) {
+      return [];
+    }
+    const skills = Array.isArray(actor.skills) && actor.skills.length ? actor.skills : DEFAULT_COMBAT_SKILLS;
+    const row1 = new ActionRowBuilder();
+    for (let index = 0; index < 4; index += 1) {
+      const skill = skills[index];
+      row1.addComponents(
+        new ButtonBuilder()
+          .setCustomId(`${BICANH_COMBAT_SKILL_PREFIX}${combat.id}:${index}`)
+          .setLabel(skill ? `${index + 1}. ${uiTrim(skill.name, 28)}` : `${index + 1}. Chưa mở`)
+          .setStyle(index === 3 ? ButtonStyle.Danger : ButtonStyle.Primary)
+          .setDisabled(!skill || (Number(skill.qiCost) || 0) > (Number(actor.qi) || 0)),
+      );
+    }
+    const row2 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`${BICANH_COMBAT_DEFEND_PREFIX}${combat.id}`).setLabel('Thủ thế').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`${BICANH_COMBAT_AUTO_PREFIX}${combat.id}`).setLabel('Auto lượt').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`${BICANH_COMBAT_ESCAPE_PREFIX}${combat.id}`).setLabel('Rút lui').setStyle(ButtonStyle.Secondary),
+    );
+    return [row1, row2];
+  }
+
+  function getManualSkill(actor, skillIndex) {
+    const skills = Array.isArray(actor.skills) && actor.skills.length ? actor.skills : DEFAULT_COMBAT_SKILLS;
+    const selected = skills[Number(skillIndex) || 0];
+    if (selected && (Number(selected.qiCost) || 0) <= (Number(actor.qi) || 0)) return selected;
+    return skills.find((skill) => (Number(skill.qiCost) || 0) <= (Number(actor.qi) || 0)) || skills[0] || DEFAULT_COMBAT_SKILLS[0];
+  }
+
+  function resolveManualSkillAction(actor, target, skill, lines) {
+    if (!applyTurnStartEffects(actor, lines)) return;
+    if (!target || !isCombatantAlive(target)) return;
+    actor.qi = Math.max(0, actor.qi - (Number(skill.qiCost) || 0));
+    actor.qi = Math.min(100, actor.qi + (Number(skill.qiGain) || 10));
+    const accuracy = clampNumber(Number(skill.accuracy) || 0.9, 0.45, 1);
+    if (Math.random() > accuracy) {
+      lines.push(`• ${actor.label} dùng ${skill.emoji || '✦'} **${skill.name}** nhưng hụt.`);
+      return;
+    }
+    const crit = skill.critChance && Math.random() < skill.critChance;
+    const variance = 0.86 + Math.random() * 0.28;
+    const ratioPressure = Math.sqrt(actor.power / Math.max(1, target.power));
+    let damage = Math.floor(actor.power * 0.28 * (Number(skill.power) || 1) * actor.atkMod / Math.max(0.55, target.defMod) * variance * clampNumber(ratioPressure, 0.62, 1.55));
+    if (crit) damage = Math.floor(damage * 1.55);
+    damage = Math.max(1, damage);
+    let shieldAbsorb = 0;
+    if (target.shield > 0) {
+      shieldAbsorb = Math.min(target.shield, damage);
+      target.shield -= shieldAbsorb;
+      damage -= shieldAbsorb;
+    }
+    target.hp = Math.max(0, target.hp - damage);
+    lines.push(`• ${actor.label} dùng ${skill.emoji || '✦'} **${skill.name}**: **-${damage} HP**${crit ? ' · chí mạng' : ''}${shieldAbsorb ? ` · giáp đỡ ${shieldAbsorb}` : ''}.`);
+    applySkillEffect(actor, target, skill, lines);
+  }
+
+  function resolveManualDefend(actor, lines) {
+    if (!applyTurnStartEffects(actor, lines)) return;
+    const shield = Math.max(8, Math.floor(actor.maxHp * 0.12));
+    actor.shield = Math.min(Math.floor(actor.maxHp * 0.55), (Number(actor.shield) || 0) + shield);
+    actor.defMod = Math.min(1.55, (Number(actor.defMod) || 1) + 0.1);
+    actor.qi = Math.min(100, (Number(actor.qi) || 0) + 18);
+    lines.push(`• ${actor.label} thủ thế, tạo **+${shield} giáp** và hồi khí.`);
+  }
+
+  function advanceBicanhCombatTurn(combat) {
+    const order = Array.isArray(combat.turnOrder) && combat.turnOrder.length ? combat.turnOrder : (combat.allies || []).map((unit) => unit.id);
+    if (order.length === 0) return;
+    for (let step = 1; step <= order.length; step += 1) {
+      const nextIndex = ((Number(combat.turnIndex) || 0) + step) % order.length;
+      const actor = (combat.allies || []).find((unit) => unit.id === order[nextIndex] && isCombatantAlive(unit));
+      if (actor) {
+        combat.turnIndex = nextIndex;
+        combat.round = (Number(combat.round) || 1) + (nextIndex === 0 ? 1 : 0);
+        combat.timeoutAt = Date.now() + DAILY_BICANH_TURN_TIMEOUT_MS;
+        return;
+      }
+    }
+  }
+
+  function resolveEnemyCounter(combat, lines) {
+    const enemy = getBicanhCombatEnemy(combat);
+    if (!enemy || !isCombatantAlive(enemy)) return;
+    const livingAllies = (combat.allies || []).filter(isCombatantAlive);
+    if (livingAllies.length === 0) return;
+    resolveSkillAction(enemy, livingAllies, lines);
+  }
+
+  function getBicanhCombatOutcome(combat) {
+    const enemy = getBicanhCombatEnemy(combat);
+    const allyAlive = (combat.allies || []).some(isCombatantAlive);
+    const enemyAlive = enemy && isCombatantAlive(enemy);
+    if (!enemyAlive) return { done: true, success: true };
+    if (!allyAlive) return { done: true, success: false };
+    return { done: false, success: false };
+  }
+
+  async function createBicanhPokemonCombatSession(guild, data, pending) {
+    const users = loadUsers();
+    const info = await getWeeklyBicanhMonsterInfoResolved(guild, data, users, pending);
+    if (!info) return null;
+    const allies = [];
+    for (const memberId of info.party) {
+      const userData = getOrCreateUser(users, memberId);
+      const member = guild ? await guild.members.fetch(memberId).catch(() => null) : null;
+      const power = getMissionMemberPower(userData, member);
+      const label = member?.displayName || `<@${memberId}>`;
+      allies.push(serializePokemonCombatant(createSkillCombatant({ id: memberId, label, userData, member, power, skills: getCombatSkillBookForUser(member, userData) })));
+    }
+    const enemy = serializePokemonCombatant(createSkillCombatant({ id: `enemy_${pending.runId}`, label: info.monster.name, power: info.monsterPower, skills: getMonsterCombatSkills(info.monster), hpMultiplier: (getMonsterArchetype(info.monster).hpMult || 1) * (pending.isBoss ? 1.18 : 1), isMonster: true, note: getMonsterDisplayLine(info.monster) }));
+    const combatId = `bc_${String(info.run.id).slice(0, 18)}_${Date.now().toString(36)}`;
+    return {
+      id: combatId,
+      mode: 'bicanh',
+      runId: info.run.id,
+      pending: { ...pending },
+      isBoss: Boolean(pending.isBoss),
+      floor: info.floor,
+      maxFloors: info.run.maxFloors,
+      dungeonKey: info.dungeon.key,
+      allies,
+      enemy,
+      turnOrder: allies.map((unit) => unit.id),
+      turnIndex: 0,
+      round: 1,
+      timeoutAt: Date.now() + DAILY_BICANH_TURN_TIMEOUT_MS,
+      locked: false,
+      log: [`Trận bắt đầu. ${pending.isBoss ? 'Boss trấn tầng cuối.' : 'Quái chặn đường.'}`],
+      createdAt: Date.now(),
+    };
+  }
+
+  async function finishBicanhPokemonCombat(guild, data, run, combat, success, extraLines = []) {
+    const pending = combat.pending || run.pendingMonster;
+    run.combat = null;
+    run.activeCombatId = null;
+    const summary = summarizePokemonCombatResult(success, [...(combat.log || []), ...extraLines]);
+    const result = await resolveWeeklyBicanhMonster(guild, data, { action: 'fight', auto: false, pending, interactiveOutcome: { success, summary } });
+    run.combat = null;
+    run.activeCombatId = null;
+    return result;
+  }
+
+  async function stepBicanhPokemonCombat(guild, data, run, combat, actorId, action = 'skill', skillIndex = 0, forced = false) {
+    if (combat.locked) return { ok: false, message: 'Trận đang xử lý lượt trước.' };
+    combat.locked = true;
+    try {
+      const lines = [];
+      const enemy = getBicanhCombatEnemy(combat);
+      const actor = getBicanhCombatCurrentActor(combat);
+      if (!actor || !enemy) return { ok: false, message: 'Trận đã mất dữ liệu.' };
+      if (!forced && actor.id !== actorId) return { ok: false, message: 'Chưa tới lượt đạo hữu.' };
+      if (action === 'defend') {
+        resolveManualDefend(actor, lines);
+      } else {
+        const skill = getManualSkill(actor, skillIndex);
+        resolveManualSkillAction(actor, enemy, skill, lines);
+      }
+      if (isCombatantAlive(enemy)) resolveEnemyCounter(combat, lines);
+      combat.log.push(...lines);
+      combat.log = combat.log.slice(-12);
+      const outcome = getBicanhCombatOutcome(combat);
+      if (outcome.done) {
+        const resultText = await finishBicanhPokemonCombat(guild, data, run, combat, outcome.success, lines);
+        return { ok: true, done: true, success: outcome.success, resultText };
+      }
+      advanceBicanhCombatTurn(combat);
+      combat.locked = false;
+      return { ok: true, done: false };
+    } finally {
+      if (combat) combat.locked = false;
+    }
+  }
+
+  async function autoAdvanceExpiredBicanhCombat(guild, data, run, combat) {
+    if (!combat || Date.now() < Number(combat.timeoutAt || 0)) return { advanced: false };
+    const actor = getBicanhCombatCurrentActor(combat);
+    if (!actor) return { advanced: false };
+    combat.log.push(`• ${actor.label} quá hạn, Thiên Đạo tự dùng chiêu cơ bản.`);
+    return stepBicanhPokemonCombat(guild, data, run, combat, actor.id, 'skill', 0, true);
+  }
+
+
+  function scheduleBicanhPokemonCombatTimeout(guildId, combatId) {
+    const id = String(combatId || '');
+    if (!id) return;
+    if (BICANH_COMBAT_TIMEOUTS.has(id)) clearTimeout(BICANH_COMBAT_TIMEOUTS.get(id));
+    const data = repairWeeklyBicanhData(getWeeklyBicanhData());
+    const { combat } = findBicanhCombatSession(data, id);
+    if (!combat) return;
+    const delay = Math.max(1500, Number(combat.timeoutAt || 0) - Date.now() + 500);
+    const timer = setTimeout(async () => {
+      try {
+        const current = repairWeeklyBicanhData(getWeeklyBicanhData());
+        const found = findBicanhCombatSession(current, id);
+        if (!found.run || !found.combat) return;
+        const guild = guildId ? await client.guilds.fetch(guildId).catch(() => null) : null;
+        const result = await autoAdvanceExpiredBicanhCombat(guild, current, found.run, found.combat);
+        saveBicanhData(current);
+        if (found.combat?.channelId && found.combat?.messageId) {
+          const channel = await client.channels.fetch(found.combat.channelId).catch(() => null);
+          const message = channel?.messages?.fetch ? await channel.messages.fetch(found.combat.messageId).catch(() => null) : null;
+          if (message) {
+            if (result.done) {
+              await message.edit({ embeds: [buildDailyBicanhRunEmbed(current, found.run)], components: buildWeeklyBicanhPanelRows(current, found.run) }).catch(() => null);
+            } else {
+              await message.edit({ embeds: [buildBicanhPokemonCombatEmbed(found.combat)], components: buildBicanhPokemonCombatRows(found.combat) }).catch(() => null);
+            }
+          }
+        }
+        await updateWeeklyBicanhPanel(guild, current).catch(() => null);
+        if (!result.done && found.run?.combat?.id) scheduleBicanhPokemonCombatTimeout(guildId, id);
+      } catch (error) {
+        console.error('Loi auto timeout combat bi canh:', error);
+      } finally {
+        BICANH_COMBAT_TIMEOUTS.delete(id);
+      }
+    }, delay);
+    BICANH_COMBAT_TIMEOUTS.set(id, timer);
+  }
+
+  async function handleBicanhCombatAction(interaction, action, skillIndex = 0) {
+    const raw = interaction.customId
+      .replace(BICANH_COMBAT_SKILL_PREFIX, '')
+      .replace(BICANH_COMBAT_DEFEND_PREFIX, '')
+      .replace(BICANH_COMBAT_AUTO_PREFIX, '')
+      .replace(BICANH_COMBAT_ESCAPE_PREFIX, '');
+    const combatId = raw.split(':')[0];
+    const data = repairWeeklyBicanhData(getWeeklyBicanhData());
+    const { run, combat } = findBicanhCombatSession(data, combatId);
+    if (!run || !combat) {
+      await interaction.reply({ content: 'Trận này đã kết thúc hoặc mất dữ liệu.', flags: MessageFlags.Ephemeral }).catch(() => null);
+      return;
+    }
+    if (action === 'escape') {
+      if (interaction.user.id !== run.leaderId && getBicanhPartyIds(run).length > 1) {
+        await interaction.reply({ content: `Chỉ đội trưởng <@${run.leaderId}> được rút cả đội khỏi bí cảnh.`, flags: MessageFlags.Ephemeral }).catch(() => null);
+        return;
+      }
+      abandonDailyBicanhRun(data, run, interaction.user.id, 'rút lui khi đang giao chiến');
+      saveBicanhData(data);
+      await updateWeeklyBicanhPanel(interaction.guild, data).catch(() => null);
+      await interaction.update({ content: data.lastResult, embeds: [buildDailyBicanhRunEmbed(data, run)], components: [] }).catch(() => null);
+      return;
+    }
+    const timeoutResult = await autoAdvanceExpiredBicanhCombat(interaction.guild, data, run, combat);
+    if (timeoutResult.done) {
+      saveBicanhData(data);
+      await interaction.update({ embeds: [buildDailyBicanhRunEmbed(data, run)], components: buildWeeklyBicanhPanelRows(data, run) }).catch(() => null);
+      return;
+    }
+    const current = getBicanhCombatCurrentActor(combat);
+    if (!current) {
+      await interaction.reply({ content: 'Trận đã mất lượt hiện tại.', flags: MessageFlags.Ephemeral }).catch(() => null);
+      return;
+    }
+    if (current.id !== interaction.user.id && action !== 'auto') {
+      await interaction.reply({ content: `Chưa tới lượt đạo hữu. Hiện là lượt <@${current.id}>.`, flags: MessageFlags.Ephemeral }).catch(() => null);
+      return;
+    }
+    const actorId = action === 'auto' ? current.id : interaction.user.id;
+    const result = await stepBicanhPokemonCombat(interaction.guild, data, run, combat, actorId, action === 'defend' ? 'defend' : 'skill', skillIndex, action === 'auto');
+    if (!result.ok) {
+      await interaction.reply({ content: result.message || 'Không thể xử lý lượt này.', flags: MessageFlags.Ephemeral }).catch(() => null);
+      return;
+    }
+    saveBicanhData(data);
+    await updateWeeklyBicanhPanel(interaction.guild, data).catch(() => null);
+    if (result.done) {
+      if (BICANH_COMBAT_TIMEOUTS.has(combat.id)) clearTimeout(BICANH_COMBAT_TIMEOUTS.get(combat.id));
+      BICANH_COMBAT_TIMEOUTS.delete(combat.id);
+      await interaction.update({ embeds: [buildDailyBicanhRunEmbed(data, run)], components: buildWeeklyBicanhPanelRows(data, run) }).catch(() => null);
+      return;
+    }
+    scheduleBicanhPokemonCombatTimeout(interaction.guild.id, combat.id);
+    await interaction.update({ embeds: [buildBicanhPokemonCombatEmbed(combat)], components: buildBicanhPokemonCombatRows(combat) }).catch(() => null);
+  }
+
+  async function handleBicanhCombatSkill(interaction) {
+    const raw = interaction.customId.slice(BICANH_COMBAT_SKILL_PREFIX.length);
+    const [, skillText] = raw.split(':');
+    await handleBicanhCombatAction(interaction, 'skill', Number(skillText) || 0);
+  }
+
+  async function handleBicanhCombatDefend(interaction) {
+    await handleBicanhCombatAction(interaction, 'defend', 0);
+  }
+
+  async function handleBicanhCombatAuto(interaction) {
+    await handleBicanhCombatAction(interaction, 'auto', 0);
+  }
+
+  async function handleBicanhCombatEscape(interaction) {
+    await handleBicanhCombatAction(interaction, 'escape', 0);
+  }
+
+  async function handleBicanhJoinParty(interaction) {
+    if (!interaction.deferred && !interaction.replied) await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => null);
+    const data = repairWeeklyBicanhData(getWeeklyBicanhData());
+    const lobby = getLatestBicanhLobby(data);
+    if (!lobby) {
+      const pending = getLatestBicanhPending(data);
+      const message = pending ? 'Tổ đội chỉ nhận người **trước khi vào bí cảnh**. Đang gặp địch thì không thêm thành viên nữa.' : 'Hiện chưa có tổ đội bí cảnh nào đang chờ.';
+      await interaction.editReply({ content: message }).catch(() => null);
+      return;
+    }
+    if (data.dailyUses?.[interaction.user.id] === data.weekKey) {
+      await interaction.editReply({ content: 'Đạo hữu đã dùng lượt bí cảnh hôm nay, không thể vào tổ đội mới.' }).catch(() => null);
+      return;
+    }
+    const ownRun = getDailyBicanhRun(data, interaction.user.id);
+    if (ownRun && ownRun.id !== lobby.id && !['completed', 'failed', 'abandoned'].includes(String(ownRun.status))) {
+      await interaction.editReply({ content: 'Đạo hữu đang có lượt/tổ đội bí cảnh riêng chưa xong.' }).catch(() => null);
+      return;
+    }
+    if (!lobby.party.includes(interaction.user.id) && lobby.party.length >= DAILY_BICANH_MAX_PARTY_SIZE) {
+      await interaction.editReply({ content: 'Tổ đội bí cảnh đã đủ 3 người.' }).catch(() => null);
+      return;
+    }
+    if (!lobby.party.includes(interaction.user.id)) lobby.party.push(interaction.user.id);
+    data.lastResult = `<@${interaction.user.id}> đã vào tổ đội bí cảnh của <@${lobby.leaderId}>.`;
+    saveBicanhData(data);
+    await updateWeeklyBicanhPanel(interaction.guild, data).catch(() => null);
+    await interaction.editReply({ embeds: [buildDailyBicanhRunEmbed(data, lobby)], components: buildWeeklyBicanhPanelRows(data, lobby), content: 'Đã vào tổ đội bí cảnh. Chờ đội trưởng bắt đầu.' }).catch(() => null);
+  }
+
+  async function handleBicanhFight(interaction) {
+    const data = repairWeeklyBicanhData(getWeeklyBicanhData());
+    const token = parseBicanhRunActionToken(interaction.customId, BICANH_FIGHT_BUTTON_PREFIX);
+    const { pending, run } = getBicanhPendingForUser(data, interaction.user.id);
+    if (!pending || !run || !pending.party?.includes(interaction.user.id)) {
+      await interaction.reply({ content: 'Đạo hữu chưa ở trong tổ đội đang xử lý quái/boss bí cảnh.', flags: MessageFlags.Ephemeral }).catch(() => null);
+      return;
+    }
+    if (token.weekKey && token.weekKey !== data.weekKey) {
+      await interaction.reply({ content: 'Nút giao chiến này đã cũ qua ngày mới. Bấm `/bicanh` để cập nhật.', flags: MessageFlags.Ephemeral }).catch(() => null);
+      return;
+    }
+    if (token.legacy || !isBicanhActionTokenCurrent(data, run, token)) {
+      await interaction.reply({ content: 'Nút giao chiến này đã cũ so với tầng/trạng thái hiện tại. Bấm `/bicanh` để lấy nút mới.', flags: MessageFlags.Ephemeral }).catch(() => null);
+      return;
+    }
+
+    if (run.combat?.id) {
+      await interaction.reply({ embeds: [buildBicanhPokemonCombatEmbed(run.combat)], components: buildBicanhPokemonCombatRows(run.combat) }).catch(() => null);
+      return;
+    }
+
+    if (interaction.user.id !== run.leaderId) {
+      await interaction.reply({ content: `Chỉ đội trưởng <@${run.leaderId}> được mở trận theo lượt. Khi trận mở, từng thành viên mới tự bấm skill.`, flags: MessageFlags.Ephemeral }).catch(() => null);
+      return;
+    }
+
+    const combat = await createBicanhPokemonCombatSession(interaction.guild, data, pending);
+    if (!combat) {
+      await interaction.reply({ content: 'Không thể dựng trận combat bí cảnh.', flags: MessageFlags.Ephemeral }).catch(() => null);
+      return;
+    }
+    run.combat = combat;
+    run.activeCombatId = combat.id;
+    saveBicanhData(data);
+    await updateWeeklyBicanhPanel(interaction.guild, data).catch(() => null);
+    const replyMessage = await interaction.reply({ embeds: [buildBicanhPokemonCombatEmbed(combat)], components: buildBicanhPokemonCombatRows(combat), fetchReply: true }).catch(() => null);
+    if (replyMessage) {
+      combat.channelId = replyMessage.channelId;
+      combat.messageId = replyMessage.id;
+      saveBicanhData(data);
+      scheduleBicanhPokemonCombatTimeout(interaction.guild.id, combat.id);
+    }
+  }
+
+  async function handleBicanhQuickFight(interaction) {
+    if (!interaction.deferred && !interaction.replied) await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => null);
+    const data = repairWeeklyBicanhData(getWeeklyBicanhData());
+    const token = parseBicanhRunActionToken(interaction.customId, BICANH_QUICK_FIGHT_BUTTON_PREFIX);
+    const { pending, run } = getBicanhPendingForUser(data, interaction.user.id);
+    if (!pending || !run || !pending.party?.includes(interaction.user.id)) {
+      await interaction.editReply({ content: 'Đạo hữu chưa ở trong tổ đội đang chờ giao chiến bí cảnh.', embeds: [], components: [] }).catch(() => null);
+      return;
+    }
+    if (token.weekKey && token.weekKey !== data.weekKey) {
+      await interaction.editReply({ content: 'Nút xử lý nhanh này đã cũ qua ngày mới. Bấm `/bicanh` để cập nhật.', embeds: [], components: [] }).catch(() => null);
+      return;
+    }
+    if (token.legacy || !isBicanhActionTokenCurrent(data, run, token)) {
+      await interaction.editReply({ content: 'Nút xử lý nhanh này đã cũ so với tầng/trạng thái hiện tại. Bấm `/bicanh` để lấy nút mới.', embeds: [buildDailyBicanhRunEmbed(data, run)], components: buildWeeklyBicanhPanelRows(data, run) }).catch(() => null);
+      return;
+    }
+    if (interaction.user.id !== run.leaderId) {
+      await interaction.editReply({ content: `Chỉ đội trưởng <@${run.leaderId}> được bấm **Tự xử lý nhanh** cho cả đội.`, embeds: [buildDailyBicanhRunEmbed(data, run)], components: buildWeeklyBicanhPanelRows(data, run) }).catch(() => null);
+      return;
+    }
+    const result = await resolveWeeklyBicanhMonster(interaction.guild, data, { action: 'fight', auto: false, pending });
+    saveBicanhData(data);
+    await updateWeeklyBicanhPanel(interaction.guild, data).catch(() => null);
+    await interaction.editReply({ content: result, embeds: [buildDailyBicanhRunEmbed(data, run)], components: buildWeeklyBicanhPanelRows(data, run) }).catch(() => null);
+  }
+
+  async function handleBicanhEscape(interaction) {
+    if (!interaction.deferred && !interaction.replied) await interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => null);
+    const data = repairWeeklyBicanhData(getWeeklyBicanhData());
+    const token = parseBicanhRunActionToken(interaction.customId, BICANH_ESCAPE_BUTTON_PREFIX);
+    if (token.weekKey && token.weekKey !== data.weekKey) {
+      await interaction.editReply({ content: 'Nút rút lui này đã cũ qua ngày mới. Bấm `/bicanh` để cập nhật.', embeds: [], components: [] }).catch(() => null);
+      return;
+    }
+
+    const { pending, run: pendingRun } = getBicanhPendingForUser(data, interaction.user.id);
+    let run = token.runId ? data.runs?.[token.runId] : (pendingRun || getDailyBicanhRun(data, interaction.user.id));
+    if (!run && pending?.runId) run = data.runs?.[pending.runId] || null;
+
+    if (!run || ['completed', 'failed', 'abandoned'].includes(String(run.status))) {
+      await interaction.editReply({ content: 'Đạo hữu không có lượt bí cảnh đang chạy để rút lui.' }).catch(() => null);
+      return;
+    }
+
+    if (!token.legacy && (String(run.id) !== String(token.runId) || Number(run.floor) !== Number(token.floor) || String(run.status) !== String(token.status))) {
+      await interaction.editReply({ content: 'Nút rút lui này đã cũ so với trạng thái/tầng hiện tại. Bấm `/bicanh` để lấy nút mới.', embeds: [buildDailyBicanhRunEmbed(data, run)], components: buildWeeklyBicanhPanelRows(data, run) }).catch(() => null);
+      return;
+    }
+
+    if (token.legacy && String(run.status) !== 'lobby') {
+      await interaction.editReply({ content: 'Nút rút lui này là nút cũ, không còn an toàn để dùng. Bấm `/bicanh` rồi dùng nút rút lui mới.', embeds: [buildDailyBicanhRunEmbed(data, run)], components: buildWeeklyBicanhPanelRows(data, run) }).catch(() => null);
+      return;
+    }
+
+    if (run.status === 'lobby') {
+      if (interaction.user.id === run.leaderId) {
+        delete data.runs[run.id];
+        data.lastResult = `<@${interaction.user.id}> đã giải tán tổ đội bí cảnh.`;
+        data.updatedAt = Date.now();
+        saveBicanhData(data);
+        await updateWeeklyBicanhPanel(interaction.guild, data).catch(() => null);
+        await interaction.editReply({ content: 'Đã giải tán tổ đội bí cảnh. Chưa tiêu lượt ngày.', embeds: [], components: [] }).catch(() => null);
+        return;
+      }
+      run.party = (run.party || []).filter((id) => id !== interaction.user.id);
+      data.lastResult = `<@${interaction.user.id}> đã rời tổ đội bí cảnh.`;
+      data.updatedAt = Date.now();
+      saveBicanhData(data);
+      await updateWeeklyBicanhPanel(interaction.guild, data).catch(() => null);
+      await interaction.editReply({ content: 'Đã rời tổ đội bí cảnh. Chưa tiêu lượt ngày.', embeds: [], components: [] }).catch(() => null);
+      return;
+    }
+
+    if (interaction.user.id !== run.leaderId && getBicanhPartyIds(run).length > 1) {
+      run.party = (run.party || []).filter((id) => id !== interaction.user.id);
+      data.lastResult = `<@${interaction.user.id}> đã rời tổ đội bí cảnh giữa chừng. Lượt ngày đã tiêu nếu bí cảnh đã bắt đầu.`;
+      data.updatedAt = Date.now();
+      saveBicanhData(data);
+      await updateWeeklyBicanhPanel(interaction.guild, data).catch(() => null);
+      await interaction.editReply({ content: 'Đã rời tổ đội bí cảnh. Đội trưởng vẫn điều khiển lượt đang chạy.', embeds: [], components: [] }).catch(() => null);
+      return;
+    }
+
+    abandonDailyBicanhRun(data, run, interaction.user.id, 'rút lui');
+    saveBicanhData(data);
+    await updateWeeklyBicanhPanel(interaction.guild, data).catch(() => null);
+    await interaction.editReply({ content: data.lastResult, embeds: [buildDailyBicanhRunEmbed(data, run)], components: [] }).catch(() => null);
+  }
+
+  async function resolveWeeklyBicanhMonster(guild, data, options = {}) {
+    const action = typeof options === 'string' ? options : (options.action || 'fight');
+    const auto = typeof options === 'boolean' ? options : Boolean(options.auto);
+    const pending = options.pending || getLatestBicanhPending(data);
+    if (!pending || pending.status !== 'pending') return 'Không có quái/boss cần xử lý.';
+    const users = loadUsers();
+    const info = await getWeeklyBicanhMonsterInfoResolved(guild, data, users, pending);
+    if (!info) return 'Không có dữ liệu quái bí cảnh.';
+    const run = info.run || data.runs?.[pending.runId];
+    if (!run) return 'Run bí cảnh đã mất dữ liệu.';
+    const activeCombatId = run.combat?.id || run.activeCombatId || null;
+    run.combat = null;
+    run.activeCombatId = null;
+    if (activeCombatId && BICANH_COMBAT_TIMEOUTS.has(activeCombatId)) {
+      clearTimeout(BICANH_COMBAT_TIMEOUTS.get(activeCombatId));
+      BICANH_COMBAT_TIMEOUTS.delete(activeCombatId);
+    }
+    const lines = [`${auto ? 'Tự động giao chiến.' : action === 'escape' ? 'Tổ đội rút lui.' : 'Tổ đội giao chiến.'}`, `Tầng **${info.floor}/${run.maxFloors}** · ${pending.isBoss ? 'Boss' : 'Địch'}: **${info.monster.name}**`, `So sánh lực: đội **${info.partyPower}** / địch **${info.monsterPower}**`, `Cơ chế: **${info.mechanic?.name || 'Dị Lỗi'}** · ${info.mechanic?.text || 'áp lực run ảnh hưởng độ khó.'}`];
+    let success = false;
+    if (action === 'escape' && !auto) {
+      success = true;
+      lines.push('Rút lui khỏi giao chiến: đội rời bí cảnh ngay, giữ phần thưởng đã tích. Không cần đánh hết tầng này. Tiến bộ văn minh cơ bản, cuối cùng cũng có.');
+    } else if (options.interactiveOutcome) {
+      success = Boolean(options.interactiveOutcome.success);
+      lines.push(uiCompactValue(options.interactiveOutcome.summary || 'Combat điều khiển đã kết thúc.', 260));
+    } else {
+      const allies = [];
+      for (const memberId of info.party) {
+        const userData = getOrCreateUser(users, memberId);
+        const member = guild ? await guild.members.fetch(memberId).catch(() => null) : null;
+        const power = getMissionMemberPower(userData, member);
+        allies.push(createSkillCombatant({ id: memberId, label: member?.displayName || `<@${memberId}>`, userData, member, power, skills: getCombatSkillBookForUser(member, userData) }));
+      }
+      const enemyUnit = createSkillCombatant({ id: `daily-bicanh:${pending.runId}:${info.monster.key}`, label: info.monster.name, power: info.monsterPower, skills: getMonsterCombatSkills(info.monster), hpMultiplier: (getMonsterArchetype(info.monster).hpMult || 1) * (pending.isBoss ? 1.18 : 1), isMonster: true, note: getMonsterDisplayLine(info.monster) });
+      const battle = runTurnBasedCombat({ allies, enemies: [enemyUnit], maxTurns: pending.isBoss ? 10 : 8, title: 'Bí cảnh ngày · giao chiến theo lượt' });
+      success = battle.success;
+      lines.push(compactPokemonCombatLog(battle.lines || battle.summary, 4));
+    }
+    if (success) {
+      if (action === 'escape') {
+        abandonDailyBicanhRun(data, run, info.party?.[0] || run.leaderId, pending.isBoss ? 'rút lui khỏi boss' : 'rút lui khỏi giao chiến');
+        lines.push('Đã rời bí cảnh. Lượt ngày kết thúc, không kẹt ở giao chiến nữa.');
+      } else {
+        lines.push('Chiến thắng.');
+      }
+      if (action !== 'escape') {
+        for (const memberId of info.party) {
+          const userData = getOrCreateUser(users, memberId);
+          const member = guild ? await guild.members.fetch(memberId).catch(() => null) : null;
+          const reward = { tuVi: info.tuViEach, congHien: info.rewardEach, mastery: info.masteryEach, tamDac: pending.isBoss ? 1 : 0 };
+          await applyDailyBicanhReward(guild, memberId, userData, member, run, info.dungeon, { type: pending.isBoss ? 'boss' : 'monster' }, reward, lines, { silent: true });
+        }
+        lines.push(`Mỗi thành viên nhận: +${info.tuViEach} tu vi · +${info.rewardEach} cống hiến · +${info.masteryEach} thuần thục${pending.isBoss ? ' · +1 tâm đắc' : ''}.`);
+        for (const memberId of info.party) addWeeklyContribution(getOrCreateUser(users, memberId), pending.isBoss ? 12 : 4, pending.isBoss ? 'hạ boss bí cảnh' : 'giao chiến bí cảnh');
+        if (pending.isBoss || rollPercent(0.18)) {
+          const receiverId = info.party[deterministicScoreForKey('daily-bicanh-drop', `${data.weekKey}:${pending.runId}:${info.floor}`) % info.party.length];
+          const receiver = getOrCreateUser(users, receiverId);
+          const dropItem = rollMissionItemDrop({ type: 'hunt', tier: getDungeonTier(info.dungeon), hiddenLevel: Number(info.dungeon.minRealmIndex || 0) * MINOR_REALMS.length, family: info.monster.family, monsterKey: info.monster.key, lootFamily: getMonsterLootBias(info.monster)[0] }, 'hunt');
+          if (dropItem && hasInventorySpace(receiver, 1)) {
+            const quality = rollMissionDropQuality(Number(info.dungeon.minRealmIndex || 0), true);
+            addItemToInventory(receiver, dropItem.key, { quality });
+            run.rewards.items = Math.max(0, Number(run.rewards.items) || 0) + 1;
+            lines.push(`Rơi vật phẩm: <@${receiverId}> nhận **${dropItem.name} - ${getQualityByKey(quality).name}**`);
+          }
+        }
+      }
+      if (action !== 'escape' && (pending.isBoss || run.floor >= run.maxFloors)) {
+        run.status = 'completed';
+        run.completedAt = Date.now();
+        lines.push('Đã chinh phục bí cảnh hôm nay.');
+      } else if (!['completed', 'failed', 'abandoned'].includes(String(run.status))) {
+        run.status = 'route_choice';
+        run.pendingEvent = null;
+      }
+    } else {
+      run.lives = Math.max(0, run.lives - 1);
+      lines.push(`Thất bại: -1 sinh lực. Còn **${run.lives}**.`);
+      if (run.lives <= 0 || pending.isBoss) {
+        run.status = 'failed';
+        run.completedAt = Date.now();
+        for (const memberId of info.party) {
+          const userData = getOrCreateUser(users, memberId);
+          const restMs = pending.isBoss ? Math.min(info.injury.restMs, 3 * 60 * 60 * 1000) : Math.min(info.injury.restMs, 90 * 60 * 1000);
+          applyMissionInjury(userData, Math.min(info.injury.percent, 0.08), restMs, 'Bí cảnh ngày phản phệ');
+          await syncMissionMemberRoles(guild, memberId, userData);
+        }
+        lines.push(pending.isBoss ? 'Boss giữ tầng cuối, lượt bí cảnh hôm nay kết thúc. Giữ lại thưởng đã tích.' : 'Sinh lực cạn, lượt bí cảnh hôm nay kết thúc.');
+      } else {
+        run.status = 'route_choice';
+      }
+    }
+    if ((Number(run.scoutBonus) || 0) > 0) {
+      run.scoutBonus = Math.max(0, Number(run.scoutBonus) - 1);
+      lines.push('Hiệu quả dò đường đã dùng cho giao chiến này.');
+    }
+    clearBicanhPending(data, run, pending);
+    run.pendingEvent = null;
+    if (!Array.isArray(run.party) || run.party.length === 0) {
+      run.party = [run.leaderId];
+    }
+    data.lastResult = compactBicanhResult(lines, 360);
+    data.updatedAt = Date.now();
+    saveUsers(users);
+    return data.lastResult;
+  }
+
+  async function autoResolveExpiredWeeklyBicanh(guild = null, data = null) {
+    const current = data || getWeeklyBicanhData();
+    const pendings = [];
+    const globalPending = current.pendingMonster?.status === 'pending' ? current.pendingMonster : null;
+    if (globalPending) pendings.push(globalPending);
+    for (const run of Object.values(current.runs || {})) {
+      const pending = getRunPendingMonster(run);
+      if (pending && !pendings.some((item) => item.runId === pending.runId)) pendings.push(pending);
+    }
+    const due = pendings.filter((pending) => Date.now() >= Number(pending.autoFightAt || 0));
+    if (due.length === 0) return current;
+    const targetGuild = guild || (current.guildId ? await client.guilds.fetch(current.guildId).catch(() => null) : null);
+    if (!targetGuild) return current;
+    for (const pending of due) {
+      await resolveWeeklyBicanhMonster(targetGuild, current, { action: 'fight', auto: true, pending });
+    }
+    saveBicanhData(current);
+    await updateWeeklyBicanhPanel(targetGuild, current).catch(() => null);
+    return current;
+  }
+
 
   client.login(DISCORD_TOKEN);
