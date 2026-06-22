@@ -249,6 +249,7 @@
   const SHOP_ITEM_BUTTON_PREFIX = 'thien_dao_shop_item:';
   const SHOP_BACK_BUTTON_PREFIX = 'thien_dao_shop_back:';
   const SHOP_BUY_BUTTON_PREFIX = 'thien_dao_shop_buy:';
+  const CONG_THUC_PAGE_BUTTON_PREFIX = 'thien_dao_congthuc_page:';
   const TUIDO_CATEGORY_BUTTON_PREFIX = 'thien_dao_tuido_category:';
   const TUIDO_ITEM_BUTTON_PREFIX = 'thien_dao_tuido_item:';
   const TUIDO_BACK_BUTTON_PREFIX = 'thien_dao_tuido_back:';
@@ -2119,17 +2120,21 @@ const AUTO_DISCIPLE_THRESHOLDS = [
   function formatDaoNgheProgress(userData) {
     const daoNghe = normalizeDaoNgheData(userData);
     const def = getDaoNgheDefinition(daoNghe.key);
-    if (!def) return 'Chưa chọn Đạo Nghiệp. Dùng `/nghenghiep hanhdong:chon` để nhập nghề.';
+    if (!def) return 'Chưa chọn Đạo Nghiệp. Dùng `/nghenghiep hanhdong:chon` để chọn nghề chính.';
     const rank = getDaoNgheRank(daoNghe.exp);
     const nextRank = getNextDaoNgheRank(daoNghe.exp);
     const currentFloor = rank.exp;
     const nextFloor = nextRank.exp === rank.exp ? Math.max(rank.exp, daoNghe.exp) : nextRank.exp;
     const bar = uiBar(daoNghe.exp - currentFloor, Math.max(1, nextFloor - currentFloor), 10);
+    const nextText = nextRank && nextRank.name !== rank.name
+      ? `Mốc kế tiếp: **${nextRank.name}**`
+      : 'Đã chạm mốc nghề cao nhất hiện có.';
     return [
-      `${def.emoji} **${def.name} · ${rank.name}**`,
-      `Tinh thông: ${bar}`,
-      `Đạo tài: **${def.materialName} x${daoNghe.materials[def.key] || 0}**`,
-      `Vai trò: ${def.motto}`,
+      `${def.emoji} **${def.name}**`,
+      `Bậc nghề: **${rank.name}**`,
+      `Tiến độ: ${bar}`,
+      nextText,
+      `Đạo tài chính: **${def.materialName} x${daoNghe.materials[def.key] || 0}**`,
     ].join('\n');
   }
 
@@ -4103,6 +4108,72 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     return granted;
   }
 
+  function getCongThucPageCount(userData, keyword = null) {
+    const profession = getUserDaoNgheDefinition(userData);
+    if (!profession) return 1;
+    const recipes = getUnlockedCraftRecipesForUser(userData, { keyword });
+    return Math.max(1, Math.ceil(recipes.length / CRAFT_RECIPE_PAGE_SIZE));
+  }
+
+  function getCraftChanceFriendlyText(chance) {
+    const successPercent = Math.round((Number(chance?.success) || 0) * 100);
+    const perfectPercent = Math.round((Number(chance?.perfect) || 0) * 100);
+    if (successPercent >= 85) return `Rất ổn · ${successPercent}% thành công · ${perfectPercent}% hoàn mỹ`;
+    if (successPercent >= 70) return `Ổn · ${successPercent}% thành công · ${perfectPercent}% hoàn mỹ`;
+    if (successPercent >= 50) return `Hơi rủi ro · ${successPercent}% thành công · ${perfectPercent}% hoàn mỹ`;
+    return `Khó luyện · ${successPercent}% thành công · ${perfectPercent}% hoàn mỹ`;
+  }
+
+  function getCraftRecipeUseText(recipe, item = null) {
+    const type = item?.type;
+    if (type === 'weapon') return 'Vũ khí để trang bị, tăng sức đánh trong combat.';
+    if (type === 'armor') return 'Đạo bào/giáp để trang bị, giúp sống sót tốt hơn.';
+    if (type === 'artifact') return 'Pháp bảo lõi, tăng sức mạnh tổng thể hoặc hướng build.';
+    if (type === 'tool') return 'Pháp cụ nghề, giúp chế tạo/làm nghề mượt hơn.';
+    if (type === 'pill') return 'Đan dược tiêu hao, dùng để hồi phục hoặc chuẩn bị trước giao chiến.';
+    if (type === 'talisman') return 'Phù lục tiêu hao/trang bị, dùng để phòng thân hoặc xoay tình thế.';
+    if (type === 'upgrade_stone') return 'Nguyên liệu nâng phẩm, dùng để đẩy phẩm chất trang bị.';
+    return recipe?.itemRole ? `Dùng cho hướng ${sanitizeCraftDisplayText(recipe.itemRole, 36)}.` : 'Vật phẩm hỗ trợ tu luyện và vận hành trong tông môn.';
+  }
+
+  function getCraftRecipeReadiness(userData, recipe, costs) {
+    const missingMaterials = costs.materialCosts
+      .map((cost) => ({ ...cost, have: getCraftMaterialAmount(userData, cost.key), missing: Math.max(0, cost.amount - getCraftMaterialAmount(userData, cost.key)) }))
+      .filter((cost) => cost.missing > 0);
+    const missingCongHien = Math.max(0, costs.congHienCost - getSpendableCongHien(userData));
+    if (missingMaterials.length === 0 && missingCongHien === 0) return { ok: true, text: 'Đủ điều kiện chế ngay.' };
+    const parts = [];
+    if (missingMaterials.length > 0) parts.push(`thiếu ${missingMaterials.slice(0, 2).map((cost) => `${sanitizeCraftDisplayText(cost.name, 28)} x${cost.missing}`).join(', ')}${missingMaterials.length > 2 ? '...' : ''}`);
+    if (missingCongHien > 0) parts.push(`thiếu ${uiNumber(missingCongHien)} cống hiến`);
+    return { ok: false, text: `Chưa đủ: ${parts.join(' · ')}.` };
+  }
+
+  function buildCongThucRows(userId, page = 0, pageCount = 1, keyword = null) {
+    const safePageCount = Math.max(1, Number(pageCount) || 1);
+    const safePage = Math.max(0, Math.min(safePageCount - 1, Number(page) || 0));
+    const safeKeyword = encodeURIComponent(String(keyword || '').trim().slice(0, 32));
+    const previousPage = Math.max(0, safePage - 1);
+    const nextPage = Math.min(safePageCount - 1, safePage + 1);
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`${CONG_THUC_PAGE_BUTTON_PREFIX}${userId}:${previousPage}:${safeKeyword}`)
+        .setLabel('◀ Trước')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(safePage <= 0),
+      new ButtonBuilder()
+        .setCustomId(`${CONG_THUC_PAGE_BUTTON_PREFIX}${userId}:view:${safeKeyword}`)
+        .setLabel(`Trang ${safePage + 1}/${safePageCount}`)
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(true),
+      new ButtonBuilder()
+        .setCustomId(`${CONG_THUC_PAGE_BUTTON_PREFIX}${userId}:${nextPage}:${safeKeyword}`)
+        .setLabel('Sau ▶')
+        .setStyle(ButtonStyle.Primary)
+        .setDisabled(safePage >= safePageCount - 1),
+    );
+    return [row];
+  }
+
   function buildCongThucEmbed(member, userData, options = {}) {
     const profession = getUserDaoNgheDefinition(userData);
     const page = Math.max(0, Number(options.page) || 0);
@@ -4110,56 +4181,66 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     if (!profession) {
       return new EmbedBuilder()
         .setColor(GOLD)
-        .setTitle('Công Thức Chế Tạo')
-        .setDescription('Chưa chọn Đạo Nghiệp. Dùng `/nghenghiep hanhdong:chon nghe:<nghề>` trước. Lò nghề cần biết mình là lò gì, không thể vừa rèn kiếm vừa nấu chè được.');
+        .setTitle('Công Thức Nghề')
+        .setDescription([
+          'Ngươi chưa chọn Đạo Nghiệp, nên chưa có sổ công thức riêng.',
+          'Bắt đầu bằng: `/nghenghiep hanhdong:chon nghe:<nghề>`',
+          'Sau khi chọn nghề, trang này chỉ hiện công thức thuộc nghề đó và đã mở khóa.',
+        ].join('\n'));
     }
     const recipes = getUnlockedCraftRecipesForUser(userData, { keyword: options.keyword });
     const pageCount = Math.max(1, Math.ceil(recipes.length / CRAFT_RECIPE_PAGE_SIZE));
     const safePage = Math.min(pageCount - 1, page);
     const visible = recipes.slice(safePage * CRAFT_RECIPE_PAGE_SIZE, safePage * CRAFT_RECIPE_PAGE_SIZE + CRAFT_RECIPE_PAGE_SIZE);
     const rank = getDaoNgheRank(daoNghe.exp);
+    const keywordText = String(options.keyword || '').trim();
     const embed = new EmbedBuilder()
       .setColor(profession.color)
       .setTitle(`Công Thức Đã Mở Khóa · ${profession.name}`)
       .setDescription([
-        `${member} chỉ thấy công thức thuộc **nghề hiện tại** và **đã mở khóa**. Không còn xổ bừa 1440 công thức như phát tờ rơi ở chợ trời nữa.`,
-        `Rank nghề: **${rank.name}** · Chuyên tinh: **${getUserCraftSpec(userData).name}**`,
-        `Đã mở khóa trong nghề: **${recipes.length}** công thức · Mỗi trang **${CRAFT_RECIPE_PAGE_SIZE}** công thức`,
-        options.keyword ? `Lọc: \`${sanitizeCraftDisplayText(options.keyword, 48)}\`` : 'Dùng `/chetao congthuc:<mã>` để chế. Công thức thiếu nguyên liệu sẽ báo rõ bên dưới.',
+        `${member} đang theo **${profession.emoji} ${profession.name}** · bậc **${rank.name}**.`,
+        `Đã mở: **${recipes.length}** công thức · Trang **${safePage + 1}/${pageCount}**.`,
+        keywordText ? `Đang tìm: \`${sanitizeCraftDisplayText(keywordText, 48)}\`` : 'Chọn **Trước/Sau** để lật trang. Muốn tìm nhanh dùng `/congthuc tukhoa:<tên món>`.',
+        'Mỗi món bên dưới đã được rút gọn thành: dùng để làm gì, có đủ nguyên liệu chưa, và lệnh chế.',
       ].join('\n'));
     if (visible.length === 0) {
       embed.addFields({
-        name: 'Chưa có công thức phù hợp',
-        value: options.keyword
-          ? 'Không có công thức đã mở khóa nào khớp từ khóa này. Thử từ khóa ngắn hơn.'
+        name: 'Không có công thức phù hợp',
+        value: keywordText
+          ? 'Không thấy công thức đã mở khóa nào khớp từ khóa này. Thử tên ngắn hơn hoặc bỏ lọc.'
           : 'Làm nghề, đi nhiệm vụ/bí cảnh hoặc học bản vẽ để mở thêm công thức.',
         inline: false,
       });
-      return embed.setFooter({ text: 'Trang 1/1' });
+      return embed.setFooter({ text: 'Trang 1/1 · Công thức chỉ hiện theo nghề hiện tại.' });
     }
-    visible.forEach((recipe) => {
+    visible.forEach((recipe, localIndex) => {
       const item = getShopItemByKey(recipe.outputKey);
       const chance = calculateCraftChance(userData, recipe);
       const costs = getAdjustedCraftCosts(recipe, userData);
       const statusText = getCraftRecipeUnlockStatusText(userData, recipe);
+      const readiness = getCraftRecipeReadiness(userData, recipe, costs);
       const materialLines = costs.materialCosts.map((cost) => {
         const have = getCraftMaterialAmount(userData, cost.key);
         const enough = have >= cost.amount;
-        return `${enough ? '✅' : '❌'} ${sanitizeCraftDisplayText(cost.name, 54)}: **${have}/${cost.amount}**`;
+        return `${enough ? '✅' : '❌'} ${sanitizeCraftDisplayText(cost.name, 34)} **${have}/${cost.amount}**`;
       });
+      const visibleMaterialLines = materialLines.slice(0, 3);
+      const extraMaterialText = materialLines.length > 3 ? `\n...còn ${materialLines.length - 3} nguyên liệu khác` : '';
       embed.addFields({
-        name: `${sanitizeCraftDisplayText(recipe.outputName, 72)}`,
+        name: `${safePage * CRAFT_RECIPE_PAGE_SIZE + localIndex + 1}. ${sanitizeCraftDisplayText(recipe.outputName, 72)}`,
         value: [
-          `Mã: \`${recipe.key}\` · Loại: **${getItemTypeText(item?.type)}** · Vai trò: **${sanitizeCraftDisplayText(recipe.itemRole, 24)}**`,
-          `Trạng thái: **${statusText}** · Rank cần: **${getRecipeRequiredRankText(recipe)}**`,
-          `Tỉ lệ: **${Math.round(chance.success * 100)}%** thành công · **${Math.round(chance.perfect * 100)}%** hoàn mỹ · **${Math.round(chance.mutation * 100)}%** dị biến`,
-          `Cống hiến: **${getSpendableCongHien(userData)}/${costs.congHienCost}**`,
-          `Nguyên liệu:\n${materialLines.join('\n')}`,
+          `Loại: **${getItemTypeText(item?.type)}** · Trạng thái: **${statusText}**`,
+          `Dùng để: ${getCraftRecipeUseText(recipe, item)}`,
+          `Độ chắc tay: **${getCraftChanceFriendlyText(chance)}**`,
+          `Chi phí: **${uiNumber(costs.congHienCost)} cống hiến**`,
+          `Nguyên liệu:\n${materialLines.join('\n') ? `${visibleMaterialLines.join('\n')}${extraMaterialText}` : 'Không cần nguyên liệu phụ.'}`,
+          `Kết luận: **${readiness.ok ? 'Có thể chế' : 'Chưa thể chế'}** · ${readiness.text}`,
+          `Cách chế: \`/chetao congthuc:${recipe.key}\``,
         ].join('\n'),
         inline: false,
       });
     });
-    return embed.setFooter({ text: `Trang ${safePage + 1}/${pageCount}` });
+    return embed.setFooter({ text: `Trang ${safePage + 1}/${pageCount} · Dùng nút Trước/Sau hoặc /congthuc trang:<số>.` });
   }
 
   function buildNguyenLieuEmbed(member, userData) {
@@ -4167,21 +4248,25 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     const profession = getUserDaoNgheDefinition(userData);
     const entries = Object.entries(daoNghe.materials)
       .filter(([, value]) => Number(value) > 0)
-      .sort((a, b) => Number(b[1]) - Number(a[1]))
-      .slice(0, 30);
-    const lines = entries.map(([key, value]) => {
+      .sort((a, b) => Number(b[1]) - Number(a[1]));
+    const topLines = entries.slice(0, 18).map(([key, value]) => {
       const material = getCraftMaterialByKey(key);
       const def = getDaoNgheDefinition(key);
-      return `${material?.name || def?.materialName || key}: **${value}**`;
+      return `• ${material?.name || def?.materialName || key}: **${value}**`;
     });
     return new EmbedBuilder()
       .setColor(profession?.color ?? GOLD)
-      .setTitle('Kho Nguyên Liệu Chế Tạo')
-      .setDescription(lines.join('\n') || 'Chưa có nguyên liệu. Làm nghề, đi nhiệm vụ/bí cảnh hoặc phân giải vật phẩm để kiếm.')
+      .setTitle(`Kho Nguyên Liệu Nghề${profession ? ` · ${profession.name}` : ''}`)
+      .setDescription([
+        topLines.join('\n') || 'Chưa có nguyên liệu nghề. Làm nghề, đi nhiệm vụ/bí cảnh hoặc phân giải vật phẩm để kiếm.',
+        '',
+        'Dùng `/congthuc` để xem món nào đang đủ nguyên liệu. Dùng `/chetao congthuc:<mã>` khi muốn chế.',
+      ].filter(Boolean).join('\n'))
       .addFields(
-        { name: 'Quy mô hệ thống', value: `Nguyên liệu: **${CRAFT_MATERIAL_CATALOG.length}** · Công thức: **${CRAFT_RECIPE_CATALOG.length}** · Bản vẽ: **${CRAFT_BLUEPRINT_CATALOG.length}**`, inline: false },
-        { name: 'Thống kê nghề', value: `Chế thành công: **${daoNghe.craftSuccessCount}** · Thất bại: **${daoNghe.craftFailCount}** · Phân giải: **${daoNghe.decomposeCount}**`, inline: false },
-      );
+        { name: 'Tình hình nghề', value: profession ? formatDaoNgheProgress(userData) : 'Chưa chọn nghề chính.', inline: false },
+        { name: 'Thống kê chế tạo', value: `Thành công: **${daoNghe.craftSuccessCount || 0}** · Thất bại: **${daoNghe.craftFailCount || 0}** · Phân giải: **${daoNghe.decomposeCount || 0}**`, inline: false },
+      )
+      .setFooter({ text: `Hiển thị ${Math.min(entries.length, 18)}/${entries.length} nguyên liệu đang có.` });
   }
 
   async function handleCongThuc(interaction) {
@@ -4194,7 +4279,38 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => interaction.member);
     const keyword = interaction.options.getString('tukhoa', false);
     const page = interaction.options.getInteger('trang', false) || 1;
-    await interaction.reply({ embeds: [buildCongThucEmbed(member, userData, { keyword, page: page - 1 })], flags: MessageFlags.Ephemeral });
+    const pageCount = getCongThucPageCount(userData, keyword);
+    const safePage = Math.max(0, Math.min(pageCount - 1, page - 1));
+    await interaction.reply({
+      embeds: [buildCongThucEmbed(member, userData, { keyword, page: safePage })],
+      components: getUserDaoNgheDefinition(userData) ? buildCongThucRows(interaction.user.id, safePage, pageCount, keyword) : [],
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+
+  async function handleCongThucPageButton(interaction) {
+    const raw = String(interaction.customId || '').slice(CONG_THUC_PAGE_BUTTON_PREFIX.length);
+    const [ownerId, pageText, encodedKeyword = ''] = raw.split(':');
+    if (ownerId !== interaction.user.id) {
+      await interaction.reply({ content: 'Sổ công thức này không phải của ngươi.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    if (pageText === 'view') {
+      await interaction.deferUpdate();
+      return;
+    }
+    const page = Math.max(0, Number(pageText) || 0);
+    const keyword = decodeURIComponent(encodedKeyword || '').trim() || null;
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => interaction.member);
+    const pageCount = getCongThucPageCount(userData, keyword);
+    const safePage = Math.max(0, Math.min(pageCount - 1, page));
+    await interaction.update({
+      embeds: [buildCongThucEmbed(member, userData, { keyword, page: safePage })],
+      components: getUserDaoNgheDefinition(userData) ? buildCongThucRows(interaction.user.id, safePage, pageCount, keyword) : [],
+    });
   }
 
   async function handleNguyenLieu(interaction) {
@@ -5094,6 +5210,11 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
 
         if (interaction.customId.startsWith(DESTINY_PAGE_BUTTON_PREFIX)) {
           await handleDestinyPage(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(CONG_THUC_PAGE_BUTTON_PREFIX)) {
+          await handleCongThucPageButton(interaction);
           return;
         }
 
@@ -6283,23 +6404,43 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
       const mark = current?.key === entry.key ? '✓' : `${index + 1}.`;
       return `${mark} ${entry.emoji} **${entry.name}** — ${entry.motto}`;
     });
-    return uiEmbedBase('Đạo Nghiệp · Code Tu Tiên', member, UI_V19.colors.azure)
+    const nextAction = current
+      ? [
+          '• Làm nghề hôm nay: `/nghenghiep hanhdong:lamviec`',
+          '• Xem công thức đã mở: `/congthuc`',
+          '• Xem nguyên liệu: `/nghenghiep hanhdong:nguyenlieu`',
+        ].join('\n')
+      : 'Chọn một nghề bằng `/nghenghiep hanhdong:chon nghe:<nghề>` để bắt đầu mở công thức riêng.';
+    return uiEmbedBase('Đạo Nghiệp · Nghề Tu Luyện', member, current?.color || UI_V19.colors.azure)
       .setDescription([
-        formatDaoNgheProgress(userData),
+        current ? formatDaoNgheProgress(userData) : 'Ngươi chưa có nghề chính. Chọn nghề trước, rồi hệ thống mới gợi công thức và nguyên liệu đúng hướng.',
         '',
-        '**10 nghề chính thức:**',
-        ...lines,
+        '**Việc nên làm:**',
+        nextAction,
       ].join('\n').slice(0, 4000))
       .addFields(
-        { name: 'Lệnh', value: '`/nghenghiep hanhdong:chon nghe:<nghề>`\n`/nghenghiep hanhdong:lamviec`\n`/nghenghiep hanhdong:chetao`\n`/nghenghiep hanhdong:kho`', inline: false },
-        { name: 'Chỉ số nghề', value: formatDirectStatsCompact(getDaoNgheDirectStats(userData)), inline: false },
+        { name: '10 nghề có thể chọn', value: lines.join('\n').slice(0, 1900), inline: false },
+        { name: 'Gợi ý dùng lệnh', value: ['`/congthuc` để xem công thức dễ đọc có nút Trước/Sau.', '`/chetao congthuc:<mã>` để chế món đã đủ nguyên liệu.', '`/nghenghiep hanhdong:kho` để xem đạo tài nghề.'].join('\n'), inline: false },
       );
   }
 
   function buildNgheNghiepKhoText(userData) {
     const daoNghe = normalizeDaoNgheData(userData);
-    const lines = DAO_NGHE_DEFINITIONS.map((entry) => `${entry.emoji} ${entry.materialName}: **${daoNghe.materials[entry.key] || 0}**`);
-    return lines.join('\n');
+    const current = getUserDaoNgheDefinition(userData);
+    const important = DAO_NGHE_DEFINITIONS
+      .map((entry) => ({ entry, amount: Number(daoNghe.materials[entry.key]) || 0 }))
+      .sort((a, b) => (current?.key === b.entry.key ? 1 : 0) - (current?.key === a.entry.key ? 1 : 0) || b.amount - a.amount);
+    const lines = important.map(({ entry, amount }) => {
+      const mark = current?.key === entry.key ? '✓' : '•';
+      return `${mark} ${entry.emoji} ${entry.materialName}: **${amount}**`;
+    });
+    return [
+      current ? `Nghề hiện tại: **${current.emoji} ${current.name}**` : 'Chưa chọn nghề hiện tại.',
+      '',
+      ...lines,
+      '',
+      'Đạo tài dùng để chế tạo vật phẩm nghề. Xem món có thể chế bằng `/congthuc`.',
+    ].join('\n');
   }
 
   function getCraftableItemsForProfession(professionKey) {
@@ -8297,11 +8438,29 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     return `${'▰'.repeat(filled)}${'▱'.repeat(size - filled)} ${Math.max(0, Math.ceil(current))}/${total}`;
   }
 
+  function getCombatQiBar(combatant, size = 8) {
+    const total = getCombatMaxQi(combatant);
+    const current = Math.max(0, Math.min(total, Number(combatant?.qi) || 0));
+    const filled = Math.max(0, Math.min(size, Math.round((current / Math.max(1, total)) * size)));
+    return `${'▰'.repeat(filled)}${'▱'.repeat(size - filled)} ${Math.max(0, Math.ceil(current))}/${total}`;
+  }
+
+  function getCombatantShortState(combatant) {
+    if (!combatant) return 'Không rõ';
+    const qiText = `LK ${Math.max(0, Math.ceil(Number(combatant.qi) || 0))}/${getCombatMaxQi(combatant)} · hồi ${getCombatQiRegen(combatant)}`;
+    return `${combatant.label} HP ${getCombatHpBar(combatant, 4)} · ${qiText}`;
+  }
+
+  function formatTurnCombatSideState(label, units) {
+    const list = (units || []).map(getCombatantShortState).join('\n');
+    return `**${label}**\n${list || 'Không còn ai đứng vững.'}`;
+  }
+
 
   function normalizeCombatLogLine(line) {
     let text = String(line || '').replace(/\s+/g, ' ').trim();
     if (!text) return null;
-    if (/^__Lượt|^HP:|^\*\*.*Combat|^Phe ta:|^Địch:|^\*\*Kết quả/.test(text)) return null;
+    if (/^__Lượt|^HP:|^\*\*(Phe ta|Đối thủ|Trạng thái|.*Combat)|^Phe ta:|^Địch:|^\*\*Kết quả/.test(text)) return null;
     text = text.replace(/^[-•\s]+/, '• ');
     text = text.replace(/\*\*/g, '');
     text = text.replace(/  ↳ /g, '• ');
@@ -8412,7 +8571,11 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
   }
 
   function runTurnBasedCombat({ allies = [], enemies = [], maxTurns = 8, title = 'Turn-based Combat' }) {
-    const lines = [`**${title}**`, `Phe ta: ${allies.map((unit) => `${unit.label} ${getCombatHpBar(unit, 5)}`).join(' · ')}`, `Địch: ${enemies.map((unit) => `${unit.label} ${getCombatHpBar(unit, 5)}`).join(' · ')}`];
+    const lines = [
+      `**${title}**`,
+      formatTurnCombatSideState('Phe ta', allies),
+      formatTurnCombatSideState('Đối thủ', enemies),
+    ];
     let turnsUsed = 0;
     for (let turn = 1; turn <= maxTurns; turn += 1) {
       if (!allies.some(isCombatantAlive) || !enemies.some(isCombatantAlive)) break;
@@ -8428,7 +8591,8 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
         resolveSkillAction(actor, allies.includes(actor) ? enemies : allies, lines);
         if (!allies.some(isCombatantAlive) || !enemies.some(isCombatantAlive)) break;
       }
-      lines.push(`HP: ${allies.map((unit) => `${unit.label} ${getCombatHpBar(unit, 4)}`).join(' · ')} | ${enemies.map((unit) => `${unit.label} ${getCombatHpBar(unit, 4)}`).join(' · ')}`);
+      lines.push(formatTurnCombatSideState('Trạng thái phe ta', allies));
+      lines.push(formatTurnCombatSideState('Trạng thái đối thủ', enemies));
     }
     const allyAlive = allies.some(isCombatantAlive);
     const enemyAlive = enemies.some(isCombatantAlive);
@@ -9676,6 +9840,12 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
       return null;
     }
 
+    const caseState = getXuatSonCaseState(userData, mission);
+    if (caseState.resolved || Number(caseState.stage || 0) >= 3) {
+      userData.activeXuatSon = null;
+      return null;
+    }
+
     active.name = mission.name;
     active.family = mission.family;
     active.rank = mission.rank;
@@ -10710,8 +10880,13 @@ Trước mặt ngươi là một lựa chọn khó chịu: xử sạch để ít
       .setDescription(summary)
       .addFields({ name: 'Cách ngươi chọn', value: `**${methodText}** · ${detailText}`, inline: false });
     if (state) {
-      embed.addFields({ name: 'Tình thế sau pha này', value: `${getXuatSonCaseMoodText(state)}
-Giai đoạn hiện tại: **${getXuatSonStageLabel(state.stage)}**`, inline: false });
+      if (state.resolved || Number(state.stage || 0) >= 3) {
+        embed.addFields({ name: 'Kết thúc công án', value: `${getXuatSonCaseMoodText(state)}
+Công án đã khép lại. Mở **/xuatson** để quay về bảng công án, không còn phase tiếp của vụ này.`, inline: false });
+      } else {
+        embed.addFields({ name: 'Tình thế sau pha này', value: `${getXuatSonCaseMoodText(state)}
+Giai đoạn tiếp theo: **${getXuatSonStageLabel(state.stage)}**`, inline: false });
+      }
     }
     return embed;
   }
@@ -10728,6 +10903,10 @@ Giai đoạn hiện tại: **${getXuatSonStageLabel(state.stage)}**`, inline: fa
     const methodConfig = getXuatSonMethodConfig(method) || getXuatSonMethodConfig('commit');
     const family = getSourceFamilyByKey(mission.family);
     const caseState = getXuatSonCaseState(userData, mission);
+    if (caseState.resolved || Number(caseState.stage || 0) >= 3) {
+      userData.activeXuatSon = null;
+      return 'Công án này đã khép lại từ trước. Không xử lại phase cũ nữa. Mở `/xuatson` để nhận công án khác nếu hôm nay còn lượt.';
+    }
     const stageBonus = caseState.stage === 1 ? 0.05 : caseState.stage === 2 ? 0.02 : 0;
     const scale = Number(mission.base) || 1;
     const chance = Math.max(0.18, Math.min(0.96, getXuatSonSuccessChance(userData, member, mission, methodConfig.key, prep.key) + stageBonus));
@@ -10943,7 +11122,9 @@ Giai đoạn hiện tại: **${getXuatSonStageLabel(state.stage)}**`, inline: fa
       await syncMissionMemberRoles(interaction.guild, interaction.user.id, userData).catch(() => null);
       await syncXuatSonStatusRole(interaction.guild, member, userData).catch(() => null);
       const continueRows = userData.activeXuatSon?.id ? buildXuatSonRows(member, userData) : [];
-      const continueContent = userData.activeXuatSon?.id ? 'Công án còn phase tiếp. Chọn chuẩn bị bằng nút bên dưới để làm tiếp.' : null;
+      const continueContent = userData.activeXuatSon?.id
+      ? 'Công án còn phase tiếp. Chọn chuẩn bị bằng nút bên dưới để làm tiếp.'
+      : 'Công án đã kết thúc. Vụ này không còn phase tiếp; mở **/xuatson** để quay về bảng công án nếu hôm nay còn lượt.';
       saveUsers(users);
       const embed = buildXuatSonResultEmbed(mission, normalizedMethod, summary, userData);
       await interaction.reply({ content: continueContent, embeds: [embed], components: continueRows, flags: MessageFlags.Ephemeral });
@@ -11165,7 +11346,9 @@ Giai đoạn hiện tại: **${getXuatSonStageLabel(state.stage)}**`, inline: fa
     await syncMissionMemberRoles(interaction.guild, interaction.user.id, userData).catch(() => null);
     await syncXuatSonStatusRole(interaction.guild, member, userData).catch(() => null);
     const continueRows = userData.activeXuatSon?.id ? buildXuatSonRows(member, userData) : [];
-    const continueContent = userData.activeXuatSon?.id ? 'Công án còn phase tiếp. Chọn chuẩn bị bằng nút bên dưới để làm tiếp.' : null;
+    const continueContent = userData.activeXuatSon?.id
+      ? 'Công án còn phase tiếp. Chọn chuẩn bị bằng nút bên dưới để làm tiếp.'
+      : 'Công án đã kết thúc. Vụ này không còn phase tiếp; mở **/xuatson** để quay về bảng công án nếu hôm nay còn lượt.';
     saveUsers(users);
     await interaction.editReply({ content: continueContent, embeds: [buildXuatSonResultEmbed(mission, normalizedMethod, summary, userData)], components: continueRows }).catch(() => null);
   }
@@ -18416,6 +18599,54 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
     await interaction.update({ embeds: [buildSuKienEmbed(event)], components: buildSuKienRows(event) });
   }
 
+
+  function getDauPhapCongPhapDisplay(member) {
+    const text = getMemberCongPhapText(member);
+    if (!text || /Chưa chọn công pháp chủ tu/i.test(text)) {
+      return 'Đạo Kiếm Cơ Bản · chưa chọn công pháp chủ tu';
+    }
+    return text;
+  }
+
+  function getDauPhapSetupLine(unit, member, score) {
+    const congPhap = getDauPhapCongPhapDisplay(member);
+    return [
+      `**${unit.label}** · lực chiến **${uiNumber(score)}**`,
+      `Công pháp: ${congPhap}`,
+      `HP ${getCombatHpBar(unit, 8)}`,
+      `Linh Khí ${getCombatQiBar(unit, 8)} · hồi ${getCombatQiRegen(unit)}/lượt`,
+      unit.tamMaPressure > 0 ? `Áp lực Tâm Ma: ${unit.tamMaPressure}` : null,
+    ].filter(Boolean).join('\n');
+  }
+
+  function getDauPhapFinalLine(unit) {
+    const state = isCombatantAlive(unit) ? 'còn đứng vững' : 'đã gục xuống';
+    return `${unit.label}: ${state} · HP ${getCombatHpBar(unit, 6)} · Linh Khí ${getCombatQiBar(unit, 6)}`;
+  }
+
+  function buildDauPhapBattleStory({ attackerMember, defenderMember, attackerWon, battle, attackerUnit, defenderUnit }) {
+    const winner = attackerWon ? attackerMember.displayName : defenderMember.displayName;
+    const loser = attackerWon ? defenderMember.displayName : attackerMember.displayName;
+    const qiNote = [attackerUnit, defenderUnit].some((unit) => (Number(unit.qi) || 0) <= 0)
+      ? 'Có người cạn Linh Khí giữa trận, buộc phải lùi nhịp hồi tức thay vì cứ chém bằng lòng tự trọng.'
+      : 'Hai bên còn giữ được nhịp Linh Khí, trận đấu kết thúc bằng chênh lệch thế trận chứ không phải do một bên hết sạch khí.';
+    const turnText = battle.turnsUsed ? `Trận kéo dài **${battle.turnsUsed} lượt**.` : 'Trận kết thúc rất nhanh.';
+    return [
+      `${attackerMember} và ${defenderMember} bước vào pháp đàn, lấy Linh Khí làm nhịp giao thủ.`,
+      turnText,
+      `**${winner}** giữ thế tốt hơn và ép **${loser}** phải lùi khỏi trận.`,
+      qiNote,
+    ].join('\n');
+  }
+
+  function buildDauPhapCombatAuditText() {
+    return [
+      'Đấu pháp dùng chung lõi combat với nhiệm vụ/bí cảnh: HP, Linh Khí, hồi tức, chiêu thức theo công pháp và trang bị.',
+      'Hết Linh Khí thì không ra chiêu; hệ thống sẽ hồi tức thay vì đánh tiếp như nhân vật mất kết nối với não.',
+      'Chưa chọn công pháp vẫn đánh bằng Đạo Kiếm Cơ Bản, nhưng UI sẽ nói rõ để khỏi tưởng bot bị thiếu dữ liệu.',
+    ].join('\n');
+  }
+
   async function handleDauPhap(interaction) {
     if (!interaction.inGuild()) {
       await interaction.reply({ content: 'Đấu pháp chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
@@ -18458,7 +18689,7 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
       .setTitle('Chiến Thư Đấu Pháp')
       .setDescription(`${challengerMember} gửi chiến thư đấu pháp đến ${targetMember}.\n\n${targetMember} cần bấm **Đồng Ý Solo** thì trận đấu mới bắt đầu.`)
       .addFields(
-        { name: 'Luật đấu pháp', value: 'Hai bên đồng ý mới giao thủ. Thắng và thua đều nhận cống hiến, nhưng người thua sẽ bị hao tổn tu vi.', inline: false },
+        { name: 'Luật đấu pháp', value: 'Hai bên đồng ý mới giao thủ. Combat dùng chung luật HP + Linh Khí: hết Linh Khí thì phải hồi tức, không ra chiêu tiếp. Thắng và thua đều nhận cống hiến, nhưng người thua sẽ hao tổn tu vi.', inline: false },
         { name: 'Thời hạn', value: `Chiến thư hết hiệu lực sau **${Math.floor(DAU_PHAP_CHALLENGE_TTL_MS / 60000)} phút**.`, inline: false },
       );
 
@@ -18527,6 +18758,7 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
     const defScore = calculateDauPhapPower(defender, defenderMember);
     const attackerUnit = createSkillCombatant({ id: attackerMember.id, label: attackerMember.displayName, userData: attacker, member: attackerMember, power: atkScore, skills: getCombatSkillBookForUser(attackerMember, attacker) });
     const defenderUnit = createSkillCombatant({ id: defenderMember.id, label: defenderMember.displayName, userData: defender, member: defenderMember, power: defScore, skills: getCombatSkillBookForUser(defenderMember, defender) });
+    const preBattleSetupText = `${getDauPhapSetupLine(attackerUnit, attackerMember, atkScore)}\n\n${getDauPhapSetupLine(defenderUnit, defenderMember, defScore)}`;
     const battle = runTurnBasedCombat({ allies: [attackerUnit], enemies: [defenderUnit], maxTurns: 8, title: 'Đấu pháp theo lượt · công pháp xuất chiêu' });
     const attackerWon = battle.success;
     const winnerData = attackerWon ? attacker : defender;
@@ -18571,13 +18803,15 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
     const embed = new EmbedBuilder()
       .setColor(attackerWon ? GOLD : 0x60a5fa)
       .setTitle('Đấu Pháp Đã Kết Thúc')
-      .setDescription(`${attackerMember} và ${defenderMember} đã đồng ý giao thủ tại pháp đàn.`)
+      .setDescription(buildDauPhapBattleStory({ attackerMember, defenderMember, attackerWon, battle, attackerUnit, defenderUnit }))
       .addFields(
-        { name: 'Lực chiến nền', value: `${attackerMember.displayName}: **${atkScore}** · ${getMemberCongPhapText(attackerMember)}
-${defenderMember.displayName}: **${defScore}** · ${getMemberCongPhapText(defenderMember)}`, inline: false },
-        { name: 'Diễn biến', value: compactPokemonCombatLog(battle.lines || battle.summary, 6), inline: false },
+        { name: 'Trước trận', value: preBattleSetupText, inline: false },
+        { name: 'Diễn biến nổi bật', value: compactPokemonCombatLog(battle.lines || battle.summary, 5), inline: false },
+        { name: 'Sau trận', value: `${getDauPhapFinalLine(attackerUnit)}
+${getDauPhapFinalLine(defenderUnit)}`, inline: false },
         { name: 'Thắng trận', value: `${winnerMember} nhận **+${rewardInfo.amount} tu vi**, **+${winnerCongHienReward} cống hiến**.`, inline: false },
         { name: 'Bại trận', value: loserTuViPenalty > 0 ? `${loserMember} vẫn nhận **+${loserCongHienReward} cống hiến**, nhưng hao tổn **-${loserTuViPenalty} tu vi**.` : `${loserMember} vẫn nhận **+${loserCongHienReward} cống hiến**. Tu vi đã chạm đáy cảnh giới hiện tại nên không bị tụt thêm.`, inline: false },
+        { name: 'Chuẩn combat', value: buildDauPhapCombatAuditText(), inline: false },
         { name: 'Tâm ma', value: tamMaLine, inline: false },
       );
 
