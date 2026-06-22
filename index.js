@@ -267,6 +267,8 @@
   const MISSION_COMBAT_DEFEND_PREFIX = 'td_ms_def:';
   const MISSION_COMBAT_AUTO_PREFIX = 'td_ms_auto:';
   const MISSION_COMBAT_ESCAPE_PREFIX = 'td_ms_run:';
+  const MISSION_COMBAT_ITEM_MENU_PREFIX = 'td_ms_item:';
+  const MISSION_COMBAT_USE_ITEM_PREFIX = 'td_ms_use:';
   const MISSION_REFRESH_BUTTON = 'thien_dao_mission_refresh';
   const MISSION_REFRESH_BUTTON_PREFIX = 'thien_dao_mission_refresh:';
   const MISSION_MY_STATUS_BUTTON = 'thien_dao_mission_my_status';
@@ -297,6 +299,8 @@
   const BICANH_COMBAT_DEFEND_PREFIX = 'td_bc_def:';
   const BICANH_COMBAT_AUTO_PREFIX = 'td_bc_auto:';
   const BICANH_COMBAT_ESCAPE_PREFIX = 'td_bc_run:';
+  const BICANH_COMBAT_ITEM_MENU_PREFIX = 'td_bc_item:';
+  const BICANH_COMBAT_USE_ITEM_PREFIX = 'td_bc_use:';
   const BICANH_AUTO_RESOLVE_MS = 24 * 60 * 60 * 1000;
   const MISSION_TICKET_DELETE_DELAY_MS = 12 * 1000;
   const REQUEST_TICKET_DELETE_DELAY_MS = 15 * 1000;
@@ -4870,6 +4874,11 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
           return;
         }
 
+        if (interaction.commandName === 'thaotrangbi') {
+          await handleThaoTrangBi(interaction);
+          return;
+        }
+
         if (interaction.commandName === 'dung') {
           await handleDungItem(interaction);
           return;
@@ -4977,6 +4986,17 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
 
         if (interaction.customId === DUNGEON_SELECT_CUSTOM_ID) {
           await handleDungeonSelect(interaction);
+          return;
+        }
+
+
+        if (interaction.customId.startsWith(MISSION_COMBAT_USE_ITEM_PREFIX)) {
+          await handleMissionCombatUseItemSelect(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(BICANH_COMBAT_USE_ITEM_PREFIX)) {
+          await handleBicanhCombatUseItemSelect(interaction);
           return;
         }
       }
@@ -5142,6 +5162,12 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
           return;
         }
 
+
+        if (interaction.customId.startsWith(BICANH_COMBAT_ITEM_MENU_PREFIX)) {
+          await handleBicanhCombatItemMenu(interaction);
+          return;
+        }
+
         if (interaction.customId.startsWith(XUAT_SON_VIEW_BUTTON_PREFIX)) {
           await handleXuatSonViewButton(interaction);
           return;
@@ -5249,6 +5275,12 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
 
         if (interaction.customId.startsWith(MISSION_COMBAT_ESCAPE_PREFIX)) {
           await handleMissionCombatEscape(interaction);
+          return;
+        }
+
+
+        if (interaction.customId.startsWith(MISSION_COMBAT_ITEM_MENU_PREFIX)) {
+          await handleMissionCombatItemMenu(interaction);
           return;
         }
 
@@ -5717,10 +5749,9 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     const pathText = getUserTuDaoPathText(userData || {});
 
     const currentExp = Math.max(0, Number(userData?.tuViExp) || 0);
-    const currentMin = Number(tuVi?.minExp) || 0;
     const nextTuVi = userData ? getTuViByLevel(Math.min(MAX_TU_VI_LEVEL, tuViLevel + 1)) : null;
-    const nextMin = Number(nextTuVi?.minExp) || Math.max(currentMin + 1, currentExp + 1);
-    const progressText = userData ? uiBar(currentExp - currentMin, Math.max(1, nextMin - currentMin), 12) : '▱▱▱▱▱▱▱▱▱▱▱▱';
+    const progressInfo = userData ? getTuViProgressInfo(currentExp, tuViLevel) : null;
+    const progressText = progressInfo ? uiBar(progressInfo.segmentCurrent, progressInfo.segmentTotal, 12) : '▱▱▱▱▱▱▱▱▱▱▱▱';
 
     const linhCanQuality = getMemberQualityText(member).replace(/\.$/, '');
     const linhCanElement = getMemberElementText(member).replace(/\.$/, '');
@@ -6046,9 +6077,8 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     const tuVi = getTuViByLevel(level);
     const needed = getExpNeededForBreakthrough(userData.tuViExp, level);
     const nextTuVi = level >= MAX_TU_VI_LEVEL ? null : getTuViByLevel(level + 1);
-    const currentMin = Number(tuVi?.minExp) || 0;
-    const nextMin = Number(nextTuVi?.minExp) || Math.max(currentMin + 1, Number(userData.tuViExp) + 1);
-    const progressText = uiBar((Number(userData.tuViExp) || 0) - currentMin, Math.max(1, nextMin - currentMin), 14);
+    const progressInfo = getTuViProgressInfo(userData.tuViExp, level);
+    const progressText = uiBar(progressInfo.segmentCurrent, progressInfo.segmentTotal, 14);
     const breakthroughText = nextTuVi
       ? needed > 0
         ? `Còn thiếu **${uiNumber(needed)}** tu vi để đột phá lên **${nextTuVi.realm} ${nextTuVi.minor}**.`
@@ -8099,10 +8129,9 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     const family = getSourceDefectFamily(mission.family || mission.defectFamily);
     const lines = [];
 
-    lines.push(`Nhiệm vụ: **${mission.actionName || mission.name}**`);
-    lines.push(`Chiến thuật: ${strategy.emoji} **${strategy.name}** · ${strategy.note}`);
-    lines.push(`Tỉ lệ thành công: **${Math.round(chance * 100)}%** · Sức đội so với độ khó: **${ratio.toFixed(2)}x**`);
-    if (family) lines.push(`Loại lỗi: **${family.name}** · ảnh hưởng chính: ${family.targetStat}.`);
+    lines.push(`Đội bước vào **${mission.actionName || mission.name}** theo hướng **${strategy.name}**.`);
+    lines.push(strategy.key === 'safe' ? 'Mọi người đi chậm, giữ đội hình và ưu tiên không để vụ việc lan rộng.' : strategy.key === 'risky' ? 'Đội chọn đào sâu vào điểm nguy hiểm nhất, đổi lấy cơ hội thu được nhiều dấu vết hơn.' : 'Đội giữ nhịp vừa phải: đủ chắc để xử lý, đủ nhanh để không mất thời cơ.');
+    if (family) lines.push(`Dấu vết nghiêng về **${family.name}**.`);
     const roleLines = Object.entries(assignments).map(([memberId, roleKey]) => {
       const role = getMissionRoleConfig(roleKey);
       return `${role.emoji} <@${memberId}>: ${role.name}`;
@@ -8113,8 +8142,8 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     }
 
     if (success) {
-      lines.push(`**Hoàn tất nhiệm vụ.** ${mission.successText || 'Tông môn ghi nhận kết quả xử lý.'}`);
-      lines.push(`Mỗi thành viên nhận: +${tuViEach} tu vi · +${rewardEach} cống hiến · +${masteryGain} thuần thục.`);
+      lines.push(`**Công án khép lại thuận lợi.** ${mission.successText || 'Tông môn ghi nhận kết quả xử lý.'}`);
+      lines.push(`Thu hoạch mỗi thành viên: +${tuViEach} tu vi · +${rewardEach} cống hiến · +${masteryGain} thuần thục.`);
       const dropLines = [];
       const realmIndex = Math.floor((Number(mission.hiddenLevel) || 0) / MINOR_REALMS.length);
       const materialBonus = Math.max(0, Number(strategy.materialBonus) || 0) + Math.max(0, Number(effects.materialBonus) || 0);
@@ -8145,7 +8174,7 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
         userData.lastMissionDate = getTodayString();
         await syncMissionMemberRoles(guild, memberId, userData);
       }
-      if (dropLines.length > 0) { lines.push(''); lines.push('**Thưởng phụ:**'); lines.push(...dropLines.slice(0, 8)); }
+      if (dropLines.length > 0) { lines.push(''); lines.push('**Vật chứng thu thêm:**'); lines.push(...dropLines.slice(0, 5)); }
       return { summary: lines.join('\n').slice(0, 3800), success: true };
     }
 
@@ -8161,8 +8190,8 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
       percent: clampNumber(injuryBase.percent * strategy.injuryMult * effects.injuryMult, 0.003, 0.25),
       restMs: Math.floor(injuryBase.restMs * clampNumber(strategy.injuryMult * effects.injuryMult, 0.35, 1.8)),
     };
-    lines.push(`**Xử lý thất bại.** ${mission.failText || 'Nhiễu phản hồi, đội cần đổi phương án.'}`);
-    lines.push(`Mỗi thành viên mất khoảng ${Math.round(injury.percent * 100)}% tu vi và tĩnh dưỡng ${getRemainingTimeText(injury.restMs)}.`);
+    lines.push(`**Công án trượt khỏi tay.** ${mission.failText || 'Nhiễu phản hồi, đội cần đổi phương án.'}`);
+    lines.push(`Đội phải rút về tĩnh dưỡng. Mỗi thành viên mất khoảng ${Math.round(injury.percent * 100)}% tu vi và nghỉ ${getRemainingTimeText(injury.restMs)}.`);
     for (const memberId of mission.party) {
       const userData = getOrCreateUser(users, memberId);
       applyMissionInjury(userData, injury.percent, injury.restMs, strategy.key === 'risky' ? 'Phạt thất bại do mạo hiểm' : 'Kiệt sức xử lý nhiệm vụ');
@@ -8177,7 +8206,86 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
   function createSkillCombatant({ id, label, userData = null, member = null, power = 1, skills = null, isMonster = false, hpMultiplier = 1, note = null }) {
     const safePower = Math.max(1, Math.floor(Number(power) || 1));
     const maxHp = Math.max(80, Math.floor(safePower * (isMonster ? 2.65 : 2.45) * Math.max(0.65, Number(hpMultiplier) || 1)));
-    return { id: id || label, label: label || id || 'Ẩn danh', userData, member, isMonster, power: safePower, maxHp, hp: maxHp, qi: 35, shield: 0, atkMod: 1, defMod: 1, dotDamage: 0, dotTurns: 0, stunTurns: 0, note, skills: skills && skills.length ? skills : (isMonster ? MONSTER_COMBAT_SKILLS : DEFAULT_COMBAT_SKILLS) };
+    const linhKhi = getCombatLinhKhiStats({ userData, member, power: safePower, isMonster });
+    return {
+      id: id || label,
+      label: label || id || 'Ẩn danh',
+      userData,
+      member,
+      isMonster,
+      power: safePower,
+      maxHp,
+      hp: maxHp,
+      maxQi: linhKhi.maxQi,
+      qi: linhKhi.startQi,
+      qiRegen: linhKhi.regen,
+      tamMaPressure: linhKhi.tamMaPressure,
+      linhKhiNote: linhKhi.note,
+      shield: 0,
+      atkMod: 1,
+      defMod: 1,
+      dotDamage: 0,
+      dotTurns: 0,
+      stunTurns: 0,
+      note,
+      skills: skills && skills.length ? skills : (isMonster ? MONSTER_COMBAT_SKILLS : DEFAULT_COMBAT_SKILLS),
+    };
+  }
+
+  function getCombatLinhKhiStats({ userData = null, member = null, power = 1, isMonster = false } = {}) {
+    const safePower = Math.max(1, Number(power) || 1);
+
+    if (isMonster) {
+      const maxQi = Math.max(70, Math.floor(78 + Math.sqrt(safePower) * 3.2));
+      const regen = Math.max(6, Math.floor(8 + Math.sqrt(safePower) / 7));
+      return { maxQi, startQi: Math.floor(maxQi * 0.48), regen, tamMaPressure: 0, note: `Linh Khí ${maxQi} · hồi ${regen}/lượt` };
+    }
+
+    const level = userData ? getCurrentTuViLevel(member, Number(userData.tuViExp) || 0) : 0;
+    const direct = userData ? getUserDirectStats(userData, member) : createEmptyDirectStats();
+    const source = userData?.sourceProfile || {};
+    const rawTamMa = Math.max(0, Number(direct.tamMaRisk) || 0)
+      + (isTemporaryStatusActive(userData, 'Tâm Ma Quấn Thân') ? 35 : 0)
+      + Math.max(0, Number(userData?.nghiepLuc) || 0) * 0.35
+      + Math.max(0, Number(userData?.entropy) || 0) * 0.22
+      + Math.max(0, Number(userData?.technicalDebt) || 0) * 0.16;
+    const tamMaPressure = clampNumber(rawTamMa, 0, 180);
+    const tamMaFactor = clampNumber(1 - tamMaPressure / 220, 0.28, 1.1);
+    const sourceBonus = Math.max(0, Number(source.runtime) || 0) + Math.max(0, Number(source.throughput) || 0) + Math.max(0, Number(source.stability) || 0) * 0.5;
+    const maxQi = Math.max(70, Math.floor(86 + level * 9 + Math.max(0, Number(direct.dotPha) || 0) * 2 + Math.max(0, Number(direct.tuVi) || 0) + sourceBonus));
+    const regenBase = 9 + Math.floor(level / 4) + Math.max(0, Number(direct.trongThuongDuration) < 0 ? Math.abs(Number(direct.trongThuongDuration)) * 0.12 : 0) + sourceBonus * 0.08;
+    const regen = Math.max(3, Math.floor(regenBase * tamMaFactor));
+    const startQi = Math.max(Math.min(maxQi, 38), Math.floor(maxQi * clampNumber(0.55 * tamMaFactor + 0.12, 0.28, 0.72)));
+    return { maxQi, startQi, regen, tamMaPressure: Math.round(tamMaPressure), note: `Linh Khí ${maxQi} · hồi ${regen}/lượt${tamMaPressure > 0 ? ` · Tâm Ma áp ${Math.round(tamMaPressure)}` : ''}` };
+  }
+
+  function getCombatMaxQi(actor) {
+    return Math.max(30, Number(actor?.maxQi) || 100);
+  }
+
+  function getCombatQiRegen(actor) {
+    return Math.max(3, Number(actor?.qiRegen) || (actor?.isMonster ? 9 : 8));
+  }
+
+  function getCombatSkillLinhKhiCost(skill, actor = null) {
+    if (!skill) return Infinity;
+    const minCost = actor?.isMonster ? 6 : 10;
+    return Math.max(minCost, Number(skill.qiCost) || 0);
+  }
+
+  function canUseCombatSkill(actor, skill) {
+    return Boolean(skill) && (Number(actor?.qi) || 0) >= getCombatSkillLinhKhiCost(skill, actor);
+  }
+
+  function recoverCombatLinhKhi(actor, multiplier = 1, lines = null, reason = 'hồi tức') {
+    if (!actor) return 0;
+    const maxQi = getCombatMaxQi(actor);
+    const before = Math.max(0, Number(actor.qi) || 0);
+    const amount = Math.max(1, Math.floor(getCombatQiRegen(actor) * Math.max(0.2, Number(multiplier) || 1)));
+    actor.qi = Math.min(maxQi, before + amount);
+    const gained = Math.max(0, Math.floor(actor.qi - before));
+    if (gained > 0 && Array.isArray(lines)) lines.push(`• ${actor.label} ${reason}, hồi **+${gained} Linh Khí**.`);
+    return gained;
   }
 
   function isCombatantAlive(combatant) { return combatant && combatant.hp > 0; }
@@ -8229,13 +8337,15 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
   }
 
   function chooseTurnSkill(actor) {
-    const available = actor.skills.filter((skill) => (Number(skill.qiCost) || 0) <= actor.qi);
-    const pool = available.length ? available : [actor.skills[0] || DEFAULT_COMBAT_SKILLS[0]];
+    const skills = Array.isArray(actor?.skills) && actor.skills.length ? actor.skills : DEFAULT_COMBAT_SKILLS;
+    const available = skills.filter((skill) => canUseCombatSkill(actor, skill));
+    if (!available.length) return null;
+    const pool = available;
     const hpRatio = actor.hp / Math.max(1, actor.maxHp);
     const defensive = pool.filter((skill) => skill.healPct || skill.shieldPct || skill.defBuff);
     if (hpRatio < 0.42 && defensive.length > 0 && Math.random() < 0.42) return defensive[Math.floor(Math.random() * defensive.length)];
-    const ultimate = pool.filter((skill) => (Number(skill.qiCost) || 0) >= 38);
-    if (actor.qi >= 70 && ultimate.length > 0 && Math.random() < 0.55) return ultimate[Math.floor(Math.random() * ultimate.length)];
+    const ultimate = pool.filter((skill) => getCombatSkillLinhKhiCost(skill, actor) >= 38);
+    if (actor.qi >= Math.min(getCombatMaxQi(actor), 70) && ultimate.length > 0 && Math.random() < 0.55) return ultimate[Math.floor(Math.random() * ultimate.length)];
     const weighted = [];
     for (const skill of pool) {
       const weight = Math.max(1, Math.round((Number(skill.power) || 1) * 5 + (Number(skill.accuracy) || 0.9) * 4 + (skill.priority || 0)));
@@ -8253,9 +8363,10 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
       lines.push(`• ${actor.label} bị bug đạo ăn mòn **-${dot} HP**.`);
       if (!isCombatantAlive(actor)) return false;
     }
+    recoverCombatLinhKhi(actor, 0.45, null, 'điều tức theo nhịp thở');
     if (actor.stunTurns > 0) {
       actor.stunTurns -= 1;
-      actor.qi = Math.min(100, actor.qi + 10);
+      recoverCombatLinhKhi(actor, 0.8, lines, 'bị khống chế nhưng linh mạch vẫn tự hồi');
       lines.push(`• ${actor.label} bị khống chế, mất lượt.`);
       return false;
     }
@@ -8277,8 +8388,13 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     const livingEnemies = enemies.filter(isCombatantAlive);
     if (livingEnemies.length === 0) return;
     const skill = chooseTurnSkill(actor);
-    actor.qi = Math.max(0, actor.qi - (Number(skill.qiCost) || 0));
-    actor.qi = Math.min(100, actor.qi + (Number(skill.qiGain) || 10));
+    if (!skill) {
+      recoverCombatLinhKhi(actor, 2.2, lines, 'không đủ Linh Khí để ra chiêu nên lùi lại hồi tức');
+      return;
+    }
+    const qiCost = getCombatSkillLinhKhiCost(skill, actor);
+    actor.qi = Math.max(0, actor.qi - qiCost);
+    actor.qi = Math.min(getCombatMaxQi(actor), actor.qi + Math.max(0, Math.floor((Number(skill.qiGain) || 0) * 0.65)));
     const target = livingEnemies.sort((a, b) => (a.hp / a.maxHp) - (b.hp / b.maxHp))[0];
     const accuracy = clampNumber(Number(skill.accuracy) || 0.9, 0.45, 1);
     if (Math.random() > accuracy) { lines.push(`• ${actor.label} dùng ${skill.emoji || '✦'} **${skill.name}** nhưng hụt.`); return; }
@@ -8302,7 +8418,11 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
       if (!allies.some(isCombatantAlive) || !enemies.some(isCombatantAlive)) break;
       turnsUsed = turn;
       lines.push(`__Lượt ${turn}__`);
-      const actors = [...allies, ...enemies].filter(isCombatantAlive).sort((a, b) => (b.power * (0.92 + Math.random() * 0.16) + (chooseTurnSkill(b).priority || 0) * 15) - (a.power * (0.92 + Math.random() * 0.16) + (chooseTurnSkill(a).priority || 0) * 15));
+      const actors = [...allies, ...enemies].filter(isCombatantAlive).sort((a, b) => {
+        const skillA = chooseTurnSkill(a);
+        const skillB = chooseTurnSkill(b);
+        return (b.power * (0.92 + Math.random() * 0.16) + (skillB?.priority || 0) * 15) - (a.power * (0.92 + Math.random() * 0.16) + (skillA?.priority || 0) * 15);
+      });
       for (const actor of actors) {
         if (!isCombatantAlive(actor)) continue;
         resolveSkillAction(actor, allies.includes(actor) ? enemies : allies, lines);
@@ -8802,6 +8922,84 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
 
 
 
+  function getMissionStoryTone(mission = {}) {
+    const family = getSourceDefectFamily(mission.family || mission.defectFamily);
+    const place = mission.bicanhSituationName || mission.actionName || mission.name || 'công án nội tông';
+    const obstacle = getMissionObstacleText(mission);
+    if (mission.type === 'clean') {
+      return [
+        `Tông môn giao đội tới **${place}** để xử lý một vướng mắc đang âm thầm lan rộng.`,
+        `Không cần rút kiếm ngay. Việc chính là đọc tình thế, giữ nhịp linh mạch và xử lý **${obstacle}** trước khi nó thành đại họa.`,
+        family ? `Dấu vết nghiêng về hệ **${family.name}**, nên người có nghề hợp hệ này sẽ đọc vụ việc dễ hơn.` : null,
+      ].filter(Boolean).join('\n');
+    }
+    if (mission.type === 'dungeon') {
+      return [
+        `Lối vào bí cảnh đã mở, khí tức bên trong không đứng yên như mô tả trên bảng nhiệm vụ.`,
+        mission.bicanhSituationText || `Đội cần tiến vào, đọc biến cố từng tầng và quyết định khi nào nên giao chiến, khi nào nên giữ sức.`,
+      ].join('\n');
+    }
+    return [
+      `Một Dị Lỗi đã lộ dấu vết. Tông môn không yêu cầu đội lao vào như yêu thú mất não, nhưng nếu đã nhận thì phải chuẩn bị đánh thật.`,
+      `Mục tiêu là trấn áp **${mission.enemyName || getMissionEnemyText(mission.type)}** và xử lý tàn tích sau trận.`,
+    ].join('\n');
+  }
+
+  function getMissionStorySituation(mission = {}, users = {}) {
+    const partySize = getMissionPartySize(mission);
+    const partyText = partySize > 0 ? `Đội hiện có **${partySize}/${MISSION_MAX_PARTY_SIZE}** người.` : 'Chưa có ai nhận đội.';
+    if (mission.awaitingLootChoice) return 'Địch đã gục. Tàn tích còn sót lại đang chờ đội trưởng quyết định: hấp thu, phong ấn hay trảm sát.';
+    if (mission.status === MISSION_STATUS_OPEN) return `${partyText}\nCông án vẫn nằm trên bảng. Có thể xem trước, lập đội, rồi xuất phát khi đã sẵn sàng.`;
+    if (mission.status === MISSION_STATUS_REVEALED) {
+      const chance = mission.winChance ? Math.round(mission.winChance * 100) : null;
+      const mood = chance === null ? 'Chưa đủ dữ kiện để đoán chắc kết quả.' : chance >= 82 ? 'Tình thế khá chắc tay.' : chance >= 65 ? 'Có thể xử lý, nhưng không nên chủ quan.' : chance >= 45 ? 'Vụ này có rủi ro rõ ràng.' : 'Đội đang bước vào kèo khó.';
+      return `${partyText}\n${mood}`;
+    }
+    if (mission.status === MISSION_STATUS_COMPLETED) return 'Công án đã khép lại. Tông môn đã ghi nhận kết quả và hậu quả đi kèm.';
+    if (mission.status === MISSION_STATUS_FAILED) return 'Công án đã đổ vỡ. Đội cần tĩnh dưỡng trước khi tiếp tục chen chân vào nghiệp lực.';
+    return partyText;
+  }
+
+  function getMissionStoryResultText(mission = {}) {
+    const raw = String(mission.resultText || '').trim();
+    if (!raw) return '';
+    const lines = raw.split('\n').map((line) => line.replace(/\*\*/g, '').trim()).filter(Boolean);
+    const reward = lines.find((line) => /nhận|Mỗi thành viên|Tổ đội/i.test(line));
+    const bad = lines.find((line) => /thất bại|Trọng thương|mất khoảng|tĩnh dưỡng/i.test(line));
+    const win = lines.find((line) => /Hoàn tất|Chiến thắng|Dị Lỗi đã gục|Phản sát/i.test(line));
+    if (mission.awaitingLootChoice) {
+      return [
+        'Trận giao chiến đã kết thúc. Bụi linh khí chưa tan hẳn, tàn tích vẫn còn một hơi nóng lạ.',
+        'Đội trưởng cần chọn cách xử lý phần còn lại. Quyết định này sẽ nghiêng phần thưởng và rủi ro sang hướng khác nhau.',
+      ].join('\n');
+    }
+    if (bad) {
+      return [
+        'Vụ việc không khép lại sạch sẽ. Nhiễu phản hồi khiến đội phải lùi lại.',
+        uiCompactValue(bad, 220),
+      ].join('\n');
+    }
+    if (win || reward) {
+      return [
+        'Công án đã được xử lý. Dấu vết nguy hiểm tạm thời lắng xuống, đội có thể về tông môn báo cáo.',
+        reward ? `Thu hoạch: ${uiCompactValue(reward, 240)}` : null,
+      ].filter(Boolean).join('\n');
+    }
+    return uiCompactValue(raw, 520);
+  }
+
+  function getMissionSoftPlanText(mission = {}, users = {}) {
+    const parts = [];
+    if (mission.type === 'clean' && mission.party.length > 0) {
+      parts.push(getMissionStrategyText(mission.strategyKey || 'balanced'));
+      const roleText = getMissionPartyRoleText(users, mission);
+      if (roleText) parts.push(`Vai trò đội:\n${roleText}`);
+    } else if (mission.status === MISSION_STATUS_REVEALED && mission.type !== 'clean') {
+      parts.push('Có thể vào giao chiến theo lượt, tự xử lý nhanh nếu muốn đi nhanh, hoặc rút lui khi thấy tình thế xấu.');
+    }
+    return parts.filter(Boolean).join('\n\n') || 'Chưa có kế hoạch cụ thể. Đội trưởng quyết định bước tiếp theo bằng nút bên dưới.';
+  }
+
   function buildMissionDetailEmbed(mission, users) {
     const isRevealed = mission.status !== MISSION_STATUS_OPEN;
     const partySize = getMissionPartySize(mission);
@@ -8818,70 +9016,46 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     const missionIcon = mission.type === 'clean' ? '📜' : mission.type === 'dungeon' ? '⛩️' : '⚔️';
     const tierConfig = getMissionTierConfig(mission.tier);
     const fields = [
-      { name: 'Thông tin nhanh', value: [
-        `Bảng: **${tierConfig.shortLabel}**`,
-        `Loại: **${getMissionTypeText(mission.type)}**`,
-        `Yêu cầu: **${getMissionRequiredText(mission)}**`,
-        `Trạng thái: **${getMissionStatusText(mission)}**`,
-      ].join('\n'), inline: false },
-      { name: 'Mục tiêu dễ hiểu', value: clampEmbedFieldValue(getMissionObjectiveText(mission), 900), inline: false },
-      { name: 'Thưởng dự kiến', value: getMissionRewardText(mission), inline: false },
+      { name: 'Diễn biến', value: clampEmbedFieldValue(getMissionStoryTone(mission), 950), inline: false },
+      { name: 'Tình thế hiện tại', value: clampEmbedFieldValue(getMissionStorySituation(mission, users), 900), inline: false },
       { name: 'Đội tham gia', value: `${partySize}/${MISSION_MAX_PARTY_SIZE}\n${partyLines.join('\n')}`.slice(0, 1024), inline: false },
     ];
 
-    if (mission.type === 'clean' && mission.party.length > 0) {
-      const strategyKey = mission.strategyKey || 'balanced';
-      fields.push({ name: 'Kế hoạch xử lý', value: getMissionStrategyText(strategyKey), inline: false });
-      fields.push({ name: 'Vai trò tự động', value: getMissionPartyRoleText(users, mission), inline: false });
+    if (mission.status === MISSION_STATUS_REVEALED || (mission.type === 'clean' && mission.party.length > 0)) {
+      fields.push({ name: 'Hướng xử lý', value: clampEmbedFieldValue(getMissionSoftPlanText(mission, users), 1000), inline: false });
     }
 
-    if (isRevealed) {
-      fields.splice(2, 0, {
-        name: mission.type === 'clean' ? 'Việc cần xử lý' : 'Gặp địch',
-        value: [
-          `${mission.type === 'clean' ? 'Vướng mắc' : 'Địch'}: **${mission.enemyName || getMissionEnemyText(mission.type)}**`,
-          mission.type !== 'clean' && getMissionMonster(mission) ? `Dạng Dị Lỗi: ${getMonsterDisplayLine(getMissionMonster(mission))}` : null,
-          `Cấp ẩn: **${getMissionRealmTextFromLevel(mission.hiddenLevel)}**`,
-          mission.bicanhSituationName ? `Ghi chú: **${mission.bicanhSituationName}**` : null,
-        ].filter(Boolean).join('\n'),
-        inline: false,
-      });
-    }
-
-    if (mission.status === MISSION_STATUS_REVEALED) {
-      fields.push({
-        name: mission.type === 'clean' ? 'Tỉ lệ xử lý' : 'Lực chiến',
-        value: [
-          `Sức đội: **${mission.partyPower || 'Chưa tính'}**`,
-          `${mission.type === 'clean' ? 'Độ khó' : 'Địch'}: **${mission.enemyPower || getMissionEnemyPower(mission)}**`,
-          `Tỉ lệ thành công: **${mission.winChance ? `${Math.round(mission.winChance * 100)}%` : 'Chưa tính'}**`,
-        ].join('\n'),
-        inline: false,
-      });
+    if (mission.awaitingLootChoice) {
+      fields.push({ name: 'Sau giao chiến', value: getMissionStoryResultText(mission), inline: false });
+      fields.push({ name: 'Quyết định tàn tích', value: '🔥 **Hấp Tu Vi**: lấy nhanh, rủi ro cao hơn.\n🕊️ **Phong Ấn**: sạch hơn, ổn định hơn.\n⚔️ **Trảm Sát**: dứt khoát, thêm vật chứng và nguyên liệu.', inline: false });
+    } else if (mission.status === MISSION_STATUS_COMPLETED && mission.resultText) {
+      fields.push({ name: 'Kết quả', value: getMissionStoryResultText(mission), inline: false });
     }
 
     if (mission.ticketChannelId) {
-      fields.push({ name: 'Ticket tổ đội', value: `<#${mission.ticketChannelId}>`, inline: false });
+      fields.push({ name: 'Kênh tổ đội', value: `<#${mission.ticketChannelId}>`, inline: false });
     }
 
-    if (mission.awaitingLootChoice && mission.resultText) {
-      fields.push({ name: 'Sau giao chiến', value: mission.resultText.slice(0, 900), inline: false });
-      fields.push({ name: 'Chọn cách xử lý tàn tích', value: '🔥 **Hấp Tu Vi**: nhiều tu vi hơn, tăng rủi ro.\n🕊️ **Phong Ấn**: Công Đức, nguyên liệu sạch, ổn định.\n⚔️ **Trảm Sát**: thêm nguyên liệu craft và vật chứng đổi cống hiến.', inline: false });
-    } else if (mission.status === MISSION_STATUS_COMPLETED && mission.resultText) {
-      fields.push({ name: 'Kết quả', value: mission.resultText.slice(0, 900), inline: false });
-    }
+    fields.push({ name: 'Thông tin nhanh', value: [
+      `Bảng: **${tierConfig.shortLabel}**`,
+      `Loại: **${getMissionTypeText(mission.type)}**`,
+      `Yêu cầu: **${getMissionRequiredText(mission)}**`,
+      `Trạng thái: **${getMissionStatusText(mission)}**`,
+      isRevealed && mission.winChance ? `Dự cảm thành công: **${Math.round(mission.winChance * 100)}%**` : null,
+      `Thưởng dự kiến: ${getMissionRewardText(mission)}`,
+    ].filter(Boolean).join('\n').slice(0, 1024), inline: false });
 
     return new EmbedBuilder()
       .setColor(tierConfig.color)
       .setTitle(`${missionIcon} ${mission.name}`)
       .setDescription(
         mission.awaitingLootChoice
-          ? 'Địch đã gục. Đội trưởng chọn cách xử lý tàn tích.'
+          ? 'Tàn tích còn chờ xử lý. Chọn bằng nút bên dưới.'
           : mission.status === MISSION_STATUS_OPEN
-            ? 'Nhận nhiệm vụ hoặc lập đội.'
+            ? 'Một công án đang treo trên bảng. Đọc nội dung, lập đội rồi xuất phát.'
             : mission.status === MISSION_STATUS_REVEALED
-              ? (mission.type === 'clean' ? 'Đội trưởng chọn chiến thuật xử lý.' : 'Đội trưởng chọn hành động giao chiến.')
-              : 'Nhiệm vụ đã kết thúc.',
+              ? 'Đội đang ở hiện trường. Mỗi nút là một bước xử lý, không phải log server nữa, tạ ơn trời đất.'
+              : 'Nhiệm vụ đã khép lại.',
       )
       .addFields(...fields)
       .setFooter({ text: getMissionPageLabel(mission.id, getMissionDataForToday(), normalizeMissionTier(mission.tier)) });
@@ -10141,9 +10315,9 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
       suspects,
       clues,
       phaseIntros: [
-        'Giai đoạn 1/3 · Dò dấu vết: thu lời khai, đọc hiện trường, xác định loại nhiễu thật sự.',
-        'Giai đoạn 2/3 · Truy nguồn: lần theo dấu Source, đối chiếu pháp trận, tìm kẻ hoặc thứ đứng sau.',
-        'Giai đoạn 3/3 · Kết án: chọn cách xử lý cuối cùng. Chứng cứ càng sạch, hậu quả càng ít bẩn.',
+        'Ngươi vừa rời tông môn. Việc đầu tiên không phải ra tay, mà là nhìn kỹ hiện trường: ai đang giấu chuyện, nơi nào còn lưu dấu, và điều gì khiến vụ này bất thường.',
+        'Những mảnh rời đã bắt đầu khớp lại. Dấu vết không còn nằm trên mặt đất nữa, nó dẫn vào pháp trận, lời khai cũ, và một đoạn khí tức đang cố che mình.',
+        'Sự thật đã đủ gần để chạm tay. Bây giờ không phải hỏi thêm nữa, mà là quyết định xử lý thứ đứng sau công án này theo con đường nào.',
       ],
     };
   }
@@ -10204,6 +10378,53 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     };
   }
 
+
+  function getXuatSonCaseMoodText(state) {
+    const evidence = Number(state?.evidence) || 0;
+    const publicTrust = Number(state?.publicTrust ?? 3) || 3;
+    const sourceNoise = Number(state?.sourceNoise ?? 2) || 2;
+    const evidenceText = evidence >= 4 ? 'manh mối đã khá chắc' : evidence >= 2 ? 'đã có vài dấu vết đáng tin' : 'chứng cứ còn mỏng';
+    const trustText = publicTrust >= 4 ? 'người địa phương bắt đầu tin ngươi' : publicTrust >= 2 ? 'dân chúng còn dè chừng' : 'dân tâm đã lạnh, hỏi gì cũng khó';
+    const noiseText = sourceNoise >= 4 ? 'khí tức quanh vụ án đang nhiễu mạnh' : sourceNoise >= 2 ? 'vùng này vẫn còn bất ổn' : 'dấu nhiễu tạm lắng xuống';
+    return `${evidenceText}; ${trustText}; ${noiseText}.`;
+  }
+
+  function getXuatSonStageStory(mission, state) {
+    const story = getXuatSonCaseBlueprint(mission);
+    const suspect = story.suspects[Math.min(story.suspects.length - 1, Math.max(0, Number(state?.stage) || 0))] || 'một bóng người chưa rõ mặt';
+    const clue = state?.clueList?.[state.clueList.length - 1] || story.clues[Math.max(0, Number(state?.stage) || 0)] || 'một dấu vết chưa gọi được tên';
+    if ((Number(state?.stage) || 0) <= 0) {
+      return `${story.phaseIntros[0]}
+
+Người được nhắc tới nhiều nhất là **${suspect}**. Chưa ai dám khẳng định kẻ đó liên quan, nhưng mọi lời kể đều vòng qua cái tên này như tránh một hòn đá giữa đường.`;
+    }
+    if (Number(state?.stage) === 1) {
+      return `${story.phaseIntros[1]}
+
+Manh mối gần nhất là **${clue}**. Nó không đủ để kết án, nhưng đủ để biết vụ này không phải tai nạn bình thường.`;
+    }
+    return `${story.phaseIntros[2]}
+
+Trước mặt ngươi là một lựa chọn khó chịu: xử sạch để ít hậu họa, chuyển hóa để giữ lại giá trị, hoặc cưỡng ép kết thúc để đổi lấy phần thưởng lớn hơn.`;
+  }
+
+  function getXuatSonChoicePreviewText(userData, member, mission) {
+    if (!mission) return 'Chưa có công án để xem lựa chọn.';
+    const state = getXuatSonCaseState(userData, mission);
+    const prepKey = userData?.activeXuatSon?.prep || (state.stage >= 2 ? 'clue' : 'rush');
+    return ['commit', 'va_tam', 'force_push'].map((methodKey) => {
+      const method = getXuatSonMethodConfig(methodKey);
+      const chance = getXuatSonSuccessChance(userData, member, mission, method.key, prepKey);
+      const odds = chance >= 0.78 ? 'khá chắc tay' : chance >= 0.58 ? 'có rủi ro' : 'dễ trả giá';
+      const tone = method.key === 'commit'
+        ? 'đi chậm, ít hậu họa, hợp xử án sạch'
+        : method.key === 'force_push'
+          ? 'được nhiều hơn, nhưng để lại vết bẩn rõ hơn'
+          : 'giữ lại giá trị vụ án, đổi bằng một ít rủi ro';
+      return `**${getXuatSonMethodLabelForStage(state.stage, method.key)}** · ${odds} · ${tone}`;
+    }).join('\n');
+  }
+
   function getXuatSonPrepLabelForStage(stage, prepKey) {
     return getXuatSonStageActions(stage)?.[prepKey]?.label || getXuatSonPrepConfig(prepKey)?.button || prepKey;
   }
@@ -10216,10 +10437,15 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     if (!mission) return 'Chưa nhận công án.';
     const state = getXuatSonCaseState(userData, mission);
     const story = getXuatSonCaseBlueprint(mission);
-    const stageIntro = story.phaseIntros[Math.min(2, state.stage)] || story.phaseIntros[0];
-    const clueText = state.clueList.length ? state.clueList.map((item) => `• ${item}`).join('\n') : 'Chưa có manh mối rõ ràng.';
-    const suspects = story.suspects.map((item) => `• ${item}`).join('\n');
-    return `${stageIntro}\n\n**Chỉ số công án**\nChứng cứ: **${state.evidence}/5** · Dân tâm: **${state.publicTrust}/5** · Nhiễu Source: **${state.sourceNoise}/5**\nManh mối pha hiện tại: **${state.clues}/3**\n\n**Nghi vấn/NPC**\n${suspects}\n\n**Manh mối đã thu**\n${clueText}`;
+    const clueText = state.clueList.length ? state.clueList.slice(-4).map((item) => `• ${item}`).join('\n') : 'Chưa có manh mối rõ ràng.';
+    const suspects = story.suspects.slice(0, 3).map((item) => `• ${item}`).join('\n');
+    return [
+      `**${getXuatSonStageLabel(state.stage)}**`,
+      getXuatSonStageStory(mission, state),
+      `**Người liên quan**\n${suspects}`,
+      `**Manh mối đã biết**\n${clueText}`,
+      `**Tình thế**\n${getXuatSonCaseMoodText(state)}`,
+    ].join('\n\n');
   }
 
   function buildXuatSonCasePageEmbed(member, userData, mission, options = {}) {
@@ -10242,16 +10468,7 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
   }
 
   function previewXuatSonMethods(userData, member, mission) {
-    if (!mission) return 'Chưa có công án để xem trước.';
-    const state = getXuatSonCaseState(userData, mission);
-    const prepKey = userData?.activeXuatSon?.prep || (state.stage >= 2 ? 'clue' : 'rush');
-    return ['commit', 'va_tam', 'force_push'].map((methodKey) => {
-      const method = getXuatSonMethodConfig(methodKey);
-      const chance = getXuatSonSuccessChance(userData, member, mission, method.key, prepKey);
-      const risk = method.key === 'commit' ? 'rủi ro thấp' : method.key === 'force_push' ? 'rủi ro cao' : 'rủi ro vừa';
-      const pathGain = method.key === 'commit' ? getPathChoicePreview(userData, 'commit', 3) : method.key === 'force_push' ? getPathChoicePreview(userData, 'force_push', 4) : getPathChoicePreview(userData, 'neutral', 3);
-      return `**${getXuatSonMethodLabelForStage(state.stage, method.key)}**: ${Math.round(chance * 100)}% · thưởng x${method.rewardMult.toFixed(2)} · ${risk} · ${pathGain}`;
-    }).join('\n');
+    return getXuatSonChoicePreviewText(userData, member, mission);
   }
 
   function getActiveXuatSonEntries(users) {
@@ -10385,7 +10602,7 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
         },
       );
       if (mission && (prep || state.stage >= 2)) {
-        embed.addFields({ name: 'Xem trước trước khi bấm', value: previewXuatSonMethods(userData, member, mission), inline: false });
+        embed.addFields({ name: 'Hướng xử lý', value: previewXuatSonMethods(userData, member, mission), inline: false });
       }
       embed.setFooter({ text: 'Một công án = một trang. Làm xong pha sẽ hiện nút tiếp tục ngay trong khung này.' });
       return embed;
@@ -10483,20 +10700,18 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     const story = getXuatSonCaseBlueprint(mission);
     const state = userData ? getXuatSonCaseState(userData, mission) : null;
     const detailText = normalizedMethod === 'force_push'
-      ? 'Thưởng cao hơn, tăng rủi ro Nghiệp Lực/Nợ kỹ thuật. Nói cách khác: nhanh, mạnh, và có mùi kiện tụng với thiên đạo.'
+      ? 'Ngươi ép vụ án khép lại nhanh hơn. Đổi lại, vết bẩn để lại cũng rõ hơn.'
       : normalizedMethod === 'va_tam'
-        ? 'Thưởng vừa, có chút Nợ kỹ thuật. Cách làm của người thực dụng, tức là rất đáng nghi nhưng hiệu quả.'
-        : 'Ổn định nhất, tăng Công Đức Source và chỉ số bền. Ít hào nhoáng, ít cháy nhà.';
+        ? 'Ngươi giữ lại phần có ích của vụ án, chấp nhận một ít rủi ro còn sót lại.'
+        : 'Ngươi xử chậm và sạch, ít hào nhoáng nhưng khó để lại hậu họa.';
     const embed = new EmbedBuilder()
       .setColor(normalizedMethod === 'force_push' ? 0xef4444 : normalizedMethod === 'commit' ? 0x22c55e : 0xf59e0b)
-      .setTitle(`Kết quả công án · ${story.title}`)
-      .setDescription(story.hook)
-      .addFields(
-        { name: 'Cách xử lý', value: `${methodText} · ${detailText}`, inline: false },
-        { name: 'Diễn biến', value: clampEmbedFieldValue(summary, 1200), inline: false },
-      );
+      .setTitle(`Diễn biến công án · ${story.title}`)
+      .setDescription(summary)
+      .addFields({ name: 'Cách ngươi chọn', value: `**${methodText}** · ${detailText}`, inline: false });
     if (state) {
-      embed.addFields({ name: 'Hồ sơ sau pha này', value: `Chứng cứ: **${state.evidence}/5** · Dân tâm: **${state.publicTrust}/5** · Nhiễu Source: **${state.sourceNoise}/5**\nManh mối: **${state.clues}/3** · Giai đoạn: **${getXuatSonStageLabel(state.stage)}**`, inline: false });
+      embed.addFields({ name: 'Tình thế sau pha này', value: `${getXuatSonCaseMoodText(state)}
+Giai đoạn hiện tại: **${getXuatSonStageLabel(state.stage)}**`, inline: false });
     }
     return embed;
   }
@@ -10522,10 +10737,13 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     const material = pickMissionCraftMaterial(family.key, `xuatson:${mission.id}:${methodConfig.key}:${prep.key}`, Math.max(0, mission.rank - 2), methodConfig.key === 'commit' ? 'chính đạo' : methodConfig.key === 'force_push' ? 'tà đạo' : null);
     let tuVi = 0;
     let congHien = 0;
+    const story = getXuatSonCaseBlueprint(mission);
+    const actionLabel = getXuatSonPrepLabelForStage(caseState.stage, prep.key);
+    const methodLabel = getXuatSonMethodLabelForStage(caseState.stage, methodConfig.key);
     const lines = [];
-    lines.push(`${getXuatSonStageLabel(caseState.stage)}.`);
-    lines.push(`Chuẩn bị: **${prep.name}** · Cách xử lý: **${methodConfig.name}**.`);
-    lines.push(`Tỉ lệ thành công đã roll: **${Math.round(chance * 100)}%** · Kết quả: **${great ? 'Thành công lớn' : success ? 'Thành công' : 'Trục trặc'}**.`);
+    lines.push(`**${getXuatSonStageLabel(caseState.stage)}**`);
+    lines.push(`${actionLabel} mở ra một nhánh mới của vụ án. Ngươi chọn **${methodLabel}**, vì hiển nhiên xử công án mà không phải chọn điều khó chịu thì còn gì là đời.`);
+    lines.push(great ? 'Kết quả vượt dự tính: một mảnh sự thật lộ ra rõ hơn hẳn.' : success ? 'Kết quả thuận lợi: vụ án tiến thêm một đoạn.' : 'Kết quả trục trặc: hiện trường không chịu nói thật dễ dàng như người ta mơ tưởng.');
 
     if (methodConfig.key === 'commit') {
       tuVi = Math.floor(70 * scale * rewardMult);
@@ -10534,7 +10752,7 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
       userData.sourcePath = 'commit';
       addSourcePathPoints(userData, 'commit', success ? (great ? 5 : 3) : 1);
       addSourceProfile(userData, success ? { integrity: 1 + Math.floor(scale), stability: 1 + Math.floor(scale / 2), logic: great ? 1 : 0 } : { stability: 1 });
-      lines.push(`+${Math.floor((success ? 12 : 4) * scale)} Công Đức Source`, success ? '+Độ toàn vẹn/Ổn định' : '+Ổn định nhẹ');
+      lines.push(success ? 'Cách xử sạch khiến người địa phương yên tâm hơn, tông môn cũng dễ ghi công.' : 'Ngươi vẫn giữ được trật tự tối thiểu, dù hồ sơ chưa thật sự đẹp.');
     } else if (methodConfig.key === 'force_push') {
       tuVi = Math.floor(135 * scale * rewardMult);
       congHien = Math.floor(16 * scale * rewardMult);
@@ -10545,7 +10763,7 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
       userData.sourcePath = 'force_push';
       addSourcePathPoints(userData, 'force_push', success ? (great ? 6 : 4) : 2);
       addSourceProfile(userData, { sourcePower: 1 + Math.floor(scale) + (great ? 1 : 0) });
-      lines.push(`+${Math.ceil((2 + Math.floor(scale)) * riskMult)} Nghiệp Lực`, `+${Math.ceil((2 + Math.floor(scale)) * riskMult)} Độ hỗn loạn`, '+Sức Source');
+      lines.push('Cách làm cưỡng ép đem lại lợi lớn, nhưng để lại một vết đen trong hồ sơ đạo tâm. Đừng giả vờ bất ngờ.');
       if (!success) setTemporaryStatus(userData, 'Tâm Ma Quấn Thân', 2 * 60 * 60 * 1000, { dotPhaPenalty: true, directStats: { tamMaRisk: 8, dotPha: -2 } });
     } else {
       tuVi = Math.floor(95 * scale * rewardMult);
@@ -10554,15 +10772,15 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
       if (userData.sourcePath !== 'force_push') userData.sourcePath = 'neutral';
       addSourcePathPoints(userData, 'neutral', success ? (great ? 4 : 3) : 1);
       addSourceProfile(userData, success ? { runtime: 1, throughput: 1 } : { runtime: 1 });
-      lines.push(success ? '+1 Nợ kỹ thuật · +Nhịp vận hành/Hiệu suất' : '+2 Nợ kỹ thuật · +Nhịp vận hành');
+      lines.push(success ? 'Ngươi giữ được phần có ích của vụ án, nhưng vẫn còn chút hậu quả phải dọn sau.' : 'Vụ án không vỡ hẳn, nhưng mối rối phía sau dày thêm một lớp.');
     }
 
     if (prep.key === 'ally') {
       congHien = Math.floor(congHien * 1.1);
-      lines.push('Đồng môn hỗ trợ: cống hiến +10%.');
+      lines.push('Đồng môn đứng ra làm chứng, nên công lao được ghi nhận rõ hơn.');
     } else if (prep.key === 'gear') {
       const gearCount = getEquippedGearKeys(userData).length;
-      if (gearCount > 0) lines.push(`Pháp bảo phát huy: ${gearCount} món trang bị được tính vào tỉ lệ.`);
+      if (gearCount > 0) lines.push('Pháp bảo trên người giúp ngươi đọc hiện trường chắc tay hơn.');
     }
 
     addTuViExp(userData, Math.max(0, tuVi));
@@ -10570,13 +10788,11 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     if (success && material) {
       const amount = 1 + Math.floor(mission.rank / 4) + (great ? 1 : 0);
       addCraftMaterialToUser(userData, material.key, amount);
-      lines.push(`${material.name} x${amount}`);
+      lines.push(`Ngươi thu được **${material.name} x${amount}** từ hiện trường.`);
     } else if (!success) {
-      lines.push('Không thu được vật chứng sạch. Ít nhất công án không nổ tung hoàn toàn, một tiêu chuẩn thấp nhưng thực tế.');
+      lines.push('Không thu được vật chứng sạch. Hiện trường còn quá nhiễu để mang về thứ đáng tin.');
     }
     const nextCase = { ...caseState, clueList: Array.isArray(caseState.clueList) ? [...caseState.clueList] : [] };
-    const story = getXuatSonCaseBlueprint(mission);
-    const actionLabel = getXuatSonPrepLabelForStage(caseState.stage, prep.key);
     const gainedClue = story.clues[(Number(nextCase.clueList.length) + Number(caseState.stage || 0)) % story.clues.length];
     if (success) {
       const clueGain = (prep.key === 'clue' ? 2 : 1) + (great ? 1 : 0);
@@ -10585,20 +10801,20 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
       nextCase.publicTrust = Math.min(5, Math.max(0, Number(nextCase.publicTrust ?? 3) + (prep.key === 'ally' || methodConfig.key === 'commit' ? 1 : methodConfig.key === 'force_push' ? -1 : 0)));
       nextCase.sourceNoise = Math.min(5, Math.max(0, Number(nextCase.sourceNoise ?? 2) + (prep.key === 'rush' || methodConfig.key === 'force_push' ? 1 : methodConfig.key === 'commit' ? -1 : 0)));
       if (!nextCase.clueList.includes(gainedClue)) nextCase.clueList.push(gainedClue);
-      lines.push(`Diễn biến: **${actionLabel}** phát hiện **${gainedClue}**.`);
+      lines.push(`Trong lúc **${actionLabel}**, ngươi phát hiện **${gainedClue}**.`);
       if (nextCase.clues >= 3 || great || (nextCase.evidence >= 4 && caseState.stage < 2)) {
         nextCase.stage = Math.min(3, Number(nextCase.stage || 0) + 1);
         nextCase.clues = 0;
-        lines.push(nextCase.stage >= 3 ? 'Kết án đã khép lại: hồ sơ chuyển thành chiến tích tông môn.' : `Mở trang tiếp theo: **${getXuatSonStageLabel(nextCase.stage)}**.`);
+        lines.push(nextCase.stage >= 3 ? 'Vụ án đã đi tới hồi kết. Phần còn lại là ghi vào công trạng tông môn.' : `Một trang mới mở ra: **${getXuatSonStageLabel(nextCase.stage)}**.`);
       }
     } else {
       nextCase.sourceNoise = Math.min(5, Number(nextCase.sourceNoise ?? 2) + (methodConfig.key === 'force_push' ? 2 : 1));
       nextCase.publicTrust = Math.max(0, Number(nextCase.publicTrust ?? 3) - (methodConfig.key === 'force_push' ? 1 : 0));
       nextCase.lastOutcome = 'Trục trặc, chứng cứ bẩn hơn trước.';
       if (methodConfig.key === 'force_push') {
-        lines.push('Dấu vết bị bẻ nhánh: lần sau công án này khó sạch hơn, nhưng Tà Đạo lại rất hài lòng. Thật đáng ngại.');
+        lines.push('Dấu vết bị bẻ nhánh. Ngươi vẫn có thể ép vụ án đi tiếp, nhưng cái giá sẽ khó sạch.');
       } else {
-        lines.push('Công án bị nhiễu thêm. Có lẽ lần sau đừng tin cái pháp trận tự nhận “ổn định”.');
+        lines.push('Vụ án bị che thêm một lớp. Muốn đi tiếp, ngươi phải chọn kỹ hơn ở pha sau.');
       }
     }
     if (nextCase.stage >= 3 && !nextCase.resolved) {
@@ -10608,19 +10824,19 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
       addCongHien(userData, Math.floor(40 * scale));
       addCraftMaterialToUser(userData, `vat_chung_${family.key}`, 2);
       addWeeklyContribution(userData, 12 + Math.floor(scale * 2), 'phá công án chuỗi');
-      lines.push(`Thưởng phá án chuỗi: +${chainBonus} tu vi · +${Math.floor(40 * scale)} cống hiến · Vật Chứng ${family.short} x2.`);
+      lines.push(`Công án khép lại. Tông môn ghi công lớn và thu được **Vật Chứng ${family.short} x2**.`);
     } else {
       addWeeklyContribution(userData, success ? (great ? 6 : 4) : 1, 'xuất sơn');
     }
     userData.xuatSonCases[caseState.key] = nextCase;
     if (nextCase.resolved || Number(nextCase.stage || 0) >= 3) {
       userData.activeXuatSon = null;
-      lines.push('Công án đã khép lại. Mở `/xuatson` để nhận công án khác nếu còn lượt. Một quy trình cuối cùng cũng có điểm kết, thật xúc động.');
+      lines.push('Công án đã khép lại. Ngươi có thể quay về bảng công án nếu hôm nay còn lượt.');
     } else {
       const previousAcceptedAt = Number(userData.activeXuatSon?.acceptedAt) || Date.now();
       const previousAcceptedDate = userData.activeXuatSon?.acceptedDate || getTodayString();
       userData.activeXuatSon = createActiveXuatSonState(mission, { acceptedAt: previousAcceptedAt, acceptedDate: previousAcceptedDate, chain: true });
-      lines.push(`Công án còn tiếp: **${getXuatSonStageLabel(nextCase.stage)}**. Chọn chuẩn bị bên dưới để làm tiếp, không cần nhận lại lệnh.`);
+      lines.push(`Công án còn tiếp: **${getXuatSonStageLabel(nextCase.stage)}**. Khung bên dưới đã mở lựa chọn tiếp theo, không cần nhận lại lệnh.`);
     }
     return [`+${Math.max(0, tuVi)} tu vi`, `+${Math.max(0, congHien)} cống hiến`, ...lines].join('\n');
   }
@@ -11295,7 +11511,7 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     const blocked = getMissionPartyStatusBlock(mission, users);
     if (blocked.length > 0) {
       await interaction.reply({
-        content: `Không thể xuất phát vì có thành viên chưa đủ trạng thái:\\n${blocked.join('\\n')}`.slice(0, 1900),
+        content: `Không thể xuất phát vì có thành viên chưa đủ trạng thái:\\n${blocked.join('\n')}`.slice(0, 1900),
         flags: MessageFlags.Ephemeral,
       });
       return;
@@ -11409,7 +11625,7 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
         enemy ? getPokemonCombatHpLine(enemy) : 'Địch đã tan biến.',
       ].join('\n'))
       .addFields({ name: 'Diễn biến', value: uiCompactValue(log, 420), inline: false })
-      .setFooter({ text: 'Giao chiến theo lượt: solo tự chọn skill, party xoay lượt từng người, quá hạn tự dùng chiêu 1.' });
+      .setFooter({ text: 'Giao chiến theo lượt: solo tự chọn skill, party xoay lượt từng người, hết Linh Khí thì phải Hồi tức hoặc dùng đan.' });
   }
 
   function buildMissionPokemonCombatRows(combat) {
@@ -11422,17 +11638,22 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
       row1.addComponents(
         new ButtonBuilder()
           .setCustomId(`${MISSION_COMBAT_SKILL_PREFIX}${combat.id}:${index}`)
-          .setLabel(skill ? `${index + 1}. ${uiTrim(skill.name, 28)}` : `${index + 1}. Chưa mở`)
+          .setLabel(skill ? `${index + 1}. ${uiTrim(skill.name, 22)} · ${getCombatSkillLinhKhiCost(skill, actor)}` : `${index + 1}. Chưa mở`)
           .setStyle(index === 3 ? ButtonStyle.Danger : ButtonStyle.Primary)
-          .setDisabled(!skill || (Number(skill.qiCost) || 0) > (Number(actor.qi) || 0)),
+          .setDisabled(!canUseCombatSkill(actor, skill)),
       );
     }
     const row2 = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`${MISSION_COMBAT_DEFEND_PREFIX}${combat.id}`).setLabel('Thủ thế').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`${MISSION_COMBAT_DEFEND_PREFIX}${combat.id}`).setLabel('Hồi tức').setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId(`${MISSION_COMBAT_AUTO_PREFIX}${combat.id}`).setLabel('Auto lượt').setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId(`${MISSION_COMBAT_ESCAPE_PREFIX}${combat.id}`).setLabel('Rút lui').setStyle(ButtonStyle.Secondary),
     );
-    return [row1, row2];
+    const row3 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`${MISSION_COMBAT_ITEM_MENU_PREFIX}${combat.id}:pill`).setLabel('Uống đan').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`${MISSION_COMBAT_ITEM_MENU_PREFIX}${combat.id}:talisman`).setLabel('Dùng phù').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`${MISSION_COMBAT_ITEM_MENU_PREFIX}${combat.id}:weapon`).setLabel('Đổi vũ khí').setStyle(ButtonStyle.Primary),
+    );
+    return [row1, row2, row3];
   }
 
   async function createMissionPokemonCombatSession(guild, mission, users) {
@@ -11486,9 +11707,9 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     const chance = getMissionWinChance(ratio);
     const missionMonster = getMissionMonster(mission);
     const lines = [];
-    lines.push(`Combat: **${success ? 'Thắng' : 'Thua'}** · Kèo trước trận **${Math.round(chance * 100)}%** · lực chiến **${ratio.toFixed(2)}x**`);
-    if (missionMonster) lines.push(`Địch: ${uiTrim(missionMonster.name || getMissionEnemyText(mission.type), 60)}`);
-    lines.push(compactPokemonCombatLog([...(combat.log || []), ...extraLines], 4));
+    lines.push(success ? 'Trận giao chiến lắng xuống, bụi linh khí còn vướng quanh hiện trường.' : 'Trận giao chiến vỡ nhịp. Đội buộc phải lùi lại trước khi thương thế nặng hơn.');
+    if (missionMonster) lines.push(`Đối thủ: **${uiTrim(missionMonster.name || getMissionEnemyText(mission.type), 60)}**.`);
+    lines.push(`Diễn biến nổi bật: ${compactPokemonCombatLog([...(combat.log || []), ...extraLines], 3)}`);
 
     if (success) {
       const isCounterKill = ratio < 1;
@@ -11496,8 +11717,8 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
       const tuViMultiplier = isCounterKill ? 1.1 : 1;
       const rewardEach = Math.floor((mission.rewardTotal / partySize) * rewardMultiplier);
       const tuViEach = Math.floor((mission.tuViRewardTotal / partySize) * tuViMultiplier);
-      lines.push(isCounterKill ? '**Phản sát thành công!**' : '**Dị Lỗi đã gục!**');
-      lines.push('Chưa phát thưởng tự động. Đội trưởng phải chọn cách xử lý tàn tích: **Hấp Tu Vi**, **Phong Ấn** hoặc **Trảm Sát**.');
+      lines.push(isCounterKill ? '**Đội phản sát thành công.**' : '**Dị Lỗi đã gục.**');
+      lines.push('Tàn tích còn nóng. Đội trưởng chọn cách xử lý phần còn lại: **Hấp Tu Vi**, **Phong Ấn** hoặc **Trảm Sát**.');
       mission.awaitingLootChoice = true;
       mission.pendingLoot = {
         createdAt: Date.now(),
@@ -11742,6 +11963,128 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     await handleMissionCombatAction(interaction, 'escape', 0);
   }
 
+
+  async function editMissionCombatPublicMessage(guild, mission, combat) {
+    const channelId = combat?.channelId;
+    const messageId = combat?.messageId;
+    if (!channelId || !messageId) return;
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    const message = channel?.messages?.fetch ? await channel.messages.fetch(messageId).catch(() => null) : null;
+    if (!message) return;
+    const users = loadUsers();
+    if (mission?.combat?.id) {
+      await message.edit({ embeds: [buildMissionPokemonCombatEmbed(mission.combat)], components: buildMissionPokemonCombatRows(mission.combat) }).catch(() => null);
+    } else {
+      await message.edit({ embeds: [buildMissionDetailEmbed(mission, users)], components: buildMissionDetailRows(mission) }).catch(() => null);
+    }
+  }
+
+  async function handleMissionCombatItemMenu(interaction) {
+    const raw = interaction.customId.slice(MISSION_COMBAT_ITEM_MENU_PREFIX.length);
+    const [combatId, kind = 'pill'] = raw.split(':');
+    const config = getCombatItemKindConfig(kind);
+    if (!config) {
+      await interaction.reply({ content: 'Loại vật phẩm combat không hợp lệ.', flags: MessageFlags.Ephemeral }).catch(() => null);
+      return;
+    }
+    const data = getMissionDataForToday();
+    const users = loadUsers();
+    const { mission, combat } = findMissionCombatSession(data, combatId);
+    if (!mission || !combat) {
+      await interaction.reply({ content: 'Trận nhiệm vụ này đã kết thúc hoặc mất dữ liệu.', flags: MessageFlags.Ephemeral }).catch(() => null);
+      return;
+    }
+    if (!mission.party.includes(interaction.user.id)) {
+      await interaction.reply({ content: 'Đạo hữu không thuộc tiểu đội nhiệm vụ này.', flags: MessageFlags.Ephemeral }).catch(() => null);
+      return;
+    }
+    const current = getMissionCombatCurrentActor(combat);
+    if (!current || current.id !== interaction.user.id) {
+      await interaction.reply({ content: current ? `Chưa tới lượt đạo hữu. Hiện là lượt <@${current.id}>.` : 'Trận đã mất lượt hiện tại.', flags: MessageFlags.Ephemeral }).catch(() => null);
+      return;
+    }
+    const userData = getOrCreateUser(users, interaction.user.id);
+    const candidates = getCombatInventoryCandidates(userData, kind);
+    if (!candidates.length) {
+      await interaction.reply({ content: `Không có vật phẩm phù hợp để **${config.label.toLowerCase()}** trong túi.`, flags: MessageFlags.Ephemeral }).catch(() => null);
+      return;
+    }
+    const embed = new EmbedBuilder()
+      .setColor(0x22c55e)
+      .setTitle(`🎒 Combat · ${config.label}`)
+      .setDescription('Chọn vật phẩm để dùng trong lượt này. Uống đan/dùng phù sẽ tiêu hao; đổi vũ khí không mất đồ nhưng vẫn tính là hành động lượt. Vì dĩ nhiên, không ai đổi kiếm giữa boss mà thời gian đứng yên cả.');
+    await interaction.reply({ embeds: [embed], components: [buildCombatItemSelectRow(MISSION_COMBAT_USE_ITEM_PREFIX, combat.id, kind, candidates)], flags: MessageFlags.Ephemeral }).catch(() => null);
+  }
+
+  async function handleMissionCombatUseItemSelect(interaction) {
+    const raw = interaction.customId.slice(MISSION_COMBAT_USE_ITEM_PREFIX.length);
+    const [combatId, kind = 'pill'] = raw.split(':');
+    const data = getMissionDataForToday();
+    const users = loadUsers();
+    const { mission, combat } = findMissionCombatSession(data, combatId);
+    if (!mission || !combat) {
+      await interaction.update({ content: 'Trận nhiệm vụ này đã kết thúc hoặc mất dữ liệu.', embeds: [], components: [] }).catch(() => null);
+      return;
+    }
+    if (!mission.party.includes(interaction.user.id)) {
+      await interaction.update({ content: 'Đạo hữu không thuộc tiểu đội nhiệm vụ này.', embeds: [], components: [] }).catch(() => null);
+      return;
+    }
+    const timeoutResult = await autoAdvanceExpiredMissionCombat(interaction.guild, data, mission, combat);
+    if (timeoutResult.done) {
+      saveMissionData(data);
+      await interaction.update({ content: 'Trận đã tự xử lý do quá hạn. Mở lại bảng combat để xem kết quả.', embeds: [], components: [] }).catch(() => null);
+      await editMissionCombatPublicMessage(interaction.guild, mission, combat).catch(() => null);
+      return;
+    }
+    const actor = getMissionCombatCurrentActor(combat);
+    if (!actor || actor.id !== interaction.user.id) {
+      await interaction.update({ content: actor ? `Chưa tới lượt đạo hữu. Hiện là lượt <@${actor.id}>.` : 'Trận đã mất lượt hiện tại.', embeds: [], components: [] }).catch(() => null);
+      return;
+    }
+    if (combat.locked) {
+      await interaction.update({ content: 'Trận đang xử lý lượt trước.', embeds: [], components: [] }).catch(() => null);
+      return;
+    }
+    combat.locked = true;
+    try {
+      const userData = getOrCreateUser(users, interaction.user.id);
+      const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => interaction.member);
+      const enemy = getMissionCombatEnemy(combat);
+      const lines = [];
+      const applied = await applyCombatInventoryItemAction({ guild: interaction.guild, member, userData, actor, enemy, kind, inventoryIndex: interaction.values?.[0], lines });
+      if (!applied.ok) {
+        combat.locked = false;
+        await interaction.update({ content: applied.message || 'Không thể dùng vật phẩm này.', embeds: [], components: [] }).catch(() => null);
+        return;
+      }
+      if (enemy && isCombatantAlive(enemy) && isCombatantAlive(actor)) resolveEnemyCounter(combat, lines);
+      combat.log.push(...lines);
+      combat.log = combat.log.slice(-12);
+      saveUsers(users);
+      const outcome = getMissionCombatOutcome(combat);
+      if (outcome.done) {
+        const beforeCombat = { ...combat };
+        await finishMissionPokemonCombat(interaction.guild, data, mission, combat, outcome.success, lines);
+        saveMissionData(data);
+        if (MISSION_COMBAT_TIMEOUTS.has(beforeCombat.id)) clearTimeout(MISSION_COMBAT_TIMEOUTS.get(beforeCombat.id));
+        MISSION_COMBAT_TIMEOUTS.delete(beforeCombat.id);
+        if (!mission.awaitingLootChoice) await finalizeMissionTicketAndCleanup(interaction, mission, data, loadUsers(), 'Nhiệm vụ đã kết thúc.').catch(() => null);
+        await interaction.update({ content: 'Đã dùng vật phẩm. Trận đã kết thúc, xem kết quả ở khung combat.', embeds: [], components: [] }).catch(() => null);
+        await editMissionCombatPublicMessage(interaction.guild, mission, beforeCombat).catch(() => null);
+        return;
+      }
+      advanceMissionCombatTurn(combat);
+      combat.locked = false;
+      saveMissionData(data);
+      scheduleMissionPokemonCombatTimeout(interaction.guild.id, combat.id);
+      await interaction.update({ content: `Đã dùng vật phẩm:\n${compactPokemonCombatLog(lines, 3)}`, embeds: [], components: [] }).catch(() => null);
+      await editMissionCombatPublicMessage(interaction.guild, mission, combat).catch(() => null);
+    } finally {
+      if (combat) combat.locked = false;
+    }
+  }
+
   async function handleMissionStrategy(interaction) {
     if (!interaction.inGuild()) {
       await interaction.reply({ content: 'Chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
@@ -11854,7 +12197,7 @@ ${blocked.join('\n')}`.slice(0, 1900), flags: MessageFlags.Ephemeral });
       const blocked = getMissionPartyStatusBlock(mission, users);
       if (blocked.length > 0) {
         await interaction.reply({
-          content: `Không thể ${mission.type === 'clean' ? 'xử lý nhiệm vụ' : 'giao chiến'} vì có thành viên bị trạng thái xấu:\\n${blocked.join('\\n')}`.slice(0, 1900),
+          content: `Không thể ${mission.type === 'clean' ? 'xử lý nhiệm vụ' : 'giao chiến'} vì có thành viên bị trạng thái xấu:\\n${blocked.join('\n')}`.slice(0, 1900),
           flags: MessageFlags.Ephemeral,
         });
         return;
@@ -11977,7 +12320,7 @@ ${blocked.join('\n')}`.slice(0, 1900), flags: MessageFlags.Ephemeral });
         userData.lastMissionDate = getTodayString();
         await syncMissionMemberRoles(guild, memberId, userData);
       }
-      if (dropLines.length > 0) { lines.push(''); lines.push('**Thưởng phụ:**'); lines.push(...dropLines.slice(0, 8)); }
+      if (dropLines.length > 0) { lines.push(''); lines.push('**Vật chứng thu thêm:**'); lines.push(...dropLines.slice(0, 5)); }
       return { summary: lines.join('\n').slice(0, 3800), success: true };
     }
 
@@ -12498,7 +12841,7 @@ ${scenario.text}`;
 
     await interaction.update({
       embeds: [buildShopItemEmbed(userData, type, 0, interaction.member)],
-      components: buildShopItemRows(interaction.user.id, type, 0, interaction.member),
+      components: buildShopItemRows(interaction.user.id, type, 0, interaction.member, userData),
     });
   }
 
@@ -12522,14 +12865,14 @@ ${scenario.text}`;
     normalizeInventoryData(userData);
     saveUsers(users);
 
-    const items = getShopItemsByType(type, interaction.member);
+    const items = getShopItemsByType(type, interaction.member, userData);
     const pageSize = 3;
     const pageCount = Math.max(1, Math.ceil(items.length / pageSize));
     const safeIndex = clampIndex(Number(indexText) || 0, pageCount);
 
     await interaction.update({
       embeds: [buildShopItemEmbed(userData, type, safeIndex, interaction.member)],
-      components: buildShopItemRows(interaction.user.id, type, safeIndex, interaction.member),
+      components: buildShopItemRows(interaction.user.id, type, safeIndex, interaction.member, userData),
     });
   }
 
@@ -12580,22 +12923,22 @@ ${scenario.text}`;
 
     if (item.type === 'bag') {
       const currentBag = getStorageBag(userData);
-      const usedAfterBuying = getInventoryUsed(userData) + 1;
+      const used = getInventoryUsed(userData);
 
       if ((item.grade ?? 0) <= (currentBag.grade ?? 0)) {
-        return { ok: false, message: `Đạo hữu đang dùng **${currentBag.name}**. Chỉ có thể mua túi phẩm cấp cao hơn.` };
+        return { ok: false, message: `Đạo hữu đang dùng **${currentBag.name}**. Chỉ có thể nâng lên túi có sức chứa/phẩm cấp cao hơn.` };
       }
 
-      if (usedAfterBuying > (item.capacity ?? 5)) {
+      if (used > (item.capacity ?? 5)) {
         return {
           ok: false,
-          message: `Không thể đổi **${item.name}** vì túi này chỉ chứa **${item.capacity ?? 5}** vật phẩm, nhưng sau khi mua đạo hữu sẽ có **${usedAfterBuying}** vật phẩm.`,
+          message: `Không thể nâng lên **${item.name}** vì túi này chỉ chứa **${item.capacity ?? 5}** ô, hiện đạo hữu đang có **${used}** vật phẩm.`,
         };
       }
 
       userData.congHienBalance = balance - price;
-      purchasedEntry = addItemToInventory(userData, item.key, getPurchaseInventoryOptions(item));
       userData.storageBag = item.key;
+      purgeStorageBagInventoryItems(userData);
     } else {
       if (!hasInventorySpace(userData)) {
         return { ok: false, message: getInventoryFullMessage(userData) };
@@ -12609,16 +12952,16 @@ ${scenario.text}`;
 
     const embed = new EmbedBuilder()
       .setColor(GOLD)
-      .setTitle('Đổi Vật Phẩm Thành Công')
-      .setDescription(`${interaction.user} đã đổi **${item.name}**.`)
+      .setTitle(item.type === 'bag' ? 'Nâng Túi Đồ Thành Công' : 'Đổi Vật Phẩm Thành Công')
+      .setDescription(item.type === 'bag' ? `${interaction.user} đã nâng không gian túi đồ bằng **${item.name}**.` : `${interaction.user} đã đổi **${item.name}**.`)
       .addFields(
         { name: 'Loại', value: getItemTypeText(item.type), inline: true },
         { name: 'Giá', value: `${price} cống hiến`, inline: true },
         { name: 'Cống hiến còn lại', value: `${userData.congHienBalance}`, inline: true },
-        { name: 'Hiệu ứng', value: item.effect, inline: false },
+        { name: item.type === 'bag' ? 'Sức chứa mới' : 'Hiệu ứng', value: item.type === 'bag' ? `Túi chính: **${item.name}** · **${item.capacity ?? 5} ô**. Không chiếm ô hành trang, không phải pháp khí.` : item.effect, inline: false },
       );
 
-    if (item.sourceFamilyName || item.sourceItemGroupName || item.itemClass || Number.isFinite(Number(item.stability))) {
+    if (item.type !== 'bag' && (item.sourceFamilyName || item.sourceItemGroupName || item.itemClass || Number.isFinite(Number(item.stability)))) {
       embed.addFields({
         name: 'Đạo Cụ Source',
         value: [
@@ -12820,7 +13163,7 @@ ${scenario.text}`;
     const item = getShopItemByKey(key);
 
     if (!item || !['artifact', 'weapon', 'armor', 'tool', 'talisman', 'bag'].includes(item.type)) {
-      await interaction.reply({ content: 'Chỉ có thể trang bị vũ khí, pháp bảo, giáp, dụng cụ, phù lục hoặc túi trữ vật.', flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: 'Chỉ có thể trang bị vũ khí, pháp bảo, giáp, dụng cụ hoặc phù lục. Túi đồ được nâng trực tiếp trong shop.', flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -12828,22 +13171,40 @@ ${scenario.text}`;
     const userData = getOrCreateUser(users, interaction.user.id);
     normalizeInventoryData(userData);
 
-    if (!hasInventoryItem(userData, item.key) && item.key !== DEFAULT_STORAGE_BAG) {
+    if (item.type !== 'bag' && !hasInventoryItem(userData, item.key)) {
       await interaction.reply({ content: `Đạo hữu chưa sở hữu **${item.name}**.`, flags: MessageFlags.Ephemeral });
       return;
     }
 
+    if (item.type === 'bag') {
+      const currentBag = getStorageBag(userData);
+      await interaction.reply({ content: `Túi đồ không còn là pháp khí để trang bị. Túi hiện tại của đạo hữu là **${currentBag.name}** · **${getStorageCapacity(userData)} ô**. Muốn nâng thêm thì vào **/shop → Cache Túi / Storage** rồi bấm **Nâng túi**.`, flags: MessageFlags.Ephemeral });
+      return;
+    }
+
     if (isPhapBaoItem(item) || ['tool', 'talisman'].includes(item.type)) {
-      const slotByType = { weapon: 'equippedWeapon', artifact: 'equippedArtifact', armor: 'equippedArmor', tool: 'equippedTool', talisman: 'equippedTalisman' };
-      const slot = slotByType[item.type] || 'equippedArtifact';
-      userData[slot] = item.key;
-      if (!userData.equippedArtifact && item.type === 'weapon') userData.equippedArtifact = item.key; // tương thích dữ liệu cũ
-      if (!userData.equippedWeapon && item.type === 'artifact') userData.equippedWeapon = item.key;
+      const slotKey = getEquipmentSlotKeyForItemType(item.type);
+      const slotConfig = getEquipmentSlotConfig(slotKey);
+      if (!slotConfig) {
+        await interaction.reply({ content: 'Loại trang bị này chưa có slot phù hợp.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const previousKey = userData[slotConfig.field];
+      userData[slotConfig.field] = item.key;
       saveUsers(users);
       const entry = getBestInventoryEntryByKey(userData, item.key);
       const profile = getItemCombatProfile(item, entry);
-      await interaction.reply({ content: `Đã trang bị **${item.name}** vào slot **${getEquipmentSlotLabel(item.type)}**. Hiệu ứng: ${item.effect}
-Combat: ${profile?.text || 'Không có hiệu ứng combat trực tiếp.'}`, flags: MessageFlags.Ephemeral });
+      const previousItem = previousKey ? getShopItemByKey(previousKey) : null;
+      await interaction.reply({
+        content: [
+          `Đã trang bị **${item.name}** vào slot **${slotConfig.label}**.`,
+          previousItem ? `Đã thay **${previousItem.name}** khỏi slot này.` : null,
+          `Hiệu ứng: ${item.effect}`,
+          `Combat: ${profile?.text || 'Không có hiệu ứng combat trực tiếp.'}`,
+          `Muốn tháo ra dùng \`/thaotrangbi slot:${slotKey}\`.`,
+        ].filter(Boolean).join('\n'),
+        flags: MessageFlags.Ephemeral,
+      });
       return;
     }
 
@@ -12863,6 +13224,57 @@ Combat: ${profile?.text || 'Không có hiệu ứng combat trực tiếp.'}`, fl
     saveUsers(users);
 
     await interaction.reply({ content: `Đã dùng **${item.name}** làm túi trữ vật chính. Sức chứa: ${item.capacity} vật phẩm.`, flags: MessageFlags.Ephemeral });
+  }
+
+  async function handleThaoTrangBi(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Tháo trang bị chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const slot = interaction.options.getString('slot', true);
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    normalizeInventoryData(userData);
+
+    const removed = [];
+    if (slot === 'all') {
+      for (const config of Object.values(EQUIPMENT_SLOT_CONFIG)) {
+        const key = userData[config.field];
+        if (!key) continue;
+        const item = getShopItemByKey(key);
+        removed.push(`**${config.label}**: ${item?.name ?? key}`);
+        userData[config.field] = null;
+      }
+    } else {
+      const config = getEquipmentSlotConfig(slot);
+      if (!config) {
+        await interaction.reply({ content: 'Slot tháo trang bị không hợp lệ.', flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const key = userData[config.field];
+      if (!key) {
+        await interaction.reply({ content: `Slot **${config.label}** hiện đang trống.`, flags: MessageFlags.Ephemeral });
+        return;
+      }
+      const item = getShopItemByKey(key);
+      removed.push(`**${config.label}**: ${item?.name ?? key}`);
+      userData[config.field] = null;
+    }
+
+    if (removed.length === 0) {
+      await interaction.reply({ content: 'Đạo hữu hiện không mặc/trang bị món nào để tháo.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    saveUsers(users);
+    const embed = new EmbedBuilder()
+      .setColor(0x64748b)
+      .setTitle('Đã Tháo Trang Bị')
+      .setDescription(removed.join('\n'))
+      .addFields({ name: 'Ghi chú', value: 'Vật phẩm vẫn nằm trong túi đồ. Tháo trang bị không tiêu hao vật phẩm, chỉ gỡ khỏi slot đang dùng.', inline: false });
+
+    await interaction.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
   }
 
   async function handleDungItem(interaction) {
@@ -13459,6 +13871,7 @@ Combat: ${profile?.text || 'Không có hiệu ứng combat trực tiếp.'}`, fl
     const users = loadUsers();
     const userData = getOrCreateUser(users, interaction.user.id);
     normalizeInventoryData(userData);
+    const member = await interaction.guild.members.fetch(interaction.user.id);
 
     const itemIndex = getInventoryItemIndex(userData, item.key, (entry) => getShopItemByKey(getInventoryItemKey(entry))?.type !== 'upgrade_stone');
 
@@ -13483,10 +13896,11 @@ Combat: ${profile?.text || 'Không có hiệu ứng combat trực tiếp.'}`, fl
     }
 
     const stone = getShopItemByKey(rule.stone);
-    const balance = getSpendableCongHien(userData);
+    const upgradeCost = getItemUpgradeTuViCost(item, entry, rule);
+    const tuViBudget = getSpendableTuViForUpgrade(member, userData);
 
-    if (balance < rule.cost) {
-      await interaction.editReply(`Không đủ cống hiến để nâng phẩm. Cần **${rule.cost}**, hiện có **${balance}**.`);
+    if (tuViBudget.spendable < upgradeCost) {
+      await interaction.editReply(`Không đủ tu vi khả dụng để nâng phẩm. Cần **${uiNumber(upgradeCost)}** tu vi, hiện có thể dùng **${uiNumber(tuViBudget.spendable)}**. Phần tu vi giữ cảnh giới hiện tại không bị đốt, vì tụt cảnh giới chỉ để nâng kiếm là kiểu kế toán tà đạo quá đà.`);
       return;
     }
 
@@ -13506,7 +13920,11 @@ Combat: ${profile?.text || 'Không có hiệu ứng combat trực tiếp.'}`, fl
     removeItemFromInventory(userData, rule.stone);
     if (usedSafeDeploy) removeItemFromInventory(userData, 'safe_deploy_phu');
     if (usedRollback) removeItemFromInventory(userData, 'rollback_phu');
-    userData.congHienBalance = Math.max(0, balance - rule.cost);
+    const spendResult = spendTuViForUpgrade(member, userData, upgradeCost);
+    if (!spendResult.ok) {
+      await interaction.editReply(`Tu vi khả dụng vừa thay đổi. Cần **${uiNumber(upgradeCost)}**, hiện có thể dùng **${uiNumber(spendResult.spendable)}**.`);
+      return;
+    }
 
     if (success) {
       entry.quality = rule.next;
@@ -13533,7 +13951,8 @@ Combat: ${profile?.text || 'Không có hiệu ứng combat trực tiếp.'}`, fl
       .setDescription(lines.join('\n'))
       .addFields(
         { name: 'Vật phẩm', value: beforeText, inline: false },
-        { name: 'Chi phí', value: `${stone?.name ?? rule.stone} + ${rule.cost} cống hiến`, inline: false },
+        { name: 'Chi phí', value: `${stone?.name ?? rule.stone} + ${uiNumber(upgradeCost)} tu vi`, inline: false },
+        { name: 'Tu vi còn lại', value: `**${uiNumber(userData.tuViExp)}**`, inline: true },
         { name: 'Tỉ lệ thành công', value: `${Math.round(successRate * 100)}%`, inline: true },
         { name: 'Bảo hộ', value: [usedSafeDeploy ? 'Safe Deploy Phù +10%' : null, usedRollback ? 'Rollback Phù chặn nguyền' : null].filter(Boolean).join('\n') || 'Không dùng', inline: true },
         { name: 'Hiện tại', value: getInventoryItemDisplay(userData.inventory[itemIndex]), inline: false },
@@ -15103,8 +15522,96 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
       armor: 'Giáp/Đạo bào',
       tool: 'Pháp cụ nghề',
       talisman: 'Phù hộ thân',
-      bag: 'Túi trữ vật',
+      bag: 'Nâng không gian túi',
     }[type] || 'Trang bị';
+  }
+
+  const EQUIPMENT_SLOT_CONFIG = {
+    weapon: { field: 'equippedWeapon', label: 'Vũ khí chính', itemTypes: ['weapon'] },
+    artifact: { field: 'equippedArtifact', label: 'Pháp bảo lõi', itemTypes: ['artifact'] },
+    armor: { field: 'equippedArmor', label: 'Giáp/Đạo bào', itemTypes: ['armor'] },
+    tool: { field: 'equippedTool', label: 'Pháp cụ nghề', itemTypes: ['tool'] },
+    talisman: { field: 'equippedTalisman', label: 'Phù hộ thân', itemTypes: ['talisman'] },
+  };
+
+  function getEquipmentSlotConfig(slot) {
+    return EQUIPMENT_SLOT_CONFIG[String(slot || '').toLowerCase()] || null;
+  }
+
+  function getEquipmentSlotKeyForItemType(type) {
+    return {
+      weapon: 'weapon',
+      artifact: 'artifact',
+      armor: 'armor',
+      tool: 'tool',
+      talisman: 'talisman',
+    }[type] || null;
+  }
+
+  function getItemUpgradeCongHienCost(item, entry, rule) {
+    const baseCost = Math.max(1, Number(rule?.cost) || 0);
+    const typeMult = {
+      weapon: 1.35,
+      artifact: 1.35,
+      armor: 1.20,
+      tool: 1.10,
+      talisman: 1.05,
+    }[item?.type] || 1;
+    const quality = getInventoryItemQuality(entry);
+    const qualityMult = 1 + Math.max(0, getQualityIndex(quality.key)) * 0.08;
+    const rarityMult = ['thanh_ban', 'doc_ban'].includes(item?.itemRarity) ? 1.15 : 1;
+    const curseMult = getInventoryItemCurse(entry) ? 1.10 : 1;
+    return Math.max(1, Math.round(baseCost * typeMult * qualityMult * rarityMult * curseMult));
+  }
+
+  function getItemUpgradeTuViCost(item, entry, rule) {
+    const baseCost = Math.max(1, Number(rule?.cost) || 0);
+    const typeMult = {
+      weapon: 1.45,
+      artifact: 1.35,
+      armor: 1.20,
+      tool: 1.10,
+      talisman: 1.05,
+    }[item?.type] || 1;
+    const quality = getInventoryItemQuality(entry);
+    const qualityMult = 1 + Math.max(0, getQualityIndex(quality.key)) * 0.12;
+    const rarityMult = ['thanh_ban', 'doc_ban'].includes(item?.itemRarity) ? 1.18 : 1;
+    const curseMult = getInventoryItemCurse(entry) ? 1.12 : 1;
+    return Math.max(1, Math.round(baseCost * typeMult * qualityMult * rarityMult * curseMult));
+  }
+
+  function getSpendableTuViForUpgrade(member, userData) {
+    const currentExp = Math.max(0, Number(userData?.tuViExp) || 0);
+    const level = member ? getCurrentTuViLevel(member, currentExp) : getLevelFromExp(currentExp);
+    const protectedMin = expMinimumForLevel(level);
+
+    return {
+      currentExp,
+      level,
+      protectedMin,
+      spendable: Math.max(0, currentExp - protectedMin),
+    };
+  }
+
+  function spendTuViForUpgrade(member, userData, amount) {
+    const cost = Math.max(0, Math.round(Number(amount) || 0));
+    const info = getSpendableTuViForUpgrade(member, userData);
+
+    if (info.spendable < cost) {
+      return { ok: false, cost, ...info };
+    }
+
+    userData.tuViExp = Math.max(info.protectedMin, info.currentExp - cost);
+    return { ok: true, cost, before: info.currentExp, after: userData.tuViExp, ...info };
+  }
+
+  function spendCongHienBalance(userData, amount) {
+    normalizeInventoryData(userData);
+    const cost = Math.max(0, Math.round(Number(amount) || 0));
+    const balance = getSpendableCongHien(userData);
+    if (balance < cost) return { ok: false, balance, cost };
+    userData.congHienBalance = Math.max(0, balance - cost);
+    return { ok: true, balance, cost, after: userData.congHienBalance };
   }
 
   function getEquippedGearKeys(userData) {
@@ -15230,7 +15737,7 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
 
 
   function formatCombatSkill(skill) {
-    return `${skill.emoji || '✦'} **${skill.name}** · lực ${Math.round((Number(skill.power) || 1) * 100)} · chính xác ${Math.round((Number(skill.accuracy) || 1) * 100)}% · khí ${Number(skill.qiCost) || 0}${skill.effect ? `\n↳ ${skill.effect}` : ''}`;
+    return `${skill.emoji || '✦'} **${skill.name}** · lực ${Math.round((Number(skill.power) || 1) * 100)} · chính xác ${Math.round((Number(skill.accuracy) || 1) * 100)}% · Linh Khí ${getCombatSkillLinhKhiCost(skill)}${skill.effect ? `\n↳ ${skill.effect}` : ''}`;
   }
 
   async function handleSkill(interaction) {
@@ -16056,12 +16563,12 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
 
   function getShopCategoryConfigs() {
     return [
-      { type: 'artifact', emoji: '⚔️', title: 'Đạo Cụ Source', note: 'Vũ khí, pháp bảo và giáp theo 12 loại lỗi; có phẩm chất, chỉ số Source và độ ổn định.' },
-      { type: 'tool', emoji: '🧰', title: 'Pháp Cụ Debug/Patch', note: 'Dụng cụ hỗ trợ nghề nghiệp, sự cố, craft và chống lỗi.' },
-      { type: 'pill', emoji: '💊', title: 'Source Đan/Dịch', note: 'Đan dược Source dùng trực tiếp bằng /dung item.' },
-      { type: 'talisman', emoji: '📜', title: 'Lệnh/Phù Source', note: 'Patch, rollback, firewall, xác minh và hộ thân theo loại lỗi.' },
-      { type: 'upgrade_stone', emoji: '💎', title: 'Source Refactor Thạch', note: 'Đá nâng phẩm cho /nangpham, đồng bộ hệ Source Phẩm.' },
-      { type: 'bag', emoji: '🎒', title: 'Cache Túi / Storage', note: 'Mở rộng sức chứa hành trang theo Data/Cache Source.' },
+      { type: 'suggest', emoji: '✨', title: 'Gợi Ý Cho Ta', note: 'Shop tự chọn món đáng mua theo túi đồ, build, nghề nghiệp, trang bị và mục tiêu craft.' },
+      { type: 'pill', emoji: '💊', title: 'Đan Dược', note: 'Đan dùng ngoài combat hoặc trong combat: hồi phục, giảm Tâm Ma, giữ nhịp đột phá.' },
+      { type: 'talisman', emoji: '📜', title: 'Phù Lục', note: 'Phù tiêu hao trong giao chiến/bí cảnh: tạo khiên, giảm rủi ro, cứu tình huống xấu.' },
+      { type: 'artifact', emoji: '⚔️', title: 'Pháp Khí & Trang Bị', note: 'Vũ khí, pháp bảo và giáp. Mua để trang bị, đổi vũ khí trong combat hoặc tăng lực xử lý.' },
+      { type: 'bag', emoji: '🎒', title: 'Túi Đồ', note: 'Nâng không gian túi chính. Không phải pháp khí, không chiếm slot trang bị.' },
+      { type: 'upgrade_stone', emoji: '💎', title: 'Craft / Nâng Phẩm', note: 'Đá refactor và vật phẩm hỗ trợ nâng phẩm/craft món kế tiếp.' },
     ];
   }
 
@@ -16069,42 +16576,141 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
     return getShopCategoryConfigs().find((category) => category.type === type) ?? getShopCategoryConfigs()[0];
   }
 
-  function getShopItemsByType(type, member = null) {
+  function isStorageUpgradeItem(item) {
+    return item?.type === 'bag';
+  }
+
+  function getStorageUpgradeState(userData, item) {
+    const currentBag = getStorageBag(userData);
+    const currentCapacity = Number(currentBag?.capacity) || 5;
+    const targetCapacity = Number(item?.capacity) || currentCapacity;
+    const currentGrade = Number(currentBag?.grade) || 0;
+    const targetGrade = Number(item?.grade) || 0;
+    const used = getInventoryUsed(userData);
+    const extraSlots = Math.max(0, targetCapacity - currentCapacity);
+    const isCurrent = item?.key === currentBag?.key;
+    const isDowngrade = targetGrade <= currentGrade && !isCurrent;
+
+    return { currentBag, currentCapacity, targetCapacity, currentGrade, targetGrade, used, extraSlots, isCurrent, isDowngrade };
+  }
+
+  function formatStorageUpgradeShopText(userData, item, member = null) {
+    const state = getStorageUpgradeState(userData, item);
+    const price = getShopItemPrice(item, member);
+    const status = state.isCurrent
+      ? 'Đang dùng'
+      : state.isDowngrade
+        ? 'Không cần nâng'
+        : `Nâng thêm +${state.extraSlots} ô`;
+
+    return [
+      `Loại: **Nâng không gian túi đồ** · Giá: **${price}**`,
+      `Sức chứa: **${state.currentCapacity} → ${state.targetCapacity} ô** · Đang dùng: **${state.currentBag?.name ?? 'Túi mặc định'}**`,
+      `Tình trạng: **${status}** · Đang chứa: **${state.used}/${state.currentCapacity} ô**`,
+      `Tác dụng: ${item.effect}`,
+      'Ghi chú: Mua xong tự nâng túi chính, **không phải pháp khí**, không chiếm slot trang bị.',
+    ].join('\n');
+  }
+
+  function formatStorageUpgradeLegacyLine(userData, item, member = null) {
+    const state = getStorageUpgradeState(userData, item);
+    const price = getShopItemPrice(item, member);
+    const status = state.isCurrent ? 'đang dùng' : state.isDowngrade ? 'không cần nâng' : `+${state.extraSlots} ô`;
+    return `\`${item.key}\` - **${item.name}**\nGiá: ${price} cống hiến · **Nâng túi đồ ${state.currentCapacity} → ${state.targetCapacity} ô** (${status})\n${item.effect}`;
+  }
+
+  function purgeStorageBagInventoryItems(userData) {
+    normalizeInventoryData(userData);
+    userData.inventory = userData.inventory.filter((entry) => getShopItemByKey(getInventoryItemKey(entry))?.type !== 'bag');
+  }
+
+  function getShopItemsByType(type, member = null, userData = null) {
+    if (type === 'suggest') {
+      return getPersonalSuggestedShopItems(userData || createDefaultUserData(), member);
+    }
+    if (type === 'upgrade_stone') {
+      return getDailyShopUnlockedItems(member).filter((item) => ['upgrade_stone', 'tool'].includes(item.type));
+    }
     const categoryTypes = type === 'artifact' ? ['artifact', 'weapon', 'armor'] : [type];
     return getDailyShopUnlockedItems(member).filter((item) => categoryTypes.includes(item.type));
   }
 
   function getRoleSuggestedShopItems(member = null) {
-    const tier = getShopTierForMember(member);
+    return getPersonalSuggestedShopItems(createDefaultUserData(), member).slice(0, 3);
+  }
+
+  function getPersonalSuggestedShopItems(userData, member = null) {
+    normalizeInventoryData(userData);
     const dailyItems = getDailyShopUnlockedItems(member);
-    const phapBao = dailyItems
-      .filter((item) => ['artifact', 'weapon', 'armor'].includes(item.type) && (item.minShopTier === tier || (!item.minShopTier && tier === 'tap_dich')) && isShopItemUnlockedForMember(item, member))
-      .slice(0, 2);
-    const support = dailyItems
-      .filter((item) => ['pill', 'talisman', 'upgrade_stone'].includes(item.type) && isShopItemUnlockedForMember(item, member))
-      .slice(0, 1);
-    return [...phapBao, ...support].slice(0, 3);
+    const spendable = getSpendableCongHien(userData);
+    const dao = getUserDaoNgheDefinition(userData);
+    const bagUsedRatio = getInventoryUsed(userData) / Math.max(1, getStorageCapacity(userData));
+    const equippedStats = getCombinedEquippedDirectStats(userData);
+    const craft = getBestNextCraftTarget(userData, member);
+    const riskScore = Number(userData.entropy || 0) + Number(userData.technicalDebt || 0) + Number(userData.nghiepLuc || 0);
+    const scored = dailyItems.map((item) => {
+      const price = getShopItemPrice(item, member);
+      const stats = getItemDirectStats(item);
+      let score = 0;
+      if (price <= spendable) score += 18;
+      else score -= 18;
+      if (item.professionKey && dao?.key === item.professionKey) score += 30;
+      if (isStorageUpgradeItem(item)) score += bagUsedRatio > 0.82 ? 90 : bagUsedRatio > 0.62 ? 45 : 8;
+      if (item.type === 'pill') score += riskScore > 30 || isTemporaryStatusActive(userData, 'Tâm Ma Quấn Thân') ? 65 : 18;
+      if (item.type === 'talisman') score += userData.equippedTalisman ? 18 : 38;
+      if (isPhapBaoItem(item)) score += Math.max(0, (Number(stats.lucChien) || 0) - (Number(equippedStats.lucChien) || 0)) + 24;
+      if (item.type === 'tool') score += dao ? 32 : 16;
+      if (item.type === 'upgrade_stone') score += craft?.missingTotal === 0 ? 26 : 14;
+      if (craft?.missing?.some((cost) => cost.key === item.key || item.name?.includes(cost.name))) score += 70;
+      return { item, score };
+    }).sort((a, b) => b.score - a.score);
+    return scored.map((entry) => entry.item).slice(0, 9);
+  }
+
+  function getCombinedEquippedDirectStats(userData) {
+    const total = createEmptyDirectStats();
+    for (const key of getEquippedGearKeys(userData)) {
+      const item = getShopItemByKey(key);
+      const entry = getBestInventoryEntryByKey(userData, key);
+      const stats = getItemDirectStats(item, entry);
+      for (const statKey of DIRECT_STAT_KEYS) total[statKey] += Number(stats[statKey]) || 0;
+    }
+    return total;
   }
 
   function buildShopMenuEmbed(userData, member = null) {
     const tier = getShopTierForMember(member);
     const categories = getShopCategoryConfigs().slice(0, 6);
+    const spendable = getSpendableCongHien(userData);
+    const bag = getStorageBag(userData);
+    const used = getInventoryUsed(userData);
+    const capacity = getStorageCapacity(userData);
+    const craft = getBestNextCraftTarget(userData, member);
+    const suggestions = getPersonalSuggestedShopItems(userData, member).slice(0, 3);
+    const suggestionLines = suggestions.map((item, index) => {
+      const price = getShopItemPrice(item, member);
+      const label = getShopFitLabel(userData, item, member);
+      return `**${index + 1}. ${item.name}** · ${price} cống hiến · ${label}`;
+    });
 
     return new EmbedBuilder()
       .setColor(GOLD)
-      .setTitle('Tông Môn Bảo Khố · Đạo Nghiệp')
+      .setTitle('🏮 Bảo Khố Tông Môn')
       .setDescription([
         `Cấp shop: **${getShopTierLabel(tier)}**`,
-        `Cống hiến: **${getSpendableCongHien(userData)}**`,
-        `Hôm nay: **${DAILY_SHOP_LIMIT} món**`,
-        'Shop chỉ bày Đạo Cụ Source, Source đan, Cache túi và Refactor thạch; đồ bảo khố cũ đã ẩn khỏi danh sách.',
-      ].join('\n'))
+        `Cống hiến: **${spendable}**`,
+        `Túi đồ: **${used}/${capacity} ô** · ${bag?.name ?? 'Túi mặc định'}`,
+        '',
+        '**Gợi ý nhanh**',
+        suggestionLines.length ? suggestionLines.join('\n') : 'Chưa có gợi ý rõ. Có lẽ hôm nay tông môn cũng hơi keo.',
+        craft ? `\nCraft kế tiếp: **${craft.recipe.outputName}** · ${craft.missingTotal > 0 ? `thiếu ${craft.missingTotal}/${craft.costTotal} nguyên liệu` : 'đã đủ nguyên liệu'}.` : '',
+      ].filter(Boolean).join('\n'))
       .addFields({
-        name: 'Danh mục',
-        value: categories.map((category, index) => `**${index + 1}.** ${category.emoji} ${category.title}`).join('\n'),
+        name: 'Chọn khu',
+        value: categories.map((category, index) => `**${index + 1}.** ${category.emoji} **${category.title}** · ${category.note}`).join('\n'),
         inline: false,
       })
-      .setFooter({ text: '6 mục · 2 hàng · chọn bên dưới' });
+      .setFooter({ text: 'Mặc định ưu tiên dễ hiểu. Chỉ số kỹ thuật được rút gọn để người chơi còn sống.' });
   }
 
 
@@ -16113,10 +16719,9 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
       new ButtonBuilder()
         .setCustomId(`${SHOP_CATEGORY_BUTTON_PREFIX}${userId}:${category.type}`)
         .setLabel(`${category.emoji} ${category.title}`.slice(0, 80))
-        .setStyle(ButtonStyle.Primary),
+        .setStyle(category.type === 'suggest' ? ButtonStyle.Success : ButtonStyle.Primary),
     );
 
-    // Mục lục chính cố định 6 mục, chia 2 hàng x 3 nút cho cân.
     return [
       new ActionRowBuilder().addComponents(...buttons.slice(0, 3)),
       new ActionRowBuilder().addComponents(...buttons.slice(3, 6)),
@@ -16126,7 +16731,7 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
 
   function buildShopItemEmbed(userData, type, itemIndex = 0, member = null) {
     const category = getShopCategoryByType(type);
-    const items = getShopItemsByType(category.type, member);
+    const items = getShopItemsByType(category.type, member, userData);
     const pageSize = 3;
     const pageCount = Math.max(1, Math.ceil(items.length / pageSize));
     const safePage = clampIndex(Number(itemIndex) || 0, pageCount);
@@ -16138,57 +16743,131 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
       return new EmbedBuilder()
         .setColor(GOLD)
         .setTitle(`Bảo Khố · ${category.title}`)
-        .setDescription('Danh mục này chưa có vật phẩm.');
+        .setDescription('Danh mục này chưa có vật phẩm phù hợp hôm nay. Tông môn rất thích làm người ta thất vọng.');
     }
 
+    const intro = category.type === 'suggest'
+      ? 'Các món dưới đây được chọn theo tình trạng nhân vật hiện tại: túi đồ, nghề nghiệp, trang bị, rủi ro và mục tiêu craft.'
+      : category.note;
+
     const embed = new EmbedBuilder()
-      .setColor(GOLD)
-      .setTitle(`Bảo Khố · ${category.title}`)
+      .setColor(category.type === 'suggest' ? 0x22c55e : GOLD)
+      .setTitle(`🏮 Bảo Khố · ${category.title}`)
       .setDescription([
         `**Cấp shop:** ${tierLabel}`,
         `**Cống hiến:** ${spendable}`,
-        `**Hiển thị:** 3 món/trang`,
+        intro,
       ].join('\n'));
 
     visibleItems.forEach((item, index) => {
-      const ownedCount = countInventoryItem(userData, item.key);
-      const price = getShopItemPrice(item, member);
-      const itemType = getItemTypeText(item.type);
-      const qualityLine = isPhapBaoItem(item)
-        ? `Cấp rơi: **${getPhapBaoQualityRollText(item)}**`
-        : null;
-      const classLine = item.itemClass ? `Đẳng cấp: **${getSourceItemClass(item.itemClass).name}**` : (item.weaponGrade ? `Cấp nền: **${item.weaponGrade}**` : null);
-      const rarityLine = item.itemRarity ? `Độ hiếm: **${getSourceItemRarity(item.itemRarity).name}**` : null;
-      const sourceFamily = item.sourceFamilyName || getSourceDefectFamily(item.sourceFamily || item.family)?.name || null;
-      const sourceGroup = item.sourceItemGroupName || getSourceItemGroup(item.sourceItemGroup)?.name || null;
-      const sourceLine = sourceFamily || sourceGroup ? `Source: **${[sourceFamily, sourceGroup].filter(Boolean).join(' · ')}**` : null;
-      const stabilityLine = Number.isFinite(Number(item.stability)) ? `Ổn định: **${item.stability}/100**` : null;
-      const professionLine = `Nghề hợp: **${getItemProfessionText(item)}**`;
-      const sourceStatsLine = item.sourceStats ? `Source stat: ${formatSourceStatsCompact(item.sourceStats)}${item.riskStats ? ` · Rủi ro: ${formatSourceRiskStatsCompact(item.riskStats)}` : ''}` : null;
       embed.addFields({
         name: `${safePage * pageSize + index + 1}. ${item.name}`,
-        value: [
-          `Loại: **${itemType}** · Giá: **${price}** · Sở hữu: **${ownedCount}**`,
-          qualityLine,
-          classLine,
-          rarityLine,
-          sourceLine,
-          stabilityLine,
-          professionLine,
-          sourceStatsLine,
-          `Chỉ số:\n${formatDirectStatsCompact(getItemDirectStats(item))}`,
-        ].filter(Boolean).join('\n'),
+        value: formatShopItemReadableCard(userData, item, member),
         inline: false,
       });
     });
 
-    return embed.setFooter({ text: `Trang ${safePage + 1}/${pageCount}` });
+    return embed.setFooter({ text: `Trang ${safePage + 1}/${pageCount} · Shop hiển thị tác dụng trước, số kỹ thuật sau.` });
   }
 
+  function formatShopItemReadableCard(userData, item, member = null) {
+    const ownedCount = countInventoryItem(userData, item.key);
+    const price = getShopItemPrice(item, member);
+    const canBuy = getSpendableCongHien(userData) >= price;
 
-  function buildShopItemRows(userId, type, itemIndex = 0, member = null) {
+    if (isStorageUpgradeItem(item)) {
+      const state = getStorageUpgradeState(userData, item);
+      const fit = state.isCurrent ? 'Đang dùng' : state.isDowngrade ? 'Chưa nên mua' : getShopFitLabel(userData, item, member);
+      return [
+        `Loại: **Nâng không gian túi đồ** · Giá: **${price}** · ${canBuy ? 'Đủ cống hiến' : 'Chưa đủ cống hiến'}`,
+        `Đánh giá: **${fit}**`,
+        `Mua xong: túi chính **${state.currentCapacity} → ${state.targetCapacity} ô** · đang chứa **${state.used}/${state.currentCapacity} ô**`,
+        'Ghi chú: Không phải pháp khí, không vào inventory, không chiếm slot trang bị.',
+      ].join('\n');
+    }
+
+    const detailLines = [
+      `Loại: **${getReadableShopTypeText(item)}** · Giá: **${price}** · Sở hữu: **${ownedCount}** · ${canBuy ? 'Đủ cống hiến' : 'Chưa đủ cống hiến'}`,
+      `Đánh giá: **${getShopFitLabel(userData, item, member)}**`,
+      `Dùng để: ${getShopItemPurposeText(userData, item, member)}`,
+      `Mua xong: ${getShopAfterBuyText(item)}`,
+    ];
+
+    const compare = getShopCompareText(userData, item);
+    if (compare) detailLines.push(compare);
+
+    const directText = formatDirectStatsCompact(getItemDirectStats(item), { emptyText: '' });
+    if (directText) detailLines.push(`Tác dụng chính:\n${directText.split('\n').slice(0, 4).join('\n')}`);
+
+    return detailLines.join('\n');
+  }
+
+  function getReadableShopTypeText(item) {
+    if (isPhapBaoItem(item)) return `${getItemTypeText(item.type)} · Có thể trang bị`;
+    if (item.type === 'pill') return 'Đan dược · Tiêu hao';
+    if (item.type === 'talisman') return 'Phù lục · Tiêu hao/hộ thân';
+    if (item.type === 'upgrade_stone') return 'Vật liệu nâng phẩm';
+    if (item.type === 'tool') return 'Pháp cụ nghề · Hỗ trợ nhiệm vụ/craft';
+    return getItemTypeText(item.type);
+  }
+
+  function getShopFitLabel(userData, item, member = null) {
+    const spendable = getSpendableCongHien(userData);
+    const price = getShopItemPrice(item, member);
+    const dao = getUserDaoNgheDefinition(userData);
+    const usedRatio = getInventoryUsed(userData) / Math.max(1, getStorageCapacity(userData));
+    const riskScore = Number(userData.entropy || 0) + Number(userData.technicalDebt || 0) + Number(userData.nghiepLuc || 0);
+    if (price > spendable) return 'Chưa đủ cống hiến';
+    if (isStorageUpgradeItem(item)) return usedRatio > 0.82 ? 'Rất nên mua, túi gần đầy' : usedRatio > 0.62 ? 'Có ích, chuẩn bị mở rộng túi' : 'Chưa cần gấp';
+    if (item.type === 'pill') return riskScore > 30 || isTemporaryStatusActive(userData, 'Tâm Ma Quấn Thân') ? 'Rất nên mua để ổn định trạng thái' : 'Có ích khi chuẩn bị đột phá/combat';
+    if (item.type === 'talisman') return userData.equippedTalisman ? 'Có ích để dự phòng' : 'Nên mua nếu hay đi Bí Cảnh/combat';
+    if (item.professionKey && dao?.key === item.professionKey) return 'Hợp nghề hiện tại';
+    if (isPhapBaoItem(item)) return getShopCompareText(userData, item) ? 'Có thể nâng sức chiến đấu' : 'Chỉ mua nếu muốn đổi build';
+    if (item.type === 'upgrade_stone') return 'Có ích khi muốn nâng phẩm trang bị';
+    if (item.type === 'tool') return 'Có ích cho nhiệm vụ và craft';
+    return 'Có thể mua nếu đúng nhu cầu';
+  }
+
+  function getShopItemPurposeText(userData, item, member = null) {
+    if (item.type === 'pill') return 'Hồi phục, giảm rủi ro hoặc chuẩn bị trước khi đột phá/giao chiến.';
+    if (item.type === 'talisman') return 'Dùng trong combat/bí cảnh để tạo khiên, giảm phản phệ hoặc cứu một lượt xấu.';
+    if (item.type === 'upgrade_stone') return 'Dùng cho `/nangpham` để nâng phẩm trang bị, nhất là món đang dùng lâu dài.';
+    if (item.type === 'tool') return 'Tăng hiệu quả xử lý nhiệm vụ, craft hoặc những việc cần đúng nghề.';
+    if (isPhapBaoItem(item)) return 'Trang bị để tăng lực chiến, đổi skill/combat profile và định hình build.';
+    return item.effect || 'Giữ trong túi để dùng cho cơ chế tương ứng.';
+  }
+
+  function getShopAfterBuyText(item) {
+    if (item.type === 'pill') return 'vào túi đồ, có thể dùng bằng `/dung` hoặc chọn **Uống đan** trong combat.';
+    if (item.type === 'talisman') return 'vào túi đồ, có thể dùng bằng **Dùng phù** trong combat, trang bị hộ thân hoặc tháo bằng `/thaotrangbi`.';
+    if (isPhapBaoItem(item)) return 'vào túi đồ, có thể `/trangbi`; tháo bằng `/thaotrangbi`; vũ khí có thể đổi ngay trong combat.';
+    if (item.type === 'upgrade_stone') return 'vào túi đồ, dùng làm nguyên liệu nâng phẩm.';
+    if (item.type === 'tool') return 'vào túi đồ, có thể trang bị nếu muốn hỗ trợ nghề/nhiệm vụ.';
+    return 'vào túi đồ.';
+  }
+
+  function getShopCompareText(userData, item) {
+    if (!isPhapBaoItem(item)) return null;
+    const slotMap = { weapon: 'equippedWeapon', artifact: 'equippedArtifact', armor: 'equippedArmor' };
+    const currentKey = userData[slotMap[item.type]] || (item.type === 'artifact' ? userData.equippedWeapon : null);
+    const currentItem = getShopItemByKey(currentKey);
+    const nextStats = getItemDirectStats(item);
+    const currentStats = getItemDirectStats(currentItem, currentKey ? getBestInventoryEntryByKey(userData, currentKey) : null);
+    const diff = normalizeDirectStats({
+      tuVi: (Number(nextStats.tuVi) || 0) - (Number(currentStats.tuVi) || 0),
+      congHien: (Number(nextStats.congHien) || 0) - (Number(currentStats.congHien) || 0),
+      lucChien: (Number(nextStats.lucChien) || 0) - (Number(currentStats.lucChien) || 0),
+      dotPha: (Number(nextStats.dotPha) || 0) - (Number(currentStats.dotPha) || 0),
+      tamMaRisk: (Number(nextStats.tamMaRisk) || 0) - (Number(currentStats.tamMaRisk) || 0),
+      trongThuongDuration: (Number(nextStats.trongThuongDuration) || 0) - (Number(currentStats.trongThuongDuration) || 0),
+    });
+    const diffText = formatDirectStatsCompact(diff, { emptyText: '' });
+    return `So với ${currentItem ? `đang dùng **${currentItem.name}**` : 'slot đang trống'}:${diffText ? `\n${diffText}` : ' không chênh nhiều.'}`;
+  }
+
+  function buildShopItemRows(userId, type, itemIndex = 0, member = null, userData = null) {
     const category = getShopCategoryByType(type);
-    const items = getShopItemsByType(category.type, member);
+    const items = getShopItemsByType(category.type, member, userData);
     const pageSize = 3;
     const pageCount = Math.max(1, Math.ceil(items.length / pageSize));
     const safePage = clampIndex(Number(itemIndex) || 0, pageCount);
@@ -16199,7 +16878,7 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
     const buyButtons = visibleItems.map((item, index) =>
       new ButtonBuilder()
         .setCustomId(`${SHOP_BUY_BUTTON_PREFIX}${userId}:${item.key}`)
-        .setLabel(`Đổi ${safePage * pageSize + index + 1}`.slice(0, 80))
+        .setLabel(`${isStorageUpgradeItem(item) ? 'Nâng túi' : item.type === 'pill' ? 'Mua đan' : item.type === 'talisman' ? 'Mua phù' : 'Mua'} ${safePage * pageSize + index + 1}`.slice(0, 80))
         .setStyle(ButtonStyle.Success),
     );
 
@@ -16226,9 +16905,7 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
     ];
 
     const rows = [];
-    if (buyButtons.length > 0) {
-      rows.push(new ActionRowBuilder().addComponents(...buyButtons.slice(0, 3)));
-    }
+    if (buyButtons.length > 0) rows.push(new ActionRowBuilder().addComponents(...buyButtons.slice(0, 3)));
     rows.push(new ActionRowBuilder().addComponents(...dedupeButtonsByCustomId(navButtons).slice(0, 5)));
     return rows;
   }
@@ -16239,7 +16916,7 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
     if (item.type === 'artifact') return `Trang bị: \`/trangbi item:${item.key}\`\nHiến tông: \`/banphapbao item:${item.key}\``;
     if (item.type === 'weapon') return `Trang bị: \`/trangbi item:${item.key}\`\nHiến tông: \`/banphapbao item:${item.key}\``;
     if (item.type === 'armor') return `Trang bị giáp: \`/trangbi item:${item.key}\`\nHiến tông: \`/banphapbao item:${item.key}\``;
-    if (item.type === 'bag') return `Trang bị túi: \`/trangbi item:${item.key}\``;
+    if (item.type === 'bag') return 'Nâng không gian túi đồ. Mua xong tự dùng làm túi chính, không phải pháp khí/trang bị chiến đấu.';
     if (item.type === 'tool') return `Trang bị hỗ trợ combat/nhiệm vụ: \`/trangbi item:${item.key}\``;
     if (item.type === 'pill') return `Dùng: \`/dung item:${item.key}\``;
     if (item.type === 'upgrade_stone') return `Dùng để nâng phẩm: \`/nangpham item:<mã_vật_phẩm>\``;
@@ -16415,7 +17092,7 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
       { type: 'pill', title: 'Đan Dược', note: 'Dùng trực tiếp bằng /dung item.' },
       { type: 'talisman', title: 'Phù Lục', note: 'Dùng hỗ trợ nhiệm vụ, nâng phẩm hoặc phòng thân.' },
       { type: 'upgrade_stone', title: 'Refactor Linh Thạch', note: 'Vật phẩm đặc biệt dùng nâng phẩm với /nangpham.' },
-      { type: 'bag', title: 'Túi Trữ Vật', note: 'Mở rộng sức chứa hành trang.' },
+      { type: 'bag', title: 'Nâng Không Gian Túi', note: 'Mở rộng sức chứa hành trang.' },
     ];
     const pageSize = 3;
     const pages = [];
@@ -16436,7 +17113,7 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
     const page = pages[safePageIndex];
     const items = getShopItemsByType(page.type, member)
       .slice(page.offset, page.offset + page.pageSize);
-    const lines = items.map((item) => `\`${item.key}\` - **${item.name}**\nGiá: ${getShopItemPrice(item, member)} cống hiến\n${item.effect}`);
+    const lines = items.map((item) => isStorageUpgradeItem(item) ? formatStorageUpgradeLegacyLine(userData, item, member) : `\`${item.key}\` - **${item.name}**\nGiá: ${getShopItemPrice(item, member)} cống hiến\n${item.effect}`);
 
     return new EmbedBuilder()
       .setColor(GOLD)
@@ -18333,6 +19010,37 @@ ${defenderMember.displayName}: **${defScore}** · ${getMemberCongPhapText(defend
     return level <= 0 ? 0 : expRequiredForLevel(level - 1);
   }
 
+  function getTuViProgressInfo(tuViExp, level) {
+    const currentExp = Math.max(0, Number(tuViExp) || 0);
+
+    if (level >= MAX_TU_VI_LEVEL) {
+      return {
+        currentExp,
+        currentMin: expMinimumForLevel(level),
+        nextMin: currentExp,
+        segmentCurrent: 1,
+        segmentTotal: 1,
+        isReady: true,
+        isMax: true,
+      };
+    }
+
+    const currentMin = expMinimumForLevel(level);
+    const nextMin = expRequiredForLevel(level);
+    const segmentTotal = Math.max(1, nextMin - currentMin);
+    const segmentCurrent = Math.max(0, Math.min(segmentTotal, currentExp - currentMin));
+
+    return {
+      currentExp,
+      currentMin,
+      nextMin,
+      segmentCurrent,
+      segmentTotal,
+      isReady: currentExp >= nextMin,
+      isMax: false,
+    };
+  }
+
   function getExpNeededForBreakthrough(tuViExp, level) {
     if (level >= MAX_TU_VI_LEVEL) {
       return 0;
@@ -19675,12 +20383,55 @@ Kết quả đã khắc vào đạo hồ.`, inline: false },
     return `Cảnh giác **${p.alert}/100** · Tham niệm **${p.greed}/100** · Ổn định pháp trận **${p.stability}/100**`;
   }
 
-  function getBicanhRoutePreviewText() {
+  function getBicanhPressureStory(run) {
+    const p = normalizeBicanhRunPressure(run?.pressure);
+    const alert = p.alert >= 70 ? 'bí cảnh đã cảnh giác rõ rệt, tiếng động nhỏ cũng có thể kéo dị vật tới' : p.alert >= 35 ? 'bí cảnh đã bắt đầu chú ý tới bước chân của đội' : 'bí cảnh vẫn khá yên, đội còn dư khoảng thở';
+    const greed = p.greed >= 70 ? 'tham niệm trong đội dâng cao, dị bảo dễ lộ nhưng boss cuối cũng sẽ khó chịu hơn' : p.greed >= 35 ? 'dấu dị bảo đã kích thích lòng tham vừa đủ để mở thêm cơ hội' : 'đội chưa bị dị bảo kéo lệch nhịp';
+    const stability = p.stability <= 35 ? 'pháp trận dưới chân đã chao đảo, đi sâu nữa sẽ nguy hiểm' : p.stability <= 70 ? 'pháp trận còn giữ được, nhưng không nên đọc quá sâu mọi vết nứt' : 'pháp trận vẫn ổn, linh khí chưa vỡ mạch';
+    return `• ${alert}.
+• ${greed}.
+• ${stability}.`;
+  }
+
+  function getBicanhRouteStoryPreview() {
     return [
-      '**Lối An Toàn**: dễ hồi phục/cứu hộ/dò đường · -Cảnh giác · thưởng thấp hơn.',
-      '**Lối Dị Bảo**: dễ rương/tinh anh · +Tham niệm · thưởng cao hơn, boss dễ cáu hơn.',
-      '**Lối Ngộ Đạo**: dễ ngộ đạo/giải trận · +thuần thục · có thể giảm Ổn định nếu đọc quá sâu.',
+      '**Lối An Toàn**: men theo đường sáng, ít dị bảo hơn nhưng giữ sinh lực tốt.',
+      '**Lối Dị Bảo**: đi về nơi linh quang mạnh nhất. Có thể được nhiều hơn, cũng dễ đánh thức thứ canh giữ.',
+      '**Lối Ngộ Đạo**: lần theo đạo văn cổ. Hợp người muốn tâm đắc/thuần thục, nhưng đọc sâu quá có thể làm pháp trận bất ổn.',
     ].join('\n');
+  }
+
+  function getDailyBicanhSceneText(data, run, dungeon, event = null) {
+    if (!run) return 'Bảng bí cảnh đang mở. Ai muốn vào thì lập tổ đội trước, đỡ cảnh mỗi người chạy một hướng như đàn cá bị lag.';
+    if (run.status === 'lobby') return `Cổng **${dungeon.name}** đã hé. Đội đang đứng trước màn sương, chờ đội trưởng ra hiệu xuất phát.`;
+    if (run.status === 'route_choice') return `Tầng kế tiếp chưa lộ rõ. Trước mặt đội có ba lối rẽ, mỗi lối dẫn tới một kiểu rủi ro khác nhau.`;
+    if (run.status === 'pending_monster') {
+      const name = run.pendingMonster?.monsterName || event?.monster?.name || 'dị vật chưa rõ tên';
+      return `Không khí khựng lại. **${name}** chắn trước đường đi, buộc đội phải chọn: đánh thủ công, xử lý nhanh hoặc rút lui.`;
+    }
+    if (run.status === 'completed') return `Đội đã vượt qua tầng cuối. Bí cảnh khép lại sau lưng, để lại phần thưởng và vài vết xước đáng kể.`;
+    if (run.status === 'failed') return 'Sinh lực bí cảnh đã cạn. Đội phải rút khỏi màn sương trước khi đường về biến mất.';
+    if (run.status === 'abandoned') return 'Đội đã rút lui khỏi bí cảnh, giữ lại những gì gom được trước khi chuyện tệ hơn.';
+    if (event) return `${event.place?.text || dungeon.description}
+
+${getDailyBicanhShortText(event)}`;
+    return 'Đội đang đứng giữa bí cảnh. Chọn bước tiếp theo bằng nút bên dưới.';
+  }
+
+  function getDailyBicanhActionPrompt(run, event = null) {
+    if (!run) return 'Mở bí cảnh để lập tổ đội.';
+    if (run.status === 'lobby') return 'Đội trưởng bấm **Bắt đầu bí cảnh** khi đã sẵn sàng.';
+    if (run.status === 'route_choice') return 'Đội trưởng chọn một lối. Đây là quyết định cho tầng kế, không phải trang trí UI cho đẹp mắt.';
+    if (['choice', 'event_choice'].includes(String(run.status)) && event) {
+      if (event.type === 'choice') return '**Đi chắc** để giữ nhịp, **Đọc sâu** để lấy tâm đắc, hoặc **Đoạt bảo** nếu muốn đánh đổi an toàn.';
+      return '**Xử lý an toàn** để giảm rủi ro, **Khai thác thêm** để lấy nhiều hơn, hoặc **Bỏ qua** nếu cảm thấy mùi phiền phức quá nồng.';
+    }
+    if (run.status === 'pending_monster') return 'Chọn **Đánh theo lượt** để dùng skill/vật phẩm, **Tự xử lý nhanh** nếu muốn resolve gọn, hoặc **Rút lui** để về tông môn.';
+    return 'Chọn lối tiếp hoặc rút lui.';
+  }
+
+  function getBicanhRoutePreviewText() {
+    return getBicanhRouteStoryPreview();
   }
 
   function getBicanhBossMechanic(monster, pending = {}, run = null) {
@@ -20031,42 +20782,51 @@ Kết quả đã khắc vào đạo hồ.`, inline: false },
       return new EmbedBuilder()
         .setColor(0x8b5cf6)
         .setTitle('Bí Cảnh Ngày')
-        .setDescription('Mỗi đạo hữu có **1 lượt/ngày**. Có thể lập tổ đội trước khi vào. Đi 5-9 tầng, tầng cuối có boss.')
+        .setDescription('Một bí cảnh đang mở trong tông môn. Đây là chuyến đi có tầng, có lối rẽ, có biến cố, không phải bảng log để bot khoe xúc xắc.')
         .addFields(
           { name: 'Hôm nay', value: `Ngày **${data.weekKey}** · Bí cảnh đề xuất: **${dungeon.name}**`, inline: false },
-          { name: 'Cách chơi', value: 'Bấm **Lập tổ đội/Vào bí cảnh** → đủ người thì đội trưởng bắt đầu → xử lý biến cố → hạ boss cuối.', inline: false },
+          { name: 'Mở đầu', value: uiCompactValue(dungeon.description || 'Màn sương bí cảnh chờ người bước vào.', 500), inline: false },
+          { name: 'Cách chơi', value: 'Lập tổ đội hoặc vào một mình → chọn lối mỗi tầng → xử lý biến cố → boss cuối. Đội trưởng chọn hướng, thành viên tự đánh khi vào combat.', inline: false },
         )
-        .setFooter({ text: 'UI rút gọn · nội dung random chạy ngầm.' });
+        .setFooter({ text: 'Bí cảnh ưu tiên diễn biến. Chỉ số vẫn tính ngầm, không cần trưng như hóa đơn điện.' });
     }
 
     const event = run.pendingEvent;
-    const desc = [
-      `**${dungeon.name}**`,
-      getDailyBicanhProgressLine(run),
-      `Tổ đội: ${(run.party || []).map((id) => `<@${id}>`).join(' ') || `<@${run.leaderId}>`}`,
-      event ? `${getDailyBicanhTypeLabel(event.type)} · **${getDailyBicanhShortTitle(event)}**` : (run.status === 'lobby' ? 'Đang lập tổ đội. Đội trưởng bấm **Bắt đầu bí cảnh** khi đủ người.' : run.status === 'route_choice' ? 'Đội trưởng chọn **lối đi tầng kế**: An Toàn / Dị Bảo / Ngộ Đạo.' : 'Bấm **Chọn lối tiếp** để tiếp tục.'),
-      event?.routeName ? `Lối đã chọn: **${event.routeName}**` : null,
-      event ? `_${getDailyBicanhShortText(event)}_` : null,
-    ].filter(Boolean).join('\n');
-
+    const progress = getDailyBicanhProgressLine(run);
+    const partyText = (run.party || []).map((id) => `<@${id}>`).join(' ') || `<@${run.leaderId}>`;
+    const eventTitle = event ? `${getDailyBicanhTypeLabel(event.type)} · **${getDailyBicanhShortTitle(event)}**` : null;
     const fields = [
-      { name: 'Áp lực run', value: formatBicanhPressure(run), inline: false },
-      { name: 'Tích lũy', value: getDailyBicanhRewardLine(run), inline: false },
+      { name: 'Hiện trường', value: clampEmbedFieldValue(getDailyBicanhSceneText(data, run, dungeon, event), 900), inline: false },
+      { name: 'Tình thế', value: `${progress}\nTổ đội: ${partyText}`, inline: false },
     ];
-    if (run.status === 'route_choice') fields.unshift({ name: 'Chọn lối có hậu quả', value: getBicanhRoutePreviewText(), inline: false });
+
+    if (eventTitle || event?.routeName) {
+      fields.push({ name: 'Biến cố trước mắt', value: [eventTitle, event?.routeName ? `Lối đã chọn: **${event.routeName}**` : null].filter(Boolean).join('\n'), inline: false });
+    }
+
+    if (run.status === 'route_choice') {
+      fields.push({ name: 'Ba lối rẽ', value: getBicanhRouteStoryPreview(), inline: false });
+    } else if (['choice', 'event_choice', 'pending_monster'].includes(String(run.status))) {
+      fields.push({ name: 'Lựa chọn lúc này', value: getDailyBicanhActionPrompt(run, event), inline: false });
+    }
+
     if (run.pendingMonster?.status === 'pending') {
       const monster = CODE_TU_MONSTERS_360.find((item) => item.key === run.pendingMonster.monsterKey);
       const mechanic = getBicanhBossMechanic(monster, run.pendingMonster, run);
-      fields.push({ name: run.pendingMonster.isBoss ? 'Cơ chế boss' : 'Cơ chế giao chiến', value: `**${mechanic.name}** · ${mechanic.text}`, inline: false });
+      fields.push({ name: run.pendingMonster.isBoss ? 'Dấu hiệu boss' : 'Dấu hiệu giao chiến', value: `**${mechanic.name}** · ${mechanic.text}`, inline: false });
     }
 
+    fields.push({ name: 'Không khí bí cảnh', value: getBicanhPressureStory(run), inline: false });
+    fields.push({ name: 'Thu hoạch đã gom', value: getDailyBicanhRewardLine(run), inline: false });
+
     return new EmbedBuilder()
-      .setColor(run.status === 'pending_monster' ? 0xe74c3c : run.status === 'completed' ? 0x22c55e : run.status === 'failed' ? 0x64748b : 0x8b5cf6)
-      .setTitle(run.status === 'completed' ? 'Bí Cảnh · Đã chinh phục' : run.status === 'failed' ? 'Bí Cảnh · Đã dừng' : 'Bí Cảnh · Đang chinh phục')
-      .setDescription(desc)
+      .setColor(run.status === 'pending_monster' ? 0xe74c3c : run.status === 'completed' ? 0x22c55e : ['failed', 'abandoned'].includes(String(run.status)) ? 0x64748b : 0x8b5cf6)
+      .setTitle(run.status === 'completed' ? 'Bí Cảnh · Đã chinh phục' : ['failed', 'abandoned'].includes(String(run.status)) ? 'Bí Cảnh · Đã rút khỏi' : 'Bí Cảnh · Đang chinh phục')
+      .setDescription(`**${dungeon.name}**\n${run.status === 'lobby' ? 'Đội đang chuẩn bị trước cổng.' : run.status === 'route_choice' ? 'Đội đang chọn lối cho tầng kế.' : run.status === 'pending_monster' ? 'Một giao chiến đang chắn đường.' : 'Diễn biến đang tiếp tục.'}`)
       .addFields(...fields)
       .setFooter({ text: 'Thua mất sinh lực trước, không mất sạch phần thưởng đã qua.' });
   }
+
 
   function buildWeeklyBicanhEmbed(data = getWeeklyBicanhData()) {
     const activeRuns = Object.values(data.runs || {}).filter((run) => run && !['completed', 'failed', 'abandoned'].includes(String(run.status))).length;
@@ -20079,8 +20839,8 @@ Kết quả đã khắc vào đạo hồ.`, inline: false },
       .setColor(data.pendingMonster?.status === 'pending' ? 0xe74c3c : 0x8b5cf6)
       .setTitle('Bí Cảnh Ngày')
       .setDescription(desc)
-      .addFields({ name: 'Diễn biến gần nhất', value: uiCompactValue(data.lastResult || 'Chưa có diễn biến.', 360), inline: false })
-      .setFooter({ text: 'Giao diện rút gọn · nội dung random chạy ngầm.' });
+      .addFields({ name: 'Diễn biến gần nhất', value: uiCompactValue(data.lastResult || 'Chưa có diễn biến.', 420), inline: false })
+      .setFooter({ text: 'Bảng công khai · mở để tổ đội cùng theo dõi.' });
   }
 
   function buildWeeklyBicanhPanelRows(data = getWeeklyBicanhData(), run = null) {
@@ -20286,17 +21046,17 @@ Kết quả đã khắc vào đạo hồ.`, inline: false },
     const event = getStableDailyBicanhFloorEvent(data.weekKey, dungeon, run, run.floor, run.floor >= run.maxFloors);
     run.pendingEvent = event;
     run.currentRoute = null;
-    const lines = [`Tầng **${run.floor}/${run.maxFloors}** · ${getDailyBicanhTypeLabel(event.type)} · **${getDailyBicanhShortTitle(event)}**`, event.routeName ? `Lối đi: **${event.routeName}**.` : null, getDailyBicanhShortText(event)].filter(Boolean);
+    const lines = [`Đội bước vào tầng **${run.floor}/${run.maxFloors}**.`, event.routeName ? `Lối vừa chọn là **${event.routeName}**.` : null, `Trước mắt hiện ra **${getDailyBicanhShortTitle(event)}**.`, getDailyBicanhShortText(event)].filter(Boolean);
     if (event.type === 'monster' || event.type === 'elite' || event.type === 'boss') {
       run.status = 'pending_monster';
       setBicanhPending(data, run, { status: 'pending', runId: run.id, floor: run.floor, isBoss: event.type === 'boss', eventKey: event.key, monsterKey: event.monster.key, monsterName: event.monster.name, dungeonKey: dungeon.key, startedAt: Date.now(), autoFightAt: Date.now() + BICANH_AUTO_RESOLVE_MS, party: [...run.party], leaderId: run.leaderId });
-      lines.push(`${event.type === 'boss' ? 'Boss tầng cuối' : event.type === 'elite' ? 'Tinh anh' : 'Địch nhỏ'} xuất hiện: **${event.monster.name}**.`);
+      lines.push(`${event.type === 'boss' ? 'Boss tầng cuối' : event.type === 'elite' ? 'Một tinh anh' : 'Một dị vật'} chắn đường: **${event.monster.name}**.`);
     } else if (event.type === 'choice') {
       run.status = 'choice';
-      lines.push('Chọn hướng đi: đi chắc, đọc sâu, hoặc đoạt bảo.');
+      lines.push('Ba hướng mở ra trước mắt: đi chắc để giữ sức, đọc sâu để tìm tâm đắc, hoặc đoạt bảo nếu muốn đổi an toàn lấy phần thưởng.');
     } else {
       run.status = 'event_choice';
-      lines.push('Chọn cách xử lý biến cố: **Xử lý an toàn**, **Khai thác thêm**, hoặc **Bỏ qua**.');
+      lines.push('Biến cố này chưa cần đánh ngay. Đội trưởng chọn xử lý an toàn, khai thác thêm, hoặc bỏ qua để giữ nhịp.');
     }
     run.log = [...(run.log || []), lines.join(' ')].slice(-5);
     data.lastResult = compactBicanhResult(lines, 360);
@@ -20327,7 +21087,7 @@ Kết quả đã khắc vào đạo hồ.`, inline: false },
     const mode = ['safe', 'deep', 'skip'].includes(String(options.mode)) ? String(options.mode) : 'safe';
     const party = getBicanhPartyIds(run);
     const modeText = mode === 'deep' ? 'Khai thác thêm' : mode === 'skip' ? 'Bỏ qua' : 'Xử lý an toàn';
-    lines.push(`Cách xử lý: **${modeText}**.`);
+    lines.push(`Đội chọn **${modeText}**.`);
     if (mode === 'safe') applyBicanhPressure(run, { alert: -5, greed: -3, stability: 3 });
     if (mode === 'deep') applyBicanhPressure(run, { alert: 4, greed: 5, stability: -4 });
 
@@ -20335,7 +21095,7 @@ Kết quả đã khắc vào đạo hồ.`, inline: false },
       applyBicanhPressure(run, { alert: -2, greed: -2, stability: 1 });
       run.status = 'route_choice';
       run.pendingEvent = null;
-      lines.push('Đã bỏ qua biến cố. Không nhận thưởng tầng này, nhưng cũng không chịu rủi ro thêm. Lạ chưa, đôi khi không bấm vào mọi thứ lại là chiến thuật.');
+      lines.push('Đội đi vòng qua biến cố. Không có thu hoạch tầng này, nhưng cũng không để bí cảnh bấu thêm vào đạo tâm.');
       return;
     }
 
@@ -20347,36 +21107,36 @@ Kết quả đã khắc vào đạo hồ.`, inline: false },
     if (event.type === 'trap') {
       const avoidChance = safe ? 0.68 : 0.32;
       const avoided = rollPercent(avoidChance);
-      lines.push(`Tỉ lệ né bẫy: **${Math.round(avoidChance * 100)}%**.`);
+      lines.push(safe ? 'Đội đi chậm, dò từng vết nứt của trận bẫy.' : 'Đội cố đọc sâu vào trận bẫy để lấy thêm manh mối.');
       if (avoided) {
         const stats = safe ? { dotPha: 2, tamMaRisk: -2 } : { dotPha: 3, lucChien: 2, tamMaRisk: -1 };
-        await applyBicanhPartyStatus(guild, users, run, 'Né Bẫy Bí Cảnh', 2 * 60 * 60 * 1000, { directStats: stats }, lines, `Né bẫy thành công: ${formatDirectStatsCompact(stats)}`);
+        await applyBicanhPartyStatus(guild, users, run, 'Né Bẫy Bí Cảnh', 2 * 60 * 60 * 1000, { directStats: stats }, lines, 'Đội vượt qua bẫy. Dấu trận khép lại sau lưng, không ai phải trả giá nặng.');
         rewardMult = safe ? 0.55 : 0.9;
       } else {
         const lifeLoss = deep ? 2 : 1;
         const stats = deep ? { tuVi: -3, lucChien: -3, dotPha: -3, tamMaRisk: 8, trongThuongDuration: 5 } : { tuVi: -2, lucChien: -2, dotPha: -2, tamMaRisk: 5, trongThuongDuration: 3 };
         run.lives = Math.max(0, run.lives - lifeLoss);
-        await applyBicanhPartyStatus(guild, users, run, 'Đạo Cơ Rạn Nứt', 2 * 60 * 60 * 1000, { directStats: stats }, lines, `Bẫy phản phệ: -${lifeLoss} sinh lực · ${formatDirectStatsCompact(stats)}`);
+        await applyBicanhPartyStatus(guild, users, run, 'Đạo Cơ Rạn Nứt', 2 * 60 * 60 * 1000, { directStats: stats }, lines, `Bẫy phản phệ. Đội mất ${lifeLoss} sinh lực bí cảnh và phải đi chậm lại.`);
         rewardAllowed = false;
       }
     } else if (event.type === 'rescue') {
       const stats = deep ? { congHien: 8, tamMaRisk: -5, trongThuongDuration: -4 } : { congHien: 5, tamMaRisk: -4, trongThuongDuration: -3 };
-      await applyBicanhPartyStatus(guild, users, run, 'Thiện Duyên Bí Cảnh', 4 * 60 * 60 * 1000, { directStats: stats }, lines, `Cứu hộ thành công: ${formatDirectStatsCompact(stats)}`);
+      await applyBicanhPartyStatus(guild, users, run, 'Thiện Duyên Bí Cảnh', 4 * 60 * 60 * 1000, { directStats: stats }, lines, 'Đệ tử lạc đường được kéo ra khỏi vòng lặp. Thiện duyên theo đội thêm một đoạn.');
       run.lives = Math.min(DAILY_BICANH_BASE_LIVES + (deep ? 2 : 1), run.lives + (deep ? 2 : 1));
-      lines.push(`Sinh lực bí cảnh +${deep ? 2 : 1}.`);
+      lines.push(`Đội hồi lại ${deep ? 2 : 1} sinh lực bí cảnh.`);
     } else if (event.type === 'puzzle') {
       const gain = deep ? { logic: 2, integrity: 1, stability: 1, runtime: 1 } : { logic: 1, integrity: 1, stability: 1 };
       for (const memberId of party) addSourceProfile(getOrCreateUser(users, memberId), gain);
-      lines.push(deep ? 'Giải trận sâu: mỗi thành viên +2 Logic (đọc lỗi) · +1 Toàn vẹn · +1 Ổn định · +1 Nhịp vận hành.' : 'Giải trận an toàn: mỗi thành viên +1 Logic (đọc lỗi) · +1 Toàn vẹn · +1 Ổn định.');
+      lines.push(deep ? 'Đội giải sâu vào lõi trận. Đạo văn sáng lên, để lại cảm giác hiểu thêm một lớp vận hành.' : 'Đội tháo trận theo đường chắc. Pháp trận lắng xuống, lối đi trở nên rõ hơn.');
     } else if (event.type === 'scout') {
       run.scoutBonus = Math.max(0, Number(run.scoutBonus) || 0) + (deep ? 2 : 1);
       const stats = deep ? { dotPha: 4, lucChien: 3, tamMaRisk: -1 } : { dotPha: 3, lucChien: 2, tamMaRisk: -2 };
-      await applyBicanhPartyStatus(guild, users, run, 'Thiên Nhãn Dò Mạch', 4 * 60 * 60 * 1000, { directStats: stats }, lines, `Dò đường: ${deep ? '2' : '1'} lần giảm độ khó giao chiến kế tiếp · ${formatDirectStatsCompact(stats)}`);
+      await applyBicanhPartyStatus(guild, users, run, 'Thiên Nhãn Dò Mạch', 4 * 60 * 60 * 1000, { directStats: stats }, lines, `Đội đọc được mạch đường phía trước. Giao chiến kế tiếp sẽ dễ thở hơn ${deep ? 'hai nhịp' : 'một nhịp'}.`);
     } else if (event.type === 'spring') {
       const heal = deep ? 2 : 1;
       run.lives = Math.min(DAILY_BICANH_BASE_LIVES + 1, run.lives + heal);
       const stats = deep ? { lucChien: 2, dotPha: 2, tamMaRisk: -2 } : { lucChien: 1, tamMaRisk: -2 };
-      await applyBicanhPartyStatus(guild, users, run, 'Linh Tuyền Dưỡng Khí', 3 * 60 * 60 * 1000, { directStats: stats }, lines, `Linh tuyền hồi phục: +${heal} sinh lực · ${formatDirectStatsCompact(stats)}`);
+      await applyBicanhPartyStatus(guild, users, run, 'Linh Tuyền Dưỡng Khí', 3 * 60 * 60 * 1000, { directStats: stats }, lines, `Linh tuyền rửa bớt khí đục. Đội hồi ${heal} sinh lực bí cảnh.`);
     } else if (event.type === 'kyngo') {
       for (const memberId of party) {
         const userData = getOrCreateUser(users, memberId);
@@ -20423,11 +21183,11 @@ Kết quả đã khắc vào đạo hồ.`, inline: false },
     if (run.floor >= run.maxFloors) {
       run.status = 'completed';
       run.completedAt = Date.now();
-      lines.push('Chinh phục hoàn tất.');
+      lines.push('Tầng cuối đã qua. Bí cảnh khép lại sau lưng đội.');
     } else if (run.lives <= 0) {
       run.status = 'failed';
       run.completedAt = Date.now();
-      lines.push('Sinh lực bí cảnh cạn, lượt hôm nay kết thúc.');
+      lines.push('Sinh lực bí cảnh cạn. Đội buộc phải rút khỏi màn sương.');
     } else {
       run.status = 'route_choice';
       run.pendingEvent = null;
@@ -20438,18 +21198,18 @@ Kết quả đã khắc vào đạo hồ.`, inline: false },
     const users = loadUsers();
     const dungeon = getDungeonTemplateByKey(run.dungeonKey) || getWeeklyBicanhDungeon(data);
     const label = choice === 'greed' ? 'Đoạt bảo' : choice === 'insight' ? 'Đọc sâu' : 'Đi chắc';
-    const lines = [`Tầng **${run.floor}/${run.maxFloors}** · 🧭 **Lựa chọn**`, `Chọn: **${label}**`];
+    const lines = [`Tầng **${run.floor}/${run.maxFloors}** mở ra một ngã ba.`, `Đội chọn **${label}**.`];
     if (choice === 'greed') {
       applyBicanhPressure(run, { alert: 8, greed: 14, stability: -6 });
       const monster = CODE_TU_MONSTERS_360[deterministicScoreForKey('daily-choice-greed', `${data.weekKey}:${run.id}:${run.floor}`) % CODE_TU_MONSTERS_360.length];
       run.pendingEvent = { ...run.pendingEvent, type: 'elite', monster, title: `${run.pendingEvent.title} · Tinh anh giữ rương` };
       run.status = 'pending_monster';
       setBicanhPending(data, run, { status: 'pending', runId: run.id, floor: run.floor, isBoss: false, eventKey: run.pendingEvent.key, monsterKey: monster.key, monsterName: monster.name, dungeonKey: dungeon.key, startedAt: Date.now(), autoFightAt: Date.now() + BICANH_AUTO_RESOLVE_MS, party: [...getBicanhPartyIds(run)], leaderId: run.leaderId });
-      lines.push(`Đoạt bảo gọi ra tinh anh **${monster.name}**. Có thể **Tự xử lý nhanh** hoặc **Đánh theo lượt**.`);
+      lines.push(`Linh quang trong rương bật mạnh, kéo theo tinh anh **${monster.name}**. Muốn lấy bảo vật thì phải qua được nó.`);
     } else {
       if (choice === 'insight') {
         applyBicanhPressure(run, { alert: 3, greed: 2, stability: -3 });
-        await applyBicanhPartyStatus(interaction.guild, users, run, 'Đạo Tâm Kiên Định', 6 * 60 * 60 * 1000, { directStats: { tuVi: 5, dotPha: 3, tamMaRisk: -3 }, dotPhaBonus: true }, lines, `Cả đội ngộ đạo: ${formatDirectStatsCompact({ tuVi: 5, dotPha: 3, tamMaRisk: -3 })}`);
+        await applyBicanhPartyStatus(interaction.guild, users, run, 'Đạo Tâm Kiên Định', 6 * 60 * 60 * 1000, { directStats: { tuVi: 5, dotPha: 3, tamMaRisk: -3 }, dotPhaBonus: true }, lines, 'Cả đội đứng yên một lúc. Đạo văn trong ngã rẽ tự ghép thành một mảnh tâm đắc.');
       } else {
         applyBicanhPressure(run, { alert: -4, greed: -2, stability: 2 });
       }
@@ -20652,7 +21412,11 @@ Kết quả đã khắc vào đạo hồ.`, inline: false },
       power: Number(unit.power) || 1,
       maxHp: Number(unit.maxHp) || 100,
       hp: Number(unit.hp) || 1,
-      qi: Number(unit.qi) || 35,
+      maxQi: getCombatMaxQi(unit),
+      qi: Math.max(0, Math.min(getCombatMaxQi(unit), Number(unit.qi) || 0)),
+      qiRegen: getCombatQiRegen(unit),
+      tamMaPressure: Number(unit.tamMaPressure) || 0,
+      linhKhiNote: unit.linhKhiNote || null,
       shield: Number(unit.shield) || 0,
       atkMod: Number(unit.atkMod) || 1,
       defMod: Number(unit.defMod) || 1,
@@ -20709,7 +21473,13 @@ Kết quả đã khắc vào đạo hồ.`, inline: false },
     if ((Number(unit.atkMod) || 1) > 1.05) status.push('Tăng công');
     if ((Number(unit.defMod) || 1) > 1.05) status.push('Hộ thể');
     if ((Number(unit.defMod) || 1) < 0.95) status.push('Giảm thủ');
-    return `${unit.isMonster ? '👾' : '🧍'} **${unit.label}**\nHP ${uiBar(Math.ceil(unit.hp), unit.maxHp, 10)} · Khí ${Math.floor(unit.qi || 0)}/100${status.length ? `\n${status.join(' · ')}` : ''}`;
+    const maxQi = getCombatMaxQi(unit);
+    const qiText = uiBar(Math.floor(Number(unit.qi) || 0), maxQi, 8);
+    const regenText = `hồi ${getCombatQiRegen(unit)}/lượt`;
+    return `${unit.isMonster ? '👾' : '🧍'} **${unit.label}**
+HP ${uiBar(Math.ceil(unit.hp), unit.maxHp, 10)}
+Linh Khí ${qiText} · ${regenText}${status.length ? `
+${status.join(' · ')}` : ''}`;
   }
 
   function buildBicanhPokemonCombatEmbed(combat) {
@@ -20729,7 +21499,7 @@ Kết quả đã khắc vào đạo hồ.`, inline: false },
         enemy ? getPokemonCombatHpLine(enemy) : 'Địch đã tan biến.',
       ].join('\n'))
       .addFields({ name: 'Diễn biến', value: uiCompactValue(log, 420), inline: false })
-      .setFooter({ text: 'Solo tự chọn skill từng lượt. Party xoay lượt từng người; quá hạn tự dùng chiêu 1.' });
+      .setFooter({ text: 'Solo tự chọn skill từng lượt. Party xoay lượt từng người; hết Linh Khí thì phải Hồi tức hoặc dùng đan.' });
   }
 
   function buildBicanhPokemonCombatRows(combat) {
@@ -20744,31 +21514,41 @@ Kết quả đã khắc vào đạo hồ.`, inline: false },
       row1.addComponents(
         new ButtonBuilder()
           .setCustomId(`${BICANH_COMBAT_SKILL_PREFIX}${combat.id}:${index}`)
-          .setLabel(skill ? `${index + 1}. ${uiTrim(skill.name, 28)}` : `${index + 1}. Chưa mở`)
+          .setLabel(skill ? `${index + 1}. ${uiTrim(skill.name, 22)} · ${getCombatSkillLinhKhiCost(skill, actor)}` : `${index + 1}. Chưa mở`)
           .setStyle(index === 3 ? ButtonStyle.Danger : ButtonStyle.Primary)
-          .setDisabled(!skill || (Number(skill.qiCost) || 0) > (Number(actor.qi) || 0)),
+          .setDisabled(!canUseCombatSkill(actor, skill)),
       );
     }
     const row2 = new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`${BICANH_COMBAT_DEFEND_PREFIX}${combat.id}`).setLabel('Thủ thế').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`${BICANH_COMBAT_DEFEND_PREFIX}${combat.id}`).setLabel('Hồi tức').setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId(`${BICANH_COMBAT_AUTO_PREFIX}${combat.id}`).setLabel('Auto lượt').setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId(`${BICANH_COMBAT_ESCAPE_PREFIX}${combat.id}`).setLabel('Rút lui').setStyle(ButtonStyle.Secondary),
     );
-    return [row1, row2];
+    const row3 = new ActionRowBuilder().addComponents(
+      new ButtonBuilder().setCustomId(`${BICANH_COMBAT_ITEM_MENU_PREFIX}${combat.id}:pill`).setLabel('Uống đan').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`${BICANH_COMBAT_ITEM_MENU_PREFIX}${combat.id}:talisman`).setLabel('Dùng phù').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`${BICANH_COMBAT_ITEM_MENU_PREFIX}${combat.id}:weapon`).setLabel('Đổi vũ khí').setStyle(ButtonStyle.Primary),
+    );
+    return [row1, row2, row3];
   }
 
   function getManualSkill(actor, skillIndex) {
     const skills = Array.isArray(actor.skills) && actor.skills.length ? actor.skills : DEFAULT_COMBAT_SKILLS;
     const selected = skills[Number(skillIndex) || 0];
-    if (selected && (Number(selected.qiCost) || 0) <= (Number(actor.qi) || 0)) return selected;
-    return skills.find((skill) => (Number(skill.qiCost) || 0) <= (Number(actor.qi) || 0)) || skills[0] || DEFAULT_COMBAT_SKILLS[0];
+    if (canUseCombatSkill(actor, selected)) return selected;
+    return skills.find((skill) => canUseCombatSkill(actor, skill)) || null;
   }
 
   function resolveManualSkillAction(actor, target, skill, lines) {
     if (!applyTurnStartEffects(actor, lines)) return;
     if (!target || !isCombatantAlive(target)) return;
-    actor.qi = Math.max(0, actor.qi - (Number(skill.qiCost) || 0));
-    actor.qi = Math.min(100, actor.qi + (Number(skill.qiGain) || 10));
+    if (!skill || !canUseCombatSkill(actor, skill)) {
+      recoverCombatLinhKhi(actor, 2.4, lines, 'cạn Linh Khí, không thể ra đòn nên hồi tức');
+      return;
+    }
+    const qiCost = getCombatSkillLinhKhiCost(skill, actor);
+    actor.qi = Math.max(0, actor.qi - qiCost);
+    actor.qi = Math.min(getCombatMaxQi(actor), actor.qi + Math.max(0, Math.floor((Number(skill.qiGain) || 0) * 0.65)));
     const accuracy = clampNumber(Number(skill.accuracy) || 0.9, 0.45, 1);
     if (Math.random() > accuracy) {
       lines.push(`• ${actor.label} dùng ${skill.emoji || '✦'} **${skill.name}** nhưng hụt.`);
@@ -20796,8 +21576,134 @@ Kết quả đã khắc vào đạo hồ.`, inline: false },
     const shield = Math.max(8, Math.floor(actor.maxHp * 0.12));
     actor.shield = Math.min(Math.floor(actor.maxHp * 0.55), (Number(actor.shield) || 0) + shield);
     actor.defMod = Math.min(1.55, (Number(actor.defMod) || 1) + 0.1);
-    actor.qi = Math.min(100, (Number(actor.qi) || 0) + 18);
-    lines.push(`• ${actor.label} thủ thế, tạo **+${shield} giáp** và hồi khí.`);
+    const recovered = recoverCombatLinhKhi(actor, 2.8, null, 'hồi tức');
+    lines.push(`• ${actor.label} thủ thế hồi tức, tạo **+${shield} giáp** và hồi **+${recovered} Linh Khí**.`);
+  }
+
+
+  function getCombatItemKindConfig(kind) {
+    return {
+      pill: { label: 'Uống đan', itemTypes: ['pill'], placeholder: 'Chọn đan/dịch để dùng trong lượt này' },
+      talisman: { label: 'Dùng phù', itemTypes: ['talisman'], placeholder: 'Chọn phù/lệnh để kích hoạt' },
+      weapon: { label: 'Đổi vũ khí', itemTypes: ['weapon'], placeholder: 'Chọn vũ khí đổi ngay trong combat' },
+    }[kind] || null;
+  }
+
+  function getCombatInventoryCandidates(userData, kind) {
+    normalizeInventoryData(userData);
+    const config = getCombatItemKindConfig(kind);
+    if (!config) return [];
+    const candidates = [];
+    userData.inventory.forEach((entry, index) => {
+      const item = getShopItemByKey(getInventoryItemKey(entry));
+      if (!item || !config.itemTypes.includes(item.type)) return;
+      if (kind === 'weapon' && userData.equippedWeapon === item.key) return;
+      const quality = getInventoryItemQuality(entry);
+      const curse = getInventoryItemCurse(entry);
+      candidates.push({ index, entry, item, quality, curse });
+    });
+    return candidates.slice(0, 25);
+  }
+
+  function buildCombatItemSelectRow(prefix, combatId, kind, candidates) {
+    const config = getCombatItemKindConfig(kind);
+    const menu = new StringSelectMenuBuilder()
+      .setCustomId(`${prefix}${combatId}:${kind}`.slice(0, 100))
+      .setPlaceholder(config.placeholder)
+      .addOptions(candidates.map(({ index, item, quality, curse }) => ({
+        label: uiTrim(item.name, 90),
+        description: uiTrim(`${quality.name}${curse ? ` · Nguyền: ${curse.name}` : ''} · ${getItemTypeText(item.type)}`, 95),
+        value: String(index),
+      })));
+    return new ActionRowBuilder().addComponents(menu);
+  }
+
+  function clearEquippedSlotIfEmpty(userData, item) {
+    if (!item) return;
+    const stillHas = hasInventoryItem(userData, item.key);
+    if (stillHas) return;
+    const slotByType = { weapon: 'equippedWeapon', artifact: 'equippedArtifact', armor: 'equippedArmor', tool: 'equippedTool', talisman: 'equippedTalisman' };
+    const slot = slotByType[item.type];
+    if (slot && userData[slot] === item.key) userData[slot] = null;
+    if (userData.equippedArtifact === item.key && item.type === 'weapon') userData.equippedArtifact = null;
+    if (userData.equippedWeapon === item.key && item.type === 'artifact') userData.equippedWeapon = null;
+  }
+
+  async function applyCombatInventoryItemAction({ guild, member, userData, actor, enemy, kind, inventoryIndex, lines }) {
+    normalizeInventoryData(userData);
+    const config = getCombatItemKindConfig(kind);
+    if (!config) return { ok: false, message: 'Loại thao tác combat không hợp lệ.' };
+    const index = Number(inventoryIndex);
+    if (!Number.isInteger(index) || index < 0 || index >= userData.inventory.length) {
+      return { ok: false, message: 'Vật phẩm không còn ở vị trí cũ trong túi. Mở lại menu combat để chọn lại.' };
+    }
+
+    const entry = userData.inventory[index];
+    const item = getShopItemByKey(getInventoryItemKey(entry));
+    if (!item || !config.itemTypes.includes(item.type)) {
+      return { ok: false, message: 'Vật phẩm này không dùng được cho thao tác vừa chọn.' };
+    }
+
+    if (!applyTurnStartEffects(actor, lines)) {
+      return { ok: true, consumed: true };
+    }
+
+    const quality = getInventoryItemQuality(entry);
+    const qualityScale = Math.max(1, Number(quality.multiplier) || 1);
+    const profile = getItemCombatProfile(item, entry) || {};
+
+    if (kind === 'pill') {
+      const healPct = clampNumber((Number(item.combatEffect?.healPct) || Number(profile.healPct) || 0.18) + (qualityScale - 1) * 0.05, 0.12, 0.48);
+      const heal = Math.max(1, Math.floor(actor.maxHp * healPct));
+      const qiGain = Math.max(12, Math.round((Number(item.combatEffect?.qiGain) || Number(profile.qiGain) || 18) + (qualityScale - 1) * 8));
+      actor.hp = Math.min(actor.maxHp, actor.hp + heal);
+      actor.qi = Math.min(getCombatMaxQi(actor), (Number(actor.qi) || 0) + qiGain);
+      if (item.clearTamMa || item.family === 'pill') {
+        actor.dotTurns = Math.max(0, (Number(actor.dotTurns) || 0) - 1);
+      }
+      userData.inventory.splice(index, 1);
+      lines.push(`• ${actor.label} uống **${item.name}**, hồi **+${heal} HP** và **+${qiGain} Linh Khí**.`);
+      return { ok: true, consumed: true };
+    }
+
+    if (kind === 'talisman') {
+      const shieldPct = clampNumber((Number(item.combatEffect?.shieldPct) || Number(profile.shieldPct) || 0.18) + (qualityScale - 1) * 0.04, 0.10, 0.55);
+      const shield = Math.max(6, Math.floor(actor.maxHp * shieldPct));
+      actor.shield = Math.min(Math.floor(actor.maxHp * 0.75), (Number(actor.shield) || 0) + shield);
+      actor.defMod = Math.min(1.75, (Number(actor.defMod) || 1) + Math.max(0.08, Number(profile.defBuff) || 0.08));
+      actor.qi = Math.min(getCombatMaxQi(actor), (Number(actor.qi) || 0) + Math.max(6, Number(profile.qiGain) || 8));
+      if (enemy && isCombatantAlive(enemy)) {
+        if (profile.dotPower) {
+          enemy.dotDamage = Math.max(Number(enemy.dotDamage) || 0, Math.floor(actor.power * clampNumber(profile.dotPower, 0.02, 0.20)));
+          enemy.dotTurns = Math.max(Number(enemy.dotTurns) || 0, 2);
+        }
+        if (profile.stunChance && Math.random() < clampNumber(profile.stunChance + 0.08, 0, 0.45)) {
+          enemy.stunTurns = Math.max(Number(enemy.stunTurns) || 0, 1);
+        }
+        if (item.family === 'security' || item.family === 'clean') {
+          enemy.defMod = Math.max(0.76, (Number(enemy.defMod) || 1) - 0.08);
+        }
+      }
+      userData.inventory.splice(index, 1);
+      clearEquippedSlotIfEmpty(userData, item);
+      lines.push(`• ${actor.label} kích hoạt **${item.name}**, dựng kết giới **+${shield} giáp**${enemy && isCombatantAlive(enemy) ? ' và ép nhiễu lên địch' : ''}.`);
+      return { ok: true, consumed: true };
+    }
+
+    if (kind === 'weapon') {
+      userData.equippedWeapon = item.key;
+      if (!userData.equippedArtifact) userData.equippedArtifact = item.key;
+      const refreshedSkills = getCombatSkillBookForUser(member, userData);
+      if (Array.isArray(refreshedSkills) && refreshedSkills.length > 0) actor.skills = refreshedSkills;
+      const newPower = getMissionMemberPower(userData, member);
+      const oldPower = Number(actor.power) || 1;
+      actor.power = Math.max(1, Math.floor(Math.max(oldPower * 0.92, newPower)));
+      actor.qi = Math.min(getCombatMaxQi(actor), (Number(actor.qi) || 0) + 6);
+      lines.push(`• ${actor.label} đổi sang **${item.name}** (${quality.name}), linh khí đổi nhịp. Lực chiến tạm: **${Math.round(oldPower)} → ${Math.round(actor.power)}**.`);
+      return { ok: true, consumed: true };
+    }
+
+    return { ok: false, message: 'Chưa hỗ trợ vật phẩm này trong combat.' };
   }
 
   function advanceBicanhCombatTurn(combat) {
@@ -21029,6 +21935,129 @@ Kết quả đã khắc vào đạo hồ.`, inline: false },
 
   async function handleBicanhCombatEscape(interaction) {
     await handleBicanhCombatAction(interaction, 'escape', 0);
+  }
+
+
+  async function editBicanhCombatPublicMessage(guild, data, run, combat) {
+    const channelId = combat?.channelId;
+    const messageId = combat?.messageId;
+    if (!channelId || !messageId) return;
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    const message = channel?.messages?.fetch ? await channel.messages.fetch(messageId).catch(() => null) : null;
+    if (!message) return;
+    if (run?.combat?.id) {
+      await message.edit({ embeds: [buildBicanhPokemonCombatEmbed(run.combat)], components: buildBicanhPokemonCombatRows(run.combat) }).catch(() => null);
+    } else {
+      await message.edit({ embeds: [buildDailyBicanhRunEmbed(data, run)], components: buildWeeklyBicanhPanelRows(data, run) }).catch(() => null);
+    }
+  }
+
+  async function handleBicanhCombatItemMenu(interaction) {
+    const raw = interaction.customId.slice(BICANH_COMBAT_ITEM_MENU_PREFIX.length);
+    const [combatId, kind = 'pill'] = raw.split(':');
+    const config = getCombatItemKindConfig(kind);
+    if (!config) {
+      await interaction.reply({ content: 'Loại vật phẩm combat không hợp lệ.', flags: MessageFlags.Ephemeral }).catch(() => null);
+      return;
+    }
+    const data = repairWeeklyBicanhData(getWeeklyBicanhData());
+    const users = loadUsers();
+    const { run, combat } = findBicanhCombatSession(data, combatId);
+    if (!run || !combat) {
+      await interaction.reply({ content: 'Trận này đã kết thúc hoặc mất dữ liệu.', flags: MessageFlags.Ephemeral }).catch(() => null);
+      return;
+    }
+    if (!getBicanhPartyIds(run).includes(interaction.user.id)) {
+      await interaction.reply({ content: 'Đạo hữu không thuộc tổ đội bí cảnh này.', flags: MessageFlags.Ephemeral }).catch(() => null);
+      return;
+    }
+    const current = getBicanhCombatCurrentActor(combat);
+    if (!current || current.id !== interaction.user.id) {
+      await interaction.reply({ content: current ? `Chưa tới lượt đạo hữu. Hiện là lượt <@${current.id}>.` : 'Trận đã mất lượt hiện tại.', flags: MessageFlags.Ephemeral }).catch(() => null);
+      return;
+    }
+    const userData = getOrCreateUser(users, interaction.user.id);
+    const candidates = getCombatInventoryCandidates(userData, kind);
+    if (!candidates.length) {
+      await interaction.reply({ content: `Không có vật phẩm phù hợp để **${config.label.toLowerCase()}** trong túi.`, flags: MessageFlags.Ephemeral }).catch(() => null);
+      return;
+    }
+    const embed = new EmbedBuilder()
+      .setColor(0x22c55e)
+      .setTitle(`🎒 Bí Cảnh Combat · ${config.label}`)
+      .setDescription('Chọn vật phẩm để dùng trong lượt này. Đan/phù sẽ tiêu hao; đổi vũ khí cập nhật skill và lực chiến tạm trong trận. Thật ra khá văn minh, sau bao nhiêu vòng bấm skill khô như bánh tráng.');
+    await interaction.reply({ embeds: [embed], components: [buildCombatItemSelectRow(BICANH_COMBAT_USE_ITEM_PREFIX, combat.id, kind, candidates)], flags: MessageFlags.Ephemeral }).catch(() => null);
+  }
+
+  async function handleBicanhCombatUseItemSelect(interaction) {
+    const raw = interaction.customId.slice(BICANH_COMBAT_USE_ITEM_PREFIX.length);
+    const [combatId, kind = 'pill'] = raw.split(':');
+    const data = repairWeeklyBicanhData(getWeeklyBicanhData());
+    const users = loadUsers();
+    const { run, combat } = findBicanhCombatSession(data, combatId);
+    if (!run || !combat) {
+      await interaction.update({ content: 'Trận này đã kết thúc hoặc mất dữ liệu.', embeds: [], components: [] }).catch(() => null);
+      return;
+    }
+    if (!getBicanhPartyIds(run).includes(interaction.user.id)) {
+      await interaction.update({ content: 'Đạo hữu không thuộc tổ đội bí cảnh này.', embeds: [], components: [] }).catch(() => null);
+      return;
+    }
+    const timeoutResult = await autoAdvanceExpiredBicanhCombat(interaction.guild, data, run, combat);
+    if (timeoutResult.done) {
+      saveBicanhData(data);
+      await updateWeeklyBicanhPanel(interaction.guild, data).catch(() => null);
+      await interaction.update({ content: 'Trận đã tự xử lý do quá hạn. Mở lại bảng combat để xem kết quả.', embeds: [], components: [] }).catch(() => null);
+      await editBicanhCombatPublicMessage(interaction.guild, data, run, combat).catch(() => null);
+      return;
+    }
+    const actor = getBicanhCombatCurrentActor(combat);
+    if (!actor || actor.id !== interaction.user.id) {
+      await interaction.update({ content: actor ? `Chưa tới lượt đạo hữu. Hiện là lượt <@${actor.id}>.` : 'Trận đã mất lượt hiện tại.', embeds: [], components: [] }).catch(() => null);
+      return;
+    }
+    if (combat.locked) {
+      await interaction.update({ content: 'Trận đang xử lý lượt trước.', embeds: [], components: [] }).catch(() => null);
+      return;
+    }
+    combat.locked = true;
+    try {
+      const userData = getOrCreateUser(users, interaction.user.id);
+      const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => interaction.member);
+      const enemy = getBicanhCombatEnemy(combat);
+      const lines = [];
+      const applied = await applyCombatInventoryItemAction({ guild: interaction.guild, member, userData, actor, enemy, kind, inventoryIndex: interaction.values?.[0], lines });
+      if (!applied.ok) {
+        combat.locked = false;
+        await interaction.update({ content: applied.message || 'Không thể dùng vật phẩm này.', embeds: [], components: [] }).catch(() => null);
+        return;
+      }
+      if (enemy && isCombatantAlive(enemy) && isCombatantAlive(actor)) resolveEnemyCounter(combat, lines);
+      combat.log.push(...lines);
+      combat.log = combat.log.slice(-12);
+      saveUsers(users);
+      const outcome = getBicanhCombatOutcome(combat);
+      if (outcome.done) {
+        const beforeCombat = { ...combat };
+        await finishBicanhPokemonCombat(interaction.guild, data, run, combat, outcome.success, lines);
+        saveBicanhData(data);
+        await updateWeeklyBicanhPanel(interaction.guild, data).catch(() => null);
+        if (BICANH_COMBAT_TIMEOUTS.has(beforeCombat.id)) clearTimeout(BICANH_COMBAT_TIMEOUTS.get(beforeCombat.id));
+        BICANH_COMBAT_TIMEOUTS.delete(beforeCombat.id);
+        await interaction.update({ content: 'Đã dùng vật phẩm. Trận đã kết thúc, xem kết quả ở khung bí cảnh.', embeds: [], components: [] }).catch(() => null);
+        await editBicanhCombatPublicMessage(interaction.guild, data, run, beforeCombat).catch(() => null);
+        return;
+      }
+      advanceBicanhCombatTurn(combat);
+      combat.locked = false;
+      saveBicanhData(data);
+      await updateWeeklyBicanhPanel(interaction.guild, data).catch(() => null);
+      scheduleBicanhPokemonCombatTimeout(interaction.guild.id, combat.id);
+      await interaction.update({ content: `Đã dùng vật phẩm:\n${compactPokemonCombatLog(lines, 3)}`, embeds: [], components: [] }).catch(() => null);
+      await editBicanhCombatPublicMessage(interaction.guild, data, run, combat).catch(() => null);
+    } finally {
+      if (combat) combat.locked = false;
+    }
   }
 
   async function handleBicanhJoinParty(interaction) {

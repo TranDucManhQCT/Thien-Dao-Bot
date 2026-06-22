@@ -615,13 +615,31 @@ const commands = [
     .setDMPermission(false),
   new SlashCommandBuilder()
     .setName('trangbi')
-    .setDescription('Trang bị vũ khí, giáp, pháp cụ, module, phù hoặc túi Source đã sở hữu.')
+    .setDescription('Trang bị vũ khí, giáp, pháp cụ, module hoặc phù đã sở hữu.')
     .setDMPermission(false)
     .addStringOption((option) =>
       option
         .setName('item')
-        .setDescription('Mã vật phẩm muốn trang bị hoặc kích hoạt. Xem mã bằng /tuido.')
+        .setDescription('Mã vật phẩm muốn trang bị. Xem mã bằng /tuido.')
         .setRequired(true),
+    ),
+  new SlashCommandBuilder()
+    .setName('thaotrangbi')
+    .setDescription('Tháo một slot trang bị hoặc tháo toàn bộ trang bị đang dùng.')
+    .setDMPermission(false)
+    .addStringOption((option) =>
+      option
+        .setName('slot')
+        .setDescription('Slot muốn tháo.')
+        .setRequired(true)
+        .addChoices(
+          { name: 'Vũ khí chính', value: 'weapon' },
+          { name: 'Pháp bảo lõi', value: 'artifact' },
+          { name: 'Giáp/Đạo bào', value: 'armor' },
+          { name: 'Pháp cụ nghề', value: 'tool' },
+          { name: 'Phù hộ thân', value: 'talisman' },
+          { name: 'Tháo toàn bộ', value: 'all' },
+        ),
     ),
   new SlashCommandBuilder()
     .setName('dung')
