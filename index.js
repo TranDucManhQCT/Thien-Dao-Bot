@@ -30,6 +30,14 @@
 
   const GOLD = 0xffd700;
 
+  function writeJsonAtomic(filePath, data) {
+    const dir = path.dirname(filePath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(tmpPath, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+    fs.renameSync(tmpPath, filePath);
+  }
+
   // ===== Direct stat keys must be initialized before generated item/catalog builders =====
   const DIRECT_STAT_KEYS = [
     'tuVi',
@@ -1325,6 +1333,10 @@
     'Trọng Thương',
     'Nhiễm Uế Khí',
     'Tĩnh Dưỡng',
+    'Linh Tuyền Dưỡng Khí',
+    'Thiện Duyên Bí Cảnh',
+    'Thiên Nhãn Dò Mạch',
+    'Né Bẫy Bí Cảnh',
   ];
   const DAI_DAO_TONG_ROLE_NAME = 'Đại Đạo Tông';
   const DISCIPLE_RANK_ROLES = [
@@ -4340,7 +4352,7 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     const spec = getCraftSpecByKey(specKey);
     userData.daoNghe.craftingSpec = spec.key;
     saveUsers(users);
-    await interaction.reply({ embeds: [new EmbedBuilder().setColor(profession.color).setTitle('Đổi Chuyên Tinh Chế Tạo').setDescription([`${interaction.user} đổi sang **${spec.name}**.`, spec.note, 'Chuyên tinh áp dụng cho `/chetao`.'].join('\n'))], flags: MessageFlags.Ephemeral });
+    await interaction.reply({ embeds: [new EmbedBuilder().setColor(profession.color).setTitle('Đổi Chuyên Tinh Chế Tạo').setDescription([`${interaction.user} đổi sang **${spec.name}**.`, spec.note, 'Chuyên tinh áp dụng cho `/chetao`.'].join('\\n'))], flags: MessageFlags.Ephemeral });
   }
 
   async function handleHocCongThuc(interaction) {
@@ -4381,7 +4393,7 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     addDaoNgheExp(userData, 20 + recipe.tierIndex * 6);
     saveUsers(users);
     const blueprint = getCraftBlueprintByRecipeKey(recipe.key);
-    await interaction.reply({ embeds: [new EmbedBuilder().setColor(profession.color).setTitle('Ngộ Công Thức Thành Công').setDescription([`Đã học **${blueprint?.name || recipe.name}**.`, `Mã craft: \`${recipe.key}\``, `Tốn: **${learnCost} cống hiến**.`].join('\n'))], flags: MessageFlags.Ephemeral });
+    await interaction.reply({ embeds: [new EmbedBuilder().setColor(profession.color).setTitle('Ngộ Công Thức Thành Công').setDescription([`Đã học **${blueprint?.name || recipe.name}**.`, `Mã craft: \`${recipe.key}\``, `Tốn: **${learnCost} cống hiến**.`].join('\\n'))], flags: MessageFlags.Ephemeral });
   }
 
   async function handleCheTao(interaction) {
@@ -4526,26 +4538,44 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
       await interaction.reply({ content: `Đạo hữu chưa sở hữu **${item.name}**.`, flags: MessageFlags.Ephemeral });
       return;
     }
-    const profession = getUserDaoNgheDefinition(userData) || getProfessionForItem(item);
-    if (!removeItemFromInventory(userData, item.key, (candidate) => candidate === entry || getInventoryItemQuality(candidate).key === getInventoryItemQuality(entry).key)) {
-      await interaction.reply({ content: 'Không thể lấy vật phẩm khỏi túi. Túi này cũng biết phản kháng, phiền thật.', flags: MessageFlags.Ephemeral });
+    const decomposable = getDecomposableInventoryEntry(userData, item);
+    if (!decomposable) {
+      await interaction.reply({ content: `Không tìm thấy bản **${item.name}** có thể phân giải. Nếu món duy nhất đang trang bị, hãy tháo bằng /thaotrangbi trước.`, flags: MessageFlags.Ephemeral });
       return;
     }
-    const qualityIndex = getQualityIndex(getInventoryItemQuality(entry).key);
+    const entryToBreak = decomposable.entry;
+    const profession = getUserDaoNgheDefinition(userData) || getProfessionForItem(item);
+    userData.inventory.splice(decomposable.index, 1);
+    const qualityIndex = getQualityIndex(getInventoryItemQuality(entryToBreak).key);
     const itemProfession = getProfessionForItem(item) || profession;
-    const materialPool = CRAFT_MATERIAL_CATALOG.filter((material) => material.professionKey === itemProfession.key || material.family === item.family);
+    const materialPool = CRAFT_MATERIAL_CATALOG.filter((material) => itemProfession ? (material.professionKey === itemProfession.key || material.family === item.family) : material.family === item.family);
     const gainCount = 2 + qualityIndex + Math.max(0, getCatalogTierIndexForItem(item));
     const gained = [];
     for (let i = 0; i < Math.min(6, gainCount); i += 1) {
-      const material = materialPool[(i * 11 + qualityIndex * 7) % materialPool.length] || CRAFT_MATERIAL_CATALOG[(i * 17) % CRAFT_MATERIAL_CATALOG.length];
+      const material = materialPool[(i * 11 + qualityIndex * 7) % Math.max(1, materialPool.length)] || CRAFT_MATERIAL_CATALOG[(i * 17) % CRAFT_MATERIAL_CATALOG.length];
+      if (!material) continue;
       const qty = 1 + Math.floor((qualityIndex + i) / 3);
       addCraftMaterial(userData, material.key, qty);
       gained.push(`${material.name} x${qty}`);
     }
+    const stoneRewards = [];
+    for (const reward of getRefactorStoneRewardForDecompose(item, entryToBreak)) {
+      if (rollPercent(reward.chance)) {
+        addItemToInventory(userData, reward.key);
+        stoneRewards.push(getShopItemByKey(reward.key)?.name || reward.key);
+      }
+    }
     if (profession) addDaoNgheExp(userData, 8 + qualityIndex * 4);
     normalizeDaoNgheData(userData).decomposeCount += 1;
     saveUsers(users);
-    await interaction.reply({ embeds: [new EmbedBuilder().setColor(profession?.color ?? GOLD).setTitle('Phân Giải Vật Phẩm').setDescription([`Đã phân giải **${item.name} - ${getInventoryItemQuality(entry).name}**.`, 'Nhận:', ...gained.map((line) => `- ${line}`)].join('\n'))], flags: MessageFlags.Ephemeral });
+    await interaction.reply({ embeds: [new EmbedBuilder().setColor(profession?.color ?? GOLD).setTitle('Phân Giải Vật Phẩm').setDescription([
+      `Đã phân giải **${getInventoryItemDisplay(entryToBreak)}**.`,
+      'Nhận:',
+      ...gained.map((line) => `- ${line}`),
+      stoneRewards.length > 0 ? `- Refactor Thạch: ${stoneRewards.join(', ')}` : '- Refactor Thạch: không rơi thêm lần này',
+      '',
+      'Ghi chú: hệ thống ưu tiên phân giải bản **không trang bị** và phẩm thấp trước để tránh lỡ tay phá đồ đang dùng.',
+    ].join('\\n'))], flags: MessageFlags.Ephemeral });
   }
 
 
@@ -4624,19 +4654,45 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
   function getDailyShopUnlockedItems(member = null) {
     const seed = getDailyShopSeed(member);
     const unlocked = SHOP_ITEMS.filter((item) => isShopItemUnlockedForMember(item, member));
-    const mustHave = ['pill', 'artifact', 'tool', 'talisman', 'upgrade_stone', 'bag']
-      .map((type) => unlocked
+    // Upgrade stones are sold in the fixed Forge shelf, not in the random daily shelf.
+    // Random daily shop should feel fresh; upgrade economy should not become a scavenger hunt wearing a shop costume.
+    const dailyPool = unlocked.filter((item) => item.type !== 'upgrade_stone');
+    const mustHave = ['pill', 'artifact', 'tool', 'talisman', 'bag']
+      .map((type) => dailyPool
         .filter((item) => (type === 'artifact' ? isPhapBaoItem(item) : item.type === type))
         .sort((a, b) => deterministicScoreForKey(a.key, `${seed}:must:${type}`) - deterministicScoreForKey(b.key, `${seed}:must:${type}`))[0])
       .filter(Boolean);
-    const rest = unlocked
+    const rest = dailyPool
       .filter((item) => !mustHave.some((picked) => picked.key === item.key))
       .sort((a, b) => deterministicScoreForKey(a.key, seed) - deterministicScoreForKey(b.key, seed));
     return [...mustHave, ...rest].slice(0, DAILY_SHOP_LIMIT);
   }
 
+  function getDefaultUpgradeStoneShopItems(member = null) {
+    const order = [
+      'tieu_refactor_linh_thach',
+      'trung_refactor_linh_thach',
+      'dai_refactor_linh_thach',
+      'thien_refactor_linh_thach',
+      'dao_refactor_linh_thach',
+      'source_refactor_linh_thach',
+      'rollback_phu',
+      'safe_deploy_phu',
+    ];
+
+    const byKey = new Map(SHOP_ITEMS
+      .filter((item) => isShopItemUnlockedForMember(item, member))
+      .filter((item) => item.type === 'upgrade_stone' || ['rollback_phu', 'safe_deploy_phu'].includes(item.key))
+      .map((item) => [item.key, item]));
+
+    return order.map((key) => byKey.get(key)).filter(Boolean);
+  }
+
   function isDailyShopItemAvailable(item, member = null) {
     if (!item) return false;
+    if (item.type === 'upgrade_stone' || ['rollback_phu', 'safe_deploy_phu'].includes(item.key)) {
+      return getDefaultUpgradeStoneShopItems(member).some((shopItem) => shopItem.key === item.key);
+    }
     return getDailyShopUnlockedItems(member).some((dailyItem) => dailyItem.key === item.key);
   }
 
@@ -5715,7 +5771,7 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
         const [, label, value, suffix] = match;
         return `\`${label.trim()} ${value}${suffix.trim() ? ` ${suffix.trim()}` : ''}\``;
       })
-      .join(' ');
+      .join('\n');
   }
 
 
@@ -6672,7 +6728,7 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
         `+${rewardInfo.amount} tu vi · +${actualCongHien} cống hiến`,
         '',
         formatDaoNgheProgress(userData),
-      ].join('\n'))], flags: MessageFlags.Ephemeral });
+      ].join('\\n'))], flags: MessageFlags.Ephemeral });
       return;
     }
 
@@ -7506,7 +7562,7 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
 
   function saveMissionData(data) {
     ensureMissionsFile();
-    fs.writeFileSync(MISSIONS_FILE, `${JSON.stringify(normalizeMissionData(data), null, 2)}\n`, 'utf8');
+    writeJsonAtomic(MISSIONS_FILE, normalizeMissionData(data));
   }
 
   function normalizeMissionData(data = {}) {
@@ -8808,7 +8864,7 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     const channel = await ensureMissionTicketChannel(interaction, mission, users);
 
     const payload = {
-      content: notice ? `${notice}\\n${mission.party.map((id) => `<@${id}>`).join(' ')}`.trim() : mission.party.map((id) => `<@${id}>`).join(' '),
+      content: notice ? `${notice}\\n${mission.party.map((id) => `<@${id}>`).join('\n')}`.trim() : mission.party.map((id) => `<@${id}>`).join('\n'),
       embeds: [buildMissionDetailEmbed(mission, users)],
       components: buildMissionDetailRows(mission),
     };
@@ -9479,7 +9535,7 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
 
   function saveBicanhData(data) {
     ensureBicanhFile();
-    fs.writeFileSync(BICANH_FILE, `${JSON.stringify(normalizeWeeklyBicanhData(data), null, 2)}\n`, 'utf8');
+    writeJsonAtomic(BICANH_FILE, normalizeWeeklyBicanhData(data));
   }
 
   function getWeeklyBicanhTemplate(weekKey = getWeekKey()) {
@@ -10316,7 +10372,9 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
       return;
     }
     if (view === 'shop') {
-      await interaction.editReply({ embeds: [buildShopEmbed(userData, 0, member)], components: buildShopPageRows(interaction.user.id, 0, member), content: null }).catch(() => null);
+      normalizeInventoryData(userData);
+      saveUsers(users);
+      await interaction.editReply({ embeds: [buildShopMenuEmbed(userData, member)], components: buildShopMenuRows(interaction.user.id), content: null }).catch(() => null);
       return;
     }
     await interaction.editReply({ embeds: [buildGoiYEmbed(member, userData)], components: buildHomNayRows(interaction.user.id), content: null }).catch(() => null);
@@ -12788,6 +12846,7 @@ ${blocked.join('\n')}`.slice(0, 1900), flags: MessageFlags.Ephemeral });
         { name: 'Tĩnh dưỡng / nhiệm vụ', value: `${restingText}\n${missionUsedText}`, inline: false },
         { name: 'Túi trữ vật', value: `${bag.name} · ${inventoryText}`, inline: true },
         { name: 'Trang bị chính', value: equippedText.slice(0, 1000), inline: false },
+        { name: 'Bước tiếp theo', value: getEquipmentNextStepText(userData), inline: false },
       )
       .setFooter({ text: 'Trạng thái cá nhân luôn gửi riêng tư. Server đã đủ ồn rồi.' });
 
@@ -13372,16 +13431,17 @@ ${scenario.text}`;
         await interaction.reply({ content: 'Loại trang bị này chưa có slot phù hợp.', flags: MessageFlags.Ephemeral });
         return;
       }
-      const previousKey = userData[slotConfig.field];
-      userData[slotConfig.field] = item.key;
-      saveUsers(users);
+      const previousFound = getEquippedSlotEntry(userData, slotConfig);
       const entry = getBestInventoryEntryByKey(userData, item.key);
+      setEquippedSlotEntry(userData, slotConfig, entry, item);
+      saveUsers(users);
       const profile = getItemCombatProfile(item, entry);
-      const previousItem = previousKey ? getShopItemByKey(previousKey) : null;
+      const previousItem = previousFound ? getShopItemByKey(getInventoryItemKey(previousFound.entry)) : null;
+      const previousText = previousFound ? getInventoryItemDisplay(previousFound.entry) : null;
       await interaction.reply({
         content: [
           `Đã trang bị **${item.name}** vào slot **${slotConfig.label}**.`,
-          previousItem ? `Đã thay **${previousItem.name}** khỏi slot này.` : null,
+          previousItem ? `Đã thay **${previousText || previousItem.name}** khỏi slot này.` : null,
           `Hiệu ứng: ${item.effect}`,
           `Combat: ${profile?.text || 'Không có hiệu ứng combat trực tiếp.'}`,
           `Muốn tháo ra dùng \`/thaotrangbi slot:${slotKey}\`.`,
@@ -13423,11 +13483,12 @@ ${scenario.text}`;
     const removed = [];
     if (slot === 'all') {
       for (const config of Object.values(EQUIPMENT_SLOT_CONFIG)) {
-        const key = userData[config.field];
+        const found = getEquippedSlotEntry(userData, config);
+        const key = found ? getInventoryItemKey(found.entry) : userData[config.field];
         if (!key) continue;
         const item = getShopItemByKey(key);
-        removed.push(`**${config.label}**: ${item?.name ?? key}`);
-        userData[config.field] = null;
+        removed.push(`**${config.label}**: ${found ? getInventoryItemDisplay(found.entry) : (item?.name ?? key)}`);
+        clearEquippedSlotEntry(userData, config);
       }
     } else {
       const config = getEquipmentSlotConfig(slot);
@@ -13435,14 +13496,15 @@ ${scenario.text}`;
         await interaction.reply({ content: 'Slot tháo trang bị không hợp lệ.', flags: MessageFlags.Ephemeral });
         return;
       }
-      const key = userData[config.field];
+      const found = getEquippedSlotEntry(userData, config);
+      const key = found ? getInventoryItemKey(found.entry) : userData[config.field];
       if (!key) {
         await interaction.reply({ content: `Slot **${config.label}** hiện đang trống.`, flags: MessageFlags.Ephemeral });
         return;
       }
       const item = getShopItemByKey(key);
-      removed.push(`**${config.label}**: ${item?.name ?? key}`);
-      userData[config.field] = null;
+      removed.push(`**${config.label}**: ${found ? getInventoryItemDisplay(found.entry) : (item?.name ?? key)}`);
+      clearEquippedSlotEntry(userData, config);
     }
 
     if (removed.length === 0) {
@@ -14056,14 +14118,18 @@ ${scenario.text}`;
     normalizeInventoryData(userData);
     const member = await interaction.guild.members.fetch(interaction.user.id);
 
-    const itemIndex = getInventoryItemIndex(userData, item.key, (entry) => getShopItemByKey(getInventoryItemKey(entry))?.type !== 'upgrade_stone');
+    const selectedUpgradeEntry = pickInventoryEntryForUpgrade(userData, item);
 
-    if (itemIndex < 0) {
-      await interaction.editReply(`Đạo hữu chưa có **${item.name}** trong túi.`);
+    if (!selectedUpgradeEntry) {
+      const ownedCount = countInventoryItem(userData, item.key);
+      await interaction.editReply(ownedCount > 0
+        ? `Các bản **${item.name}** trong túi đều đã đạt phẩm tối đa hoặc không thể nâng tiếp.`
+        : `Đạo hữu chưa có **${item.name}** trong túi.`);
       return;
     }
 
-    let entry = normalizeInventoryEntry(userData.inventory[itemIndex], { keepRawString: false });
+    const itemIndex = selectedUpgradeEntry.index;
+    let entry = normalizeInventoryEntry(selectedUpgradeEntry.entry, { keepRawString: false });
     const quality = getInventoryItemQuality(entry);
 
     if (quality.key === MAX_ITEM_QUALITY) {
@@ -14088,7 +14154,12 @@ ${scenario.text}`;
     }
 
     if (!hasInventoryItem(userData, rule.stone)) {
-      await interaction.editReply(`Thiếu **${stone?.name ?? rule.stone}** để nâng phẩm. Trấn áp Dị Lỗi hoặc đi bí cảnh có tỉ lệ rơi Refactor Linh Thạch.`);
+      await interaction.editReply([
+        `Thiếu **${stone?.name ?? rule.stone}** để nâng phẩm.`,
+        '',
+        '**Cách kiếm chắc chắn:** `/shop` → **Craft / Nâng Phẩm** để mua trực tiếp. Shop mặc định luôn bán đá Refactor, không phụ thuộc random hôm nay.',
+        '**Nguồn phụ:** nhiệm vụ, bí cảnh, quái/boss vẫn có thể rơi thêm nếu muốn farm.',
+      ].join('\n'));
       return;
     }
 
@@ -14100,14 +14171,14 @@ ${scenario.text}`;
     const nextQuality = getQualityByKey(rule.next);
     const lines = [];
 
-    removeItemFromInventory(userData, rule.stone);
-    if (usedSafeDeploy) removeItemFromInventory(userData, 'safe_deploy_phu');
-    if (usedRollback) removeItemFromInventory(userData, 'rollback_phu');
     const spendResult = spendTuViForUpgrade(member, userData, upgradeCost);
     if (!spendResult.ok) {
       await interaction.editReply(`Tu vi khả dụng vừa thay đổi. Cần **${uiNumber(upgradeCost)}**, hiện có thể dùng **${uiNumber(spendResult.spendable)}**.`);
       return;
     }
+    removeItemFromInventory(userData, rule.stone);
+    if (usedSafeDeploy) removeItemFromInventory(userData, 'safe_deploy_phu');
+    if (usedRollback) removeItemFromInventory(userData, 'rollback_phu');
 
     if (success) {
       entry.quality = rule.next;
@@ -14133,7 +14204,8 @@ ${scenario.text}`;
       .setTitle('Nâng Phẩm Vật Phẩm')
       .setDescription(lines.join('\n'))
       .addFields(
-        { name: 'Vật phẩm', value: beforeText, inline: false },
+        { name: 'Vật phẩm', value: `${beforeText}
+Đã chọn: **${selectedUpgradeEntry.reason}**`, inline: false },
         { name: 'Chi phí', value: `${stone?.name ?? rule.stone} + ${uiNumber(upgradeCost)} tu vi`, inline: false },
         { name: 'Tu vi còn lại', value: `**${uiNumber(userData.tuViExp)}**`, inline: true },
         { name: 'Tỉ lệ thành công', value: `${Math.round(successRate * 100)}%`, inline: true },
@@ -15721,6 +15793,77 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
     return EQUIPMENT_SLOT_CONFIG[String(slot || '').toLowerCase()] || null;
   }
 
+  function getEquipmentSlotInstanceField(field) {
+    return `${field}InstanceId`;
+  }
+
+  function getInventoryEntryInstanceId(entry) {
+    if (!entry || typeof entry !== 'object') return null;
+    return String(entry.instanceId || entry.id || '').trim() || null;
+  }
+
+  function findInventoryEntryByInstanceId(userData, instanceId) {
+    const wanted = String(instanceId || '').trim();
+    if (!wanted) return null;
+    for (let index = 0; index < userData.inventory.length; index += 1) {
+      const entry = userData.inventory[index];
+      if (getInventoryEntryInstanceId(entry) === wanted) return { entry, index };
+    }
+    return null;
+  }
+
+  function getEquippedSlotEntry(userData, slotConfig) {
+    normalizeInventoryData(userData);
+    if (!slotConfig) return null;
+    const instanceField = getEquipmentSlotInstanceField(slotConfig.field);
+    const byInstance = findInventoryEntryByInstanceId(userData, userData[instanceField]);
+    if (byInstance) return byInstance;
+    const key = userData[slotConfig.field];
+    if (!key) return null;
+    const index = getInventoryItemIndex(userData, key, (entry) => {
+      const item = getShopItemByKey(getInventoryItemKey(entry));
+      return slotConfig.itemTypes.includes(item?.type);
+    });
+    return index >= 0 ? { entry: userData.inventory[index], index } : null;
+  }
+
+  function setEquippedSlotEntry(userData, slotConfig, entry, item) {
+    if (!slotConfig || !entry || !item) return;
+    userData[slotConfig.field] = item.key;
+    userData[getEquipmentSlotInstanceField(slotConfig.field)] = getInventoryEntryInstanceId(entry);
+  }
+
+  function clearEquippedSlotEntry(userData, slotConfig) {
+    if (!slotConfig) return;
+    userData[slotConfig.field] = null;
+    userData[getEquipmentSlotInstanceField(slotConfig.field)] = null;
+  }
+
+  function getEquippedGearEntries(userData) {
+    normalizeInventoryData(userData);
+    const seen = new Set();
+    return Object.values(EQUIPMENT_SLOT_CONFIG)
+      .map((config) => {
+        const found = getEquippedSlotEntry(userData, config);
+        if (!found) return null;
+        const key = getInventoryItemKey(found.entry);
+        const item = getShopItemByKey(key);
+        if (!item) return null;
+        const id = getInventoryEntryInstanceId(found.entry) || `${config.field}:${key}`;
+        if (seen.has(id)) return null;
+        seen.add(id);
+        return { ...found, item, slot: config };
+      })
+      .filter(Boolean);
+  }
+
+  function getEquipmentNextStepText(userData) {
+    normalizeInventoryData(userData);
+    const emptySlots = Object.values(EQUIPMENT_SLOT_CONFIG).filter((config) => !getEquippedSlotEntry(userData, config));
+    if (emptySlots.length > 0) return `Còn trống: ${emptySlots.map((slot) => slot.label).slice(0, 3).join(', ')}. Vào /tuido hoặc /shop để trang bị thêm.`;
+    return 'Trang bị đã đủ slot chính. Ưu tiên nâng phẩm món đang dùng hoặc đổi build theo Bí Cảnh/combat.';
+  }
+
   function getEquipmentSlotKeyForItemType(type) {
     return {
       weapon: 'weapon',
@@ -15798,19 +15941,12 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
   }
 
   function getEquippedGearKeys(userData) {
-    normalizeInventoryData(userData);
-    return [
-      userData.equippedWeapon,
-      userData.equippedArtifact,
-      userData.equippedArmor,
-      userData.equippedTool,
-      userData.equippedTalisman,
-    ].filter(Boolean).filter((key, index, arr) => arr.indexOf(key) === index);
+    return getEquippedGearEntries(userData).map(({ item }) => item.key).filter((key, index, arr) => arr.indexOf(key) === index);
   }
 
   function getEquippedCombatItems(userData) {
-    return getEquippedGearKeys(userData)
-      .map((key) => getShopItemByKey(key))
+    return getEquippedGearEntries(userData)
+      .map(({ item, entry }) => ({ ...item, displayName: getInventoryItemDisplay(entry), equippedEntry: entry }))
       .filter((item) => isPhapBaoItem(item) || ['tool', 'talisman'].includes(item?.type));
   }
 
@@ -15825,11 +15961,11 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
 
   function getCombinedItemCombatProfile(userData) {
     const items = getEquippedCombatItems(userData);
-    const profiles = items.map((item) => getItemCombatProfile(item, getBestInventoryEntryByKey(userData, item.key))).filter(Boolean);
+    const profiles = items.map((item) => getItemCombatProfile(item, item.equippedEntry || getBestInventoryEntryByKey(userData, item.key))).filter(Boolean);
     if (profiles.length === 0) return null;
     const combined = {
       label: items.map((item) => item.name).slice(0, 5).join(' + '),
-      text: profiles.map((profile) => profile.text).filter(Boolean).slice(0, 3).join(' '),
+      text: profiles.map((profile) => profile.text).filter(Boolean).slice(0, 3).join('\n'),
       power: 0, accuracy: 0, critChance: 0, qiGain: 0, shieldPct: 0, healPct: 0, defBuff: 0, dotPower: 0, stunChance: 0, priority: 0,
     };
     for (const profile of profiles) {
@@ -15871,7 +16007,7 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
     const professionCombat = profession?.combat || {};
     const profile = {
       label: profession ? `${base.label} · ${profession.name}` : base.label,
-      text: [base.text, family.text, profession ? `Đạo Nghiệp: ${profession.name}.` : null].filter(Boolean).join(' '),
+      text: [base.text, family.text, profession ? `Đạo Nghiệp: ${profession.name}.` : null].filter(Boolean).join('\n'),
       power: ((Number(base.power) || 0) + (Number(family.power) || 0) + (Number(explicit.power) || 0) + (Number(professionCombat.power) || 0) + tierCombatPower) * qualityScale,
       accuracy: (Number(base.accuracy) || 0) + (Number(family.accuracy) || 0) + (Number(explicit.accuracy) || 0) + (Number(professionCombat.accuracy) || 0),
       critChance: (Number(base.critChance) || 0) + (Number(family.critChance) || 0) + (Number(explicit.critChance) || 0) + (Number(professionCombat.critChance) || 0),
@@ -16445,10 +16581,9 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
   function getEquippedPhapBaoDirectStats(userData) {
     normalizeInventoryData(userData);
     let stats = createEmptyDirectStats();
-    for (const key of getEquippedGearKeys(userData)) {
-      const item = getShopItemByKey(key);
+    for (const equipped of getEquippedGearEntries(userData)) {
+      const { item, entry } = equipped;
       if (!item || !(isPhapBaoItem(item) || ['tool', 'talisman'].includes(item.type))) continue;
-      const entry = getBestInventoryEntryByKey(userData, key);
       stats = addDirectStats(stats, getItemDirectStats(item, entry));
     }
     stats = addDirectStats(stats, getEquippedItemSetDirectStats(userData));
@@ -16614,7 +16749,7 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
     }
 
     userData.inventory = userData.inventory
-      .map((entry) => normalizeInventoryEntry(entry, { keepRawString: true }))
+      .map((entry) => normalizeInventoryEntry(entry, { keepRawString: false }))
       .filter(Boolean);
 
     if (!userData.storageBag || !getShopItemByKey(userData.storageBag) || getShopItemByKey(userData.storageBag)?.type !== 'bag') {
@@ -16622,8 +16757,17 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
     }
 
     for (const slot of ['equippedArtifact', 'equippedWeapon', 'equippedArmor', 'equippedTool', 'equippedTalisman']) {
+      const instanceField = getEquipmentSlotInstanceField(slot);
+      if (userData[instanceField] && !findInventoryEntryByInstanceId(userData, userData[instanceField])) {
+        userData[instanceField] = null;
+      }
       if (userData[slot] && !userData.inventory.some((entry) => getInventoryItemKey(entry) === userData[slot])) {
         userData[slot] = null;
+        userData[instanceField] = null;
+      }
+      if (userData[slot] && !userData[instanceField]) {
+        const index = userData.inventory.findIndex((entry) => getInventoryItemKey(entry) === userData[slot]);
+        if (index >= 0) userData[instanceField] = getInventoryEntryInstanceId(userData.inventory[index]);
       }
     }
 
@@ -16671,8 +16815,10 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
     const quality = options.quality ?? DEFAULT_ITEM_QUALITY;
     const cursed = Boolean(options.cursed ?? catalogItem?.cursedByDefault ?? false);
 
+    const id = options.id ?? options.instanceId ?? `item_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     return {
-      id: options.id ?? `item_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+      id,
+      instanceId: id,
       key,
       quality,
       cursed,
@@ -16691,8 +16837,10 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
     if (typeof entry === 'object' && entry.key) {
       const quality = getQualityByKey(entry.quality)?.key ?? DEFAULT_ITEM_QUALITY;
       const cursed = Boolean(entry.cursed);
+      const id = entry.id ?? entry.instanceId ?? `item_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
       return {
-        id: entry.id ?? `item_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+        id,
+        instanceId: entry.instanceId ?? id,
         key: String(entry.key),
         quality,
         cursed,
@@ -16738,6 +16886,130 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
     return ['pill', 'talisman', 'upgrade_stone'].includes(item?.type);
   }
 
+  function getInventorySlotKey(entry) {
+    const key = getInventoryItemKey(entry);
+    const item = getShopItemByKey(key);
+    if (!key || !isStackableItem(item)) return getInventoryEntryInstanceId(entry) || `single:${key}:${Math.random().toString(36).slice(2, 8)}`;
+    const quality = getInventoryItemQuality(entry)?.key || DEFAULT_ITEM_QUALITY;
+    const curse = getInventoryItemCurse(entry)?.key || 'normal';
+    return `stack:${key}:${quality}:${curse}`;
+  }
+
+  function getInventorySlotUsage(userData) {
+    normalizeInventoryData(userData);
+    const slots = new Set();
+    let stackEntries = 0;
+    for (const entry of userData.inventory) {
+      const key = getInventoryItemKey(entry);
+      const item = getShopItemByKey(key);
+      const slotKey = getInventorySlotKey(entry);
+      slots.add(slotKey);
+      if (isStackableItem(item)) stackEntries += 1;
+    }
+    return {
+      used: slots.size,
+      capacity: getStorageCapacity(userData),
+      totalEntries: userData.inventory.length,
+      stackEntries,
+      stackedSaved: Math.max(0, userData.inventory.length - slots.size),
+    };
+  }
+
+  function getInventoryItemEquippedText(userData, entry) {
+    const id = getInventoryEntryInstanceId(entry);
+    for (const config of Object.values(EQUIPMENT_SLOT_CONFIG)) {
+      const found = getEquippedSlotEntry(userData, config);
+      if (found && getInventoryEntryInstanceId(found.entry) === id) return `Đang dùng ở **${config.label}**`;
+    }
+    const key = getInventoryItemKey(entry);
+    if (userData.storageBag === key) return 'Đang dùng làm **túi chính**';
+    return 'Chưa trang bị';
+  }
+
+  function getItemFriendlyPurposeText(item = {}, entry = null) {
+    if (!item) return 'Vật phẩm chưa rõ công dụng.';
+    if (item.type === 'upgrade_stone') return 'Dùng để nâng phẩm vật phẩm bằng `/nangpham`. Đây là vật phẩm nền kinh tế, shop bán cố định.';
+    if (item.type === 'pill') return 'Vật phẩm tiêu hao để hồi phục/tu luyện. Có thể dùng ngoài combat hoặc uống trong combat nếu hệ cho phép.';
+    if (item.type === 'talisman') return 'Phù/lệnh hộ thân: có thể trang bị hoặc dùng trong combat để tạo giáp, giảm rủi ro.';
+    if (item.type === 'bag') return 'Nâng không gian túi đồ. Không phải pháp khí, không chiếm slot trang bị.';
+    if (item.type === 'weapon') return 'Vũ khí chính: tăng lực chiến và ảnh hưởng bộ skill combat.';
+    if (item.type === 'armor') return 'Giáp/đạo bào: tăng sống sót, giảm trọng thương và hao tổn.';
+    if (item.type === 'tool') return 'Pháp cụ nghề: hỗ trợ nghề nghiệp, craft và một phần combat.';
+    if (item.type === 'artifact') return 'Pháp bảo lõi: tăng chỉ số tu luyện, chiến đấu và các hiệu ứng Source.';
+    return item.effect || 'Giữ trong túi để dùng cho cơ chế tương ứng.';
+  }
+
+  function getInventoryItemNextActionText(userData, item, entry) {
+    if (!item) return 'Không rõ. Có thể vật phẩm đã bị legacy hoặc thiếu catalog.';
+    if (item.type === 'upgrade_stone') return 'Giữ để nâng phẩm. Khi thiếu đá, vào `/shop` → **Craft / Nâng Phẩm**.';
+    if (item.type === 'pill') return `Có thể dùng bằng \`/dung item:${item.key}\` hoặc **Uống đan** trong combat.`;
+    if (item.type === 'bag') return userData.storageBag === item.key ? 'Đang là túi chính. Chỉ đổi khi có túi dung lượng cao hơn.' : 'Mua túi trong shop sẽ tự nâng, không cần trang bị.';
+    if (['weapon', 'artifact', 'armor', 'tool', 'talisman'].includes(item.type)) {
+      const slotKey = getEquipmentSlotKeyForItemType(item.type);
+      const equipped = getInventoryItemEquippedText(userData, entry).startsWith('Đang dùng');
+      return equipped ? `Có thể tháo bằng \`/thaotrangbi slot:${slotKey}\` hoặc nâng phẩm bằng \`/nangpham item:${item.key}\`.` : `Có thể trang bị bằng \`/trangbi item:${item.key}\`, rồi nâng phẩm nếu muốn.`;
+    }
+    return getShopItemUsageText(item);
+  }
+
+  function compareItemWithEquippedSlot(userData, item, entry) {
+    const slotKey = getEquipmentSlotKeyForItemType(item?.type);
+    const config = getEquipmentSlotConfig(slotKey);
+    if (!config) return 'Không có slot so sánh.';
+    const current = getEquippedSlotEntry(userData, config);
+    if (!current) return `Slot **${config.label}** đang trống.`;
+    if (getInventoryEntryInstanceId(current.entry) === getInventoryEntryInstanceId(entry)) return `Đây là món đang dùng ở **${config.label}**.`;
+    const currentItem = getShopItemByKey(getInventoryItemKey(current.entry));
+    const nextStats = getItemDirectStats(item, entry);
+    const currentStats = getItemDirectStats(currentItem, current.entry);
+    const delta = {};
+    for (const key of DIRECT_STAT_KEYS) delta[key] = (Number(nextStats[key]) || 0) - (Number(currentStats[key]) || 0);
+    const summary = formatDirectStatsCompact(delta);
+    return `So với **${getInventoryItemDisplay(current.entry)}**: ${summary || 'chênh lệch nhỏ/không rõ'}.`;
+  }
+
+  function pickInventoryEntryForUpgrade(userData, item) {
+    normalizeInventoryData(userData);
+    const matches = userData.inventory
+      .map((entry, index) => ({ entry, index }))
+      .filter(({ entry }) => getInventoryItemKey(entry) === item?.key && getShopItemByKey(getInventoryItemKey(entry))?.type !== 'upgrade_stone')
+      .filter(({ entry }) => getInventoryItemQuality(entry).key !== MAX_ITEM_QUALITY);
+    if (matches.length === 0) return null;
+    const equipped = getEquippedGearEntries(userData).find(({ item: equippedItem, entry }) => equippedItem.key === item.key && getInventoryItemQuality(entry).key !== MAX_ITEM_QUALITY);
+    if (equipped) {
+      const found = matches.find(({ entry }) => getInventoryEntryInstanceId(entry) === getInventoryEntryInstanceId(equipped.entry));
+      if (found) return { ...found, reason: 'bản đang trang bị' };
+    }
+    matches.sort((a, b) => {
+      const qualityDelta = getQualityIndex(getInventoryItemQuality(b.entry).key) - getQualityIndex(getInventoryItemQuality(a.entry).key);
+      if (qualityDelta !== 0) return qualityDelta;
+      return Number(a.entry.createdAt || 0) - Number(b.entry.createdAt || 0);
+    });
+    return { ...matches[0], reason: 'bản phẩm cao nhất trong túi' };
+  }
+
+  function getDecomposableInventoryEntry(userData, item) {
+    normalizeInventoryData(userData);
+    const equippedIds = new Set(getEquippedGearEntries(userData).map(({ entry }) => getInventoryEntryInstanceId(entry)).filter(Boolean));
+    const matches = userData.inventory
+      .map((entry, index) => ({ entry, index }))
+      .filter(({ entry }) => getInventoryItemKey(entry) === item?.key)
+      .filter(({ entry }) => !equippedIds.has(getInventoryEntryInstanceId(entry)));
+    if (matches.length === 0) return null;
+    matches.sort((a, b) => getQualityIndex(getInventoryItemQuality(a.entry).key) - getQualityIndex(getInventoryItemQuality(b.entry).key));
+    return matches[0];
+  }
+
+  function getRefactorStoneRewardForDecompose(item, entry) {
+    if (!item || !isPhapBaoItem(item)) return [];
+    const qualityIndex = getQualityIndex(getInventoryItemQuality(entry).key);
+    const tierIndex = getCatalogTierIndexForItem(item);
+    const rewards = [];
+    if (qualityIndex >= 1 || tierIndex >= 1) rewards.push({ key: 'tieu_refactor_linh_thach', chance: Math.min(0.85, 0.25 + qualityIndex * 0.08 + tierIndex * 0.10) });
+    if (qualityIndex >= 3 || tierIndex >= 2) rewards.push({ key: 'trung_refactor_linh_thach', chance: Math.min(0.55, 0.12 + qualityIndex * 0.05 + tierIndex * 0.08) });
+    if (qualityIndex >= 5 || tierIndex >= 3) rewards.push({ key: 'dai_refactor_linh_thach', chance: Math.min(0.32, 0.06 + qualityIndex * 0.035 + tierIndex * 0.05) });
+    return rewards;
+  }
 
   function clampIndex(index, length) {
     if (!Number.isFinite(index) || length <= 0) return 0;
@@ -16751,7 +17023,7 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
       { type: 'talisman', emoji: '📜', title: 'Phù Lục', note: 'Phù tiêu hao trong giao chiến/bí cảnh: tạo khiên, giảm rủi ro, cứu tình huống xấu.' },
       { type: 'artifact', emoji: '⚔️', title: 'Pháp Khí & Trang Bị', note: 'Vũ khí, pháp bảo và giáp. Mua để trang bị, đổi vũ khí trong combat hoặc tăng lực xử lý.' },
       { type: 'bag', emoji: '🎒', title: 'Túi Đồ', note: 'Nâng không gian túi chính. Không phải pháp khí, không chiếm slot trang bị.' },
-      { type: 'upgrade_stone', emoji: '💎', title: 'Craft / Nâng Phẩm', note: 'Đá refactor và vật phẩm hỗ trợ nâng phẩm/craft món kế tiếp.' },
+      { type: 'upgrade_stone', emoji: '💎', title: 'Craft / Nâng Phẩm', note: 'Đá Refactor bán cố định mỗi ngày; nguồn nhiệm vụ/bí cảnh/quái chỉ là bonus random.' },
     ];
   }
 
@@ -16812,7 +17084,7 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
       return getPersonalSuggestedShopItems(userData || createDefaultUserData(), member);
     }
     if (type === 'upgrade_stone') {
-      return getDailyShopUnlockedItems(member).filter((item) => ['upgrade_stone', 'tool'].includes(item.type));
+      return getDefaultUpgradeStoneShopItems(member);
     }
     const categoryTypes = type === 'artifact' ? ['artifact', 'weapon', 'armor'] : [type];
     return getDailyShopUnlockedItems(member).filter((item) => categoryTypes.includes(item.type));
@@ -16824,7 +17096,10 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
 
   function getPersonalSuggestedShopItems(userData, member = null) {
     normalizeInventoryData(userData);
-    const dailyItems = getDailyShopUnlockedItems(member);
+    const dailyItems = [
+      ...getDailyShopUnlockedItems(member),
+      ...getDefaultUpgradeStoneShopItems(member),
+    ].filter((item, index, arr) => item && arr.findIndex((entry) => entry.key === item.key) === index);
     const spendable = getSpendableCongHien(userData);
     const dao = getUserDaoNgheDefinition(userData);
     const bagUsedRatio = getInventoryUsed(userData) / Math.max(1, getStorageCapacity(userData));
@@ -16887,6 +17162,7 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
         '**Gợi ý nhanh**',
         suggestionLines.length ? suggestionLines.join('\n') : 'Chưa có gợi ý rõ. Có lẽ hôm nay tông môn cũng hơi keo.',
         craft ? `\nCraft kế tiếp: **${craft.recipe.outputName}** · ${craft.missingTotal > 0 ? `thiếu ${craft.missingTotal}/${craft.costTotal} nguyên liệu` : 'đã đủ nguyên liệu'}.` : '',
+        'Đá nâng phẩm: **luôn bán ở Craft / Nâng Phẩm**, không phụ thuộc shop random hôm nay.',
       ].filter(Boolean).join('\n'))
       .addFields({
         name: 'Chọn khu',
@@ -16971,10 +17247,11 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
 
     const detailLines = [
       `Loại: **${getReadableShopTypeText(item)}** · Giá: **${price}** · Sở hữu: **${ownedCount}** · ${canBuy ? 'Đủ cống hiến' : 'Chưa đủ cống hiến'}`,
+      item.type === 'upgrade_stone' ? 'Nguồn chắc chắn: **Shop mặc định bán mỗi ngày**. Drop từ nhiệm vụ/bí cảnh/quái chỉ là thêm, không bắt buộc.' : null,
       `Đánh giá: **${getShopFitLabel(userData, item, member)}**`,
       `Dùng để: ${getShopItemPurposeText(userData, item, member)}`,
       `Mua xong: ${getShopAfterBuyText(item)}`,
-    ];
+    ].filter(Boolean);
 
     const compare = getShopCompareText(userData, item);
     if (compare) detailLines.push(compare);
@@ -17014,7 +17291,7 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
   function getShopItemPurposeText(userData, item, member = null) {
     if (item.type === 'pill') return 'Hồi phục, giảm rủi ro hoặc chuẩn bị trước khi đột phá/giao chiến.';
     if (item.type === 'talisman') return 'Dùng trong combat/bí cảnh để tạo khiên, giảm phản phệ hoặc cứu một lượt xấu.';
-    if (item.type === 'upgrade_stone') return 'Dùng cho `/nangpham` để nâng phẩm trang bị, nhất là món đang dùng lâu dài.';
+    if (item.type === 'upgrade_stone') return 'Dùng cho `/nangpham` để nâng phẩm trang bị. Món này là hàng bán cố định trong shop, không phụ thuộc random ngày.';
     if (item.type === 'tool') return 'Tăng hiệu quả xử lý nhiệm vụ, craft hoặc những việc cần đúng nghề.';
     if (isPhapBaoItem(item)) return 'Trang bị để tăng lực chiến, đổi skill/combat profile và định hình build.';
     return item.effect || 'Giữ trong túi để dùng cho cơ chế tương ứng.';
@@ -17024,7 +17301,7 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
     if (item.type === 'pill') return 'vào túi đồ, có thể dùng bằng `/dung` hoặc chọn **Uống đan** trong combat.';
     if (item.type === 'talisman') return 'vào túi đồ, có thể dùng bằng **Dùng phù** trong combat, trang bị hộ thân hoặc tháo bằng `/thaotrangbi`.';
     if (isPhapBaoItem(item)) return 'vào túi đồ, có thể `/trangbi`; tháo bằng `/thaotrangbi`; vũ khí có thể đổi ngay trong combat.';
-    if (item.type === 'upgrade_stone') return 'vào túi đồ, dùng làm nguyên liệu nâng phẩm.';
+    if (item.type === 'upgrade_stone') return 'vào túi đồ, dùng làm nguyên liệu nâng phẩm; thiếu thì quay lại shop mục Craft / Nâng Phẩm để mua tiếp.';
     if (item.type === 'tool') return 'vào túi đồ, có thể trang bị nếu muốn hỗ trợ nghề/nhiệm vụ.';
     return 'vào túi đồ.';
   }
@@ -17130,8 +17407,8 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
 
   function buildTuiDoMenuEmbed(member, userData) {
     const bag = getStorageBag(userData);
+    const usage = getInventorySlotUsage(userData);
     const equippedGear = getEquippedCombatItems(userData);
-    const equippedPhapBao = equippedGear[0] || null;
     const categoryLines = getInventoryTypeConfigs()
       .map((category) => {
         const count = getInventoryEntriesByType(userData, category.type).length;
@@ -17143,16 +17420,24 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
       .setColor(GOLD)
       .setTitle(`Túi Đồ · ${member.displayName}`)
       .setDescription([
-        `Túi: **${bag.name}** · ${getInventoryUsed(userData)}/${getStorageCapacity(userData)} ô`,
-        `Trang bị: **${equippedGear.length > 0 ? equippedGear.map((item) => item.name).join(' · ') : 'Chưa trang bị'}**`,
+        `Túi: **${bag.name}** · **${usage.used}/${usage.capacity} ô**`,
+        usage.stackedSaved > 0 ? `Đã gộp stack: **${usage.stackedSaved}** vật phẩm tiêu hao/linh thạch không chiếm thêm ô.` : null,
+        `Trang bị: **${equippedGear.length > 0 ? equippedGear.map((item) => item.displayName || item.name).slice(0, 5).join(' · ') : 'Chưa trang bị'}**`,
         `Cống hiến: **${getSpendableCongHien(userData)}**`,
-      ].join('\n'))
-      .addFields({
-        name: 'Danh mục có vật phẩm',
-        value: categoryLines.length > 0 ? categoryLines.join('\n') : 'Túi đang trống.',
-        inline: false,
-      })
-      .setFooter({ text: 'Chọn danh mục để xem vật phẩm' });
+      ].filter(Boolean).join('\n'))
+      .addFields(
+        {
+          name: 'Danh mục có vật phẩm',
+          value: categoryLines.length > 0 ? categoryLines.join('\n') : 'Túi đang trống.',
+          inline: false,
+        },
+        {
+          name: 'Bước tiếp theo',
+          value: getEquipmentNextStepText(userData),
+          inline: false,
+        },
+      )
+      .setFooter({ text: 'Chọn danh mục để xem từng món. Đan/phù/Refactor Thạch được gộp stack để đỡ đầy túi vô lý.' });
   }
 
 
@@ -17190,23 +17475,33 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
         .setDescription(`Không có vật phẩm trong **${category.title}**.`);
     }
 
+    const directStats = formatDirectStatsCompact(getItemDirectStats(item, entry));
+    const combatProfile = getItemCombatProfile(item, entry);
+    const mechanismLines = [
+      item?.itemSet ? `Set: **${ITEM_SET_DEFINITIONS[item.itemSet]?.name || item.itemSet}**` : null,
+      item?.passiveEffect ? `Nội tại: ${item.passiveEffect}` : null,
+      item?.activeEffect ? `Kích hoạt: ${item.activeEffect}` : null,
+      item?.procEffect ? `Hiệu ứng ngẫu nhiên: ${item.procEffect}` : null,
+    ].filter(Boolean);
+
     return new EmbedBuilder()
       .setColor(quality.color ?? GOLD)
       .setTitle(`${category.emoji} ${displayName}`)
       .setDescription([
         `Mã: \`${itemKey}\``,
-        `Loại: **${getItemTypeText(item?.type)}**`,
-        `Phẩm chất: **${quality.name}**`,
-        curse ? `Nguyền: **${curse.name}** · ${uiTrim(curse.effect, 120)}` : 'Nguyền: Không',
+        `Loại: **${getItemTypeText(item?.type)}** · Phẩm chất: **${quality.name}**`,
+        `Trạng thái: ${getInventoryItemEquippedText(userData, entry)}`,
+        curse ? `Nguyền: **${curse.name}** · ${uiTrim(curse.bonusText || curse.sideEffectText || curse.name, 140)}` : 'Nguyền: Không',
       ].join('\n'))
       .addFields(
-        { name: 'Đạo nghiệp hợp', value: getItemProfessionText(item), inline: true },
-        { name: 'Chỉ số', value: formatDirectStatsCompact(getItemDirectStats(item, entry)), inline: false },
-        { name: 'Combat', value: getItemCombatProfile(item, entry)?.text || 'Không có hiệu ứng combat trực tiếp.', inline: false },
-        { name: 'Cơ chế riêng', value: [item?.itemSet ? `Set: **${ITEM_SET_DEFINITIONS[item.itemSet]?.name || item.itemSet}**` : null, item?.passiveEffect ? `Nội tại: ${item.passiveEffect}` : null, item?.activeEffect ? `Kích hoạt: ${item.activeEffect}` : null, item?.procEffect ? `Proc: ${item.procEffect}` : null].filter(Boolean).join('\n') || 'Không có cơ chế riêng.', inline: false },
-        { name: 'Cách dùng', value: item ? getShopItemUsageText(item) : 'Không rõ.', inline: false },
+        { name: 'Dùng để làm gì', value: getItemFriendlyPurposeText(item, entry), inline: false },
+        { name: 'Việc nên làm', value: getInventoryItemNextActionText(userData, item, entry), inline: false },
+        { name: 'So với trang bị', value: ['weapon', 'artifact', 'armor', 'tool', 'talisman'].includes(item?.type) ? compareItemWithEquippedSlot(userData, item, entry) : 'Không cần so sánh slot.', inline: false },
+        { name: 'Chỉ số chính', value: directStats || 'Không cộng chỉ số trực tiếp.', inline: false },
+        { name: 'Combat', value: combatProfile?.text || 'Không có hiệu ứng combat trực tiếp.', inline: false },
+        { name: 'Chi tiết thêm', value: mechanismLines.join('\n') || 'Không có cơ chế riêng cần nhớ.', inline: false },
       )
-      .setFooter({ text: `${safeIndex + 1}/${entries.length}` });
+      .setFooter({ text: `${safeIndex + 1}/${entries.length} · Item id: ${getInventoryEntryInstanceId(entry) || 'legacy'}` });
   }
 
 
@@ -17367,8 +17662,7 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
   }
 
   function getInventoryUsed(userData) {
-    normalizeInventoryData(userData);
-    return userData.inventory.length;
+    return getInventorySlotUsage(userData).used;
   }
 
   function hasInventorySpace(userData, slots = 1) {
@@ -18008,6 +18302,19 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
     return statusName ? userData.temporaryStatus === statusName : true;
   }
 
+  function getTemporaryStatusGuide(statusName) {
+    return {
+      'Linh Tuyền Dưỡng Khí': 'Linh tuyền đang dưỡng khí mạch: hồi phục tốt hơn, giảm bớt khí đục và hợp đi tiếp Bí Cảnh.',
+      'Thiện Duyên Bí Cảnh': 'Đội đang có thiện duyên: biến cố xã giao/cứu hộ dễ êm hơn.',
+      'Thiên Nhãn Dò Mạch': 'Tạm nhìn rõ linh mạch: dò đường, tránh bẫy và đọc manh mối tốt hơn.',
+      'Né Bẫy Bí Cảnh': 'Thân pháp còn giữ nhịp né trận: giảm rủi ro bẫy ở lượt kế.',
+      'Tâm Ma Quấn Thân': 'Đạo tâm bị nhiễu: hồi Linh Khí chậm, đột phá và combat rủi ro hơn.',
+      'Đạo Tâm Kiên Định': 'Đạo tâm ổn định: hành động mạo hiểm an toàn hơn.',
+      'Bế Quan': 'Đang bế quan: tạm rời hoạt động thường để tích lũy tu vi.',
+      'Đang Xuất Sơn': 'Đang xử công án ngoài tông: bị khóa hoạt động nội tông cho tới khi xong vụ.',
+    }[statusName] || 'Trạng thái tạm thời đang ảnh hưởng trực tiếp lên tu luyện/combat.';
+  }
+
   function formatTemporaryStatus(userData) {
     if (!isTemporaryStatusActive(userData)) {
       return 'Không có';
@@ -18021,8 +18328,8 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
       month: '2-digit',
     });
 
-    const statsText = userData.temporaryDirectStats ? ` · ${formatDirectStatsCompact(userData.temporaryDirectStats)}` : '';
-    return `${userData.temporaryStatus} (đến ${expireText})${statsText}`;
+    const statsText = userData.temporaryDirectStats ? `\nHiệu ứng: ${formatDirectStatsCompact(userData.temporaryDirectStats)}` : '';
+    return `**${userData.temporaryStatus}**\nCòn đến: ${expireText}\nÝ nghĩa: ${getTemporaryStatusGuide(userData.temporaryStatus)}${statsText}`;
   }
 
   function setTemporaryStatus(userData, statusName, durationMs, options = {}) {
@@ -18898,7 +19205,7 @@ ${getDauPhapFinalLine(defenderUnit)}`, inline: false },
       normalizedUsers[userId] = normalizeUserData(userData);
     }
 
-    fs.writeFileSync(USERS_FILE, `${JSON.stringify(normalizedUsers, null, 2)}\n`, 'utf8');
+    writeJsonAtomic(USERS_FILE, normalizedUsers);
   }
 
   function loadLuanDao() {
@@ -18925,7 +19232,7 @@ ${getDauPhapFinalLine(defenderUnit)}`, inline: false },
       questions: data.questions && typeof data.questions === 'object' ? data.questions : {},
     };
 
-    fs.writeFileSync(LUANDAO_FILE, `${JSON.stringify(normalized, null, 2)}\n`, 'utf8');
+    writeJsonAtomic(LUANDAO_FILE, normalized);
   }
 
   function ensureTribulationsFile() {
@@ -18956,12 +19263,7 @@ ${getDauPhapFinalLine(defenderUnit)}`, inline: false },
 
   function saveTribulations(data) {
     ensureTribulationsFile();
-
-    fs.writeFileSync(
-      TRIBULATIONS_FILE,
-      `${JSON.stringify({ events: data.events && typeof data.events === 'object' ? data.events : {} }, null, 2)}\n`,
-      'utf8',
-    );
+    writeJsonAtomic(TRIBULATIONS_FILE, { events: data.events && typeof data.events === 'object' ? data.events : {} });
   }
 
 
@@ -18992,7 +19294,7 @@ ${getDauPhapFinalLine(defenderUnit)}`, inline: false },
   function saveSuKien(data) {
     ensureSuKienFile();
     ensureBicanhFile();
-    fs.writeFileSync(SU_KIEN_FILE, `${JSON.stringify({ active: data.active && typeof data.active === 'object' ? data.active : {} }, null, 2)}\n`, 'utf8');
+    writeJsonAtomic(SU_KIEN_FILE, { active: data.active && typeof data.active === 'object' ? data.active : {} });
   }
 
   function getOrCreateUser(users, userId) {
@@ -19042,9 +19344,20 @@ ${getDauPhapFinalLine(defenderUnit)}`, inline: false },
       normalized.storageBag = DEFAULT_STORAGE_BAG;
     }
 
+    normalized.inventory = normalized.inventory.map((entry) => normalizeInventoryEntry(entry, { keepRawString: false })).filter(Boolean);
+
     for (const slot of ['equippedArtifact', 'equippedWeapon', 'equippedArmor', 'equippedTool', 'equippedTalisman']) {
+      const instanceField = getEquipmentSlotInstanceField(slot);
+      if (normalized[instanceField] && !findInventoryEntryByInstanceId(normalized, normalized[instanceField])) {
+        normalized[instanceField] = null;
+      }
       if (normalized[slot] && !normalized.inventory.some((entry) => getInventoryItemKey(entry) === normalized[slot])) {
         normalized[slot] = null;
+        normalized[instanceField] = null;
+      }
+      if (normalized[slot] && !normalized[instanceField]) {
+        const index = normalized.inventory.findIndex((entry) => getInventoryItemKey(entry) === normalized[slot]);
+        if (index >= 0) normalized[instanceField] = getInventoryEntryInstanceId(normalized.inventory[index]);
       }
     }
 
@@ -19164,10 +19477,15 @@ ${getDauPhapFinalLine(defenderUnit)}`, inline: false },
       inventory: [],
       storageBag: DEFAULT_STORAGE_BAG,
       equippedArtifact: null,
+      equippedArtifactInstanceId: null,
       equippedWeapon: null,
+      equippedWeaponInstanceId: null,
       equippedArmor: null,
+      equippedArmorInstanceId: null,
       equippedTool: null,
+      equippedToolInstanceId: null,
       equippedTalisman: null,
+      equippedTalismanInstanceId: null,
       lastMissionDate: null,
       restingUntil: 0,
       restingReason: null,
@@ -21027,7 +21345,7 @@ ${getDailyBicanhShortText(event)}`;
 
     const event = run.pendingEvent;
     const progress = getDailyBicanhProgressLine(run);
-    const partyText = (run.party || []).map((id) => `<@${id}>`).join(' ') || `<@${run.leaderId}>`;
+    const partyText = (run.party || []).map((id) => `<@${id}>`).join('\n') || `<@${run.leaderId}>`;
     const eventTitle = event ? `${getDailyBicanhTypeLabel(event.type)} · **${getDailyBicanhShortTitle(event)}**` : null;
     const fields = [
       { name: 'Hiện trường', value: clampEmbedFieldValue(getDailyBicanhSceneText(data, run, dungeon, event), 900), inline: false },
@@ -21220,7 +21538,7 @@ ${getDailyBicanhShortText(event)}`;
       }
       const blocked = (run.party || []).filter((id) => data.dailyUses?.[id] === data.weekKey);
       if (blocked.length > 0) {
-        await interaction.editReply({ content: `Không thể bắt đầu: ${blocked.map((id) => `<@${id}>`).join(' ')} đã dùng lượt bí cảnh hôm nay.`, embeds: [buildDailyBicanhRunEmbed(data, run)], components: buildWeeklyBicanhPanelRows(data, run) }).catch(() => null);
+        await interaction.editReply({ content: `Không thể bắt đầu: ${blocked.map((id) => `<@${id}>`).join('\n')} đã dùng lượt bí cảnh hôm nay.`, embeds: [buildDailyBicanhRunEmbed(data, run)], components: buildWeeklyBicanhPanelRows(data, run) }).catch(() => null);
         return;
       }
       for (const memberId of run.party || []) data.dailyUses[memberId] = data.weekKey;
@@ -21292,7 +21610,7 @@ ${getDailyBicanhShortText(event)}`;
       run.status = 'event_choice';
       lines.push('Biến cố này chưa cần đánh ngay. Đội trưởng chọn xử lý an toàn, khai thác thêm, hoặc bỏ qua để giữ nhịp.');
     }
-    run.log = [...(run.log || []), lines.join(' ')].slice(-5);
+    run.log = [...(run.log || []), lines.join('\n')].slice(-5);
     data.lastResult = compactBicanhResult(lines, 360);
     data.updatedAt = Date.now();
     saveUsers(users);
@@ -21547,7 +21865,7 @@ ${getDailyBicanhShortText(event)}`;
     const dungeon = getDungeonTemplateByKey(run.dungeonKey) || getWeeklyBicanhDungeon(data);
     const lines = [`Tầng **${run.floor}/${run.maxFloors}** · ${getDailyBicanhTypeLabel(run.pendingEvent.type)} · **${getDailyBicanhShortTitle(run.pendingEvent)}**`];
     await resolveDailyNonCombatEvent(interaction.guild, users, data, run, dungeon, run.pendingEvent, lines, { mode: ['safe', 'deep', 'skip'].includes(action) ? action : 'safe' });
-    run.log = [...(run.log || []), lines.join(' ')].slice(-5);
+    run.log = [...(run.log || []), lines.join('\n')].slice(-5);
     data.lastResult = compactBicanhResult(lines, 360);
     data.updatedAt = Date.now();
     saveUsers(users);
@@ -21624,7 +21942,7 @@ ${getDailyBicanhShortText(event)}`;
     const embed = new EmbedBuilder()
       .setColor(info.pending.isBoss ? 0xdc2626 : 0xe74c3c)
       .setTitle(`${kind} · Tầng ${info.floor}`)
-      .setDescription([`**${info.monster.name}**`, `${getMonsterDisplayLine(info.monster)}`, `Tổ đội: ${info.party.map((id) => `<@${id}>`).join(' ')}`, `Tự xử lý nếu bỏ mặc quá lâu: ${formatTimestamp(info.pending.autoFightAt)}`].join('\n'))
+      .setDescription([`**${info.monster.name}**`, `${getMonsterDisplayLine(info.monster)}`, `Tổ đội: ${info.party.map((id) => `<@${id}>`).join('\n')}`, `Tự xử lý nếu bỏ mặc quá lâu: ${formatTimestamp(info.pending.autoFightAt)}`].join('\n'))
       .addFields(
         { name: 'Kèo đấu', value: `Đội **${info.partyPower}** / Địch **${info.monsterPower}** · ${getDifficultyLabel(info.ratio)}`, inline: false },
         { name: info.pending.isBoss ? 'Cơ chế boss' : 'Cơ chế giao chiến', value: `**${info.mechanic?.name || 'Dị Lỗi'}** · ${info.mechanic?.text || 'Cơ chế theo áp lực run.'}`, inline: false },
@@ -21831,7 +22149,10 @@ ${status.join(' · ')}` : ''}`;
     userData.inventory.forEach((entry, index) => {
       const item = getShopItemByKey(getInventoryItemKey(entry));
       if (!item || !config.itemTypes.includes(item.type)) return;
-      if (kind === 'weapon' && userData.equippedWeapon === item.key) return;
+      if (kind === 'weapon') {
+        const equipped = getEquippedSlotEntry(userData, EQUIPMENT_SLOT_CONFIG.weapon);
+        if (equipped && getInventoryEntryInstanceId(equipped.entry) === getInventoryEntryInstanceId(entry)) return;
+      }
       const quality = getInventoryItemQuality(entry);
       const curse = getInventoryItemCurse(entry);
       candidates.push({ index, entry, item, quality, curse });
@@ -21858,9 +22179,12 @@ ${status.join(' · ')}` : ''}`;
     if (stillHas) return;
     const slotByType = { weapon: 'equippedWeapon', artifact: 'equippedArtifact', armor: 'equippedArmor', tool: 'equippedTool', talisman: 'equippedTalisman' };
     const slot = slotByType[item.type];
-    if (slot && userData[slot] === item.key) userData[slot] = null;
-    if (userData.equippedArtifact === item.key && item.type === 'weapon') userData.equippedArtifact = null;
-    if (userData.equippedWeapon === item.key && item.type === 'artifact') userData.equippedWeapon = null;
+    if (slot && userData[slot] === item.key) {
+      userData[slot] = null;
+      userData[getEquipmentSlotInstanceField(slot)] = null;
+    }
+    if (userData.equippedArtifact === item.key && item.type === 'weapon') clearEquippedSlotEntry(userData, EQUIPMENT_SLOT_CONFIG.artifact);
+    if (userData.equippedWeapon === item.key && item.type === 'artifact') clearEquippedSlotEntry(userData, EQUIPMENT_SLOT_CONFIG.weapon);
   }
 
   async function applyCombatInventoryItemAction({ guild, member, userData, actor, enemy, kind, inventoryIndex, lines }) {
@@ -21925,8 +22249,8 @@ ${status.join(' · ')}` : ''}`;
     }
 
     if (kind === 'weapon') {
-      userData.equippedWeapon = item.key;
-      if (!userData.equippedArtifact) userData.equippedArtifact = item.key;
+      setEquippedSlotEntry(userData, EQUIPMENT_SLOT_CONFIG.weapon, entry, item);
+      if (!userData.equippedArtifact) setEquippedSlotEntry(userData, EQUIPMENT_SLOT_CONFIG.artifact, entry, item);
       const refreshedSkills = getCombatSkillBookForUser(member, userData);
       if (Array.isArray(refreshedSkills) && refreshedSkills.length > 0) actor.skills = refreshedSkills;
       const newPower = getMissionMemberPower(userData, member);
