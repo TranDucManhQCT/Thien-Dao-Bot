@@ -188,28 +188,6 @@ const commands = [
         .setDescription('Có gỡ cả chức vụ tông môn không? Mặc định: không.'),
     ),
   new SlashCommandBuilder()
-    .setName('dondulieu')
-    .setDescription('Admin: dọn thuộc tính rác trong users.json mà không reset nhân vật.')
-    .setDMPermission(false)
-    .setDefaultMemberPermissions(ADMIN_PERMISSION)
-    .addStringOption((option) =>
-      option
-        .setName('xacnhan')
-        .setDescription('Gõ chính xác: DON DATA')
-        .setRequired(true),
-    )
-    .addUserOption((option) =>
-      option
-        .setName('thanhvien')
-        .setDescription('Chỉ dọn một người chơi. Bỏ trống để dọn toàn bộ.')
-        .setRequired(false),
-    )
-    .addBooleanOption((option) =>
-      option
-        .setName('xemtruoc')
-        .setDescription('Chỉ xem trước dung lượng giảm, không ghi file.'),
-    ),
-  new SlashCommandBuilder()
     .setName('homnay')
     .setDescription('Thiên Cơ Dẫn Lộ: xem hôm nay nên làm gì, lượt còn lại và gợi ý nhanh.')
     .setDMPermission(false),
