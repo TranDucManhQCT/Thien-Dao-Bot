@@ -304,6 +304,8 @@
   const XUAT_SON_PUBLIC_PICK_OWNER = 'public';
   const HOMNAY_NAV_BUTTON_PREFIX = 'td_today_nav:';
   const HETHONG_NAV_BUTTON_PREFIX = 'td_system_nav:';
+  const NHAP_DAO_START_BUTTON = 'td_nhapdao_start';
+  const NHAP_DAO_CLOSE_BUTTON_PREFIX = 'td_nhapdao_close:';
   const BICANH_ROUTE_BUTTON_PREFIX = 'td_bc_route:';
   const BICANH_COMBAT_SKILL_PREFIX = 'td_bc_skill:';
   const BICANH_COMBAT_DEFEND_PREFIX = 'td_bc_def:';
@@ -1339,6 +1341,7 @@
     'Thiên Nhãn Dò Mạch',
     'Né Bẫy Bí Cảnh',
   ];
+  const TAN_MA_GIA_ROLE_NAME = 'Tàn Mã Giả';
   const DAI_DAO_TONG_ROLE_NAME = 'Đại Đạo Tông';
   const DISCIPLE_RANK_ROLES = [
     'Tán Tu',
@@ -4797,6 +4800,16 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
           return;
         }
 
+        if (interaction.commandName === 'setupnhapdao' || interaction.commandName === 'setuphuvo') {
+          await handleSetupNhapDao(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'nhapdao') {
+          await handleNhapDao(interaction);
+          return;
+        }
+
         if (interaction.commandName === 'linhcan') {
           await handleLinhCan(interaction);
           return;
@@ -5192,6 +5205,16 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
       if (interaction.isButton()) {
         if (interaction.customId === OPEN_TICKET_BUTTON) {
           await handleOpenTicket(interaction);
+          return;
+        }
+
+        if (interaction.customId === NHAP_DAO_START_BUTTON) {
+          await handleNhapDao(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(NHAP_DAO_CLOSE_BUTTON_PREFIX)) {
+          await handleNhapDaoClose(interaction);
           return;
         }
 
@@ -10297,6 +10320,332 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
   }
 
 
+  const NHAP_DAO_OPENING_STEP = {
+    title: '【HƯ VÔ GIỚI】',
+    lines: [
+      'Đinh.',
+      '',
+      'Phát hiện linh hồn chưa được Đại Source lập chỉ mục.',
+      '',
+      'Đang dò bản ghi sinh mệnh...',
+      'Đang kiểm tra mệnh số...',
+      'Đang đối chiếu ký ức nền...',
+      'Đang truy vết dấu hiệu rollback...',
+      '',
+      'Dị thường xác nhận.',
+      '',
+      'Phát hiện **Tàn Mã Giả**.',
+      '',
+      'Đang khóa thần hồn...',
+      'Đang xác minh Đạo Cơ...',
+      'Đang kiểm tra quyền tiếp nhận linh khí...',
+      '',
+      'Xác nhận **Ký Chủ**.',
+      '',
+      'Xác nhận khởi động **Hệ Thống**.',
+    ],
+  };
+
+  const NHAP_DAO_LOADING_STEPS = [
+    {
+      percent: 28,
+      bar: '▰▰▰▰▱▱▱▱▱▱▱▱▱▱',
+      title: '【HỆ THỐNG ĐANG TẢI...】',
+      lines: [
+        'Đang mở giao diện Ký Chủ...',
+        'Đang đồng bộ Đạo Cơ...',
+        'Đang thiết lập kênh hấp thụ linh khí...',
+        'Đang kiểm tra mức độ lệch khỏi timeline hiện tại...',
+        '',
+        'Kết quả sơ bộ: **không khớp bản ghi hiện tại**.',
+      ],
+    },
+    {
+      percent: 64,
+      bar: '▰▰▰▰▰▰▰▰▰▱▱▱▱▱',
+      title: '【PHÁT HIỆN DỊ THƯỜNG】',
+      lines: [
+        'Bản ghi sinh mệnh tồn tại.',
+        'Nhưng lịch sử ký ức không đồng bộ.',
+        '',
+        'Một số mảnh ký ức không thuộc timeline hiện tại.',
+        'Một số phản ứng thần hồn xuất hiện trước khi dữ liệu được ghi.',
+        'Một số dấu vết cho thấy Ký Chủ từng tồn tại qua những lần thế giới bị rollback.',
+        '',
+        'Đại Source gọi hiện tượng này là:',
+        '',
+        '**Human Memory Leak**',
+        '',
+        'Tu mã sĩ gọi nó là:',
+        '',
+        '**Tàn Mã Nhân Hồn**',
+        '',
+        'Tên cổ của dị tượng này là...',
+        '',
+        '【KÝ ỨC BỊ RÒ RỈ】',
+      ],
+    },
+    {
+      percent: 100,
+      bar: '▰▰▰▰▰▰▰▰▰▰▰▰▰▰',
+      title: '【CẢNH BÁO THIÊN ĐẠO】',
+      lines: [
+        'Những sinh mệnh mang ký ức rò rỉ sẽ bị Thiên Đạo đánh dấu là **bug**.',
+        '',
+        'Dị thường thì bị sửa.',
+        'Không sửa được thì bị xóa.',
+        'Không xóa được thì rollback cả thế giới.',
+        '',
+        'Muốn sống sót, ngươi phải hợp thức hóa mã sinh mệnh của mình.',
+        '',
+        'Người xưa gọi dòng mã hợp pháp của trời đất là **linh khí**.',
+        'Hấp thụ linh khí, tái cấu trúc bản thân, biến một sinh mệnh tạm thành tồn tại được Đại Source công nhận.',
+        '',
+        'Con đường đó, nhân loại gọi là:',
+        '',
+        '**Tu Tiên.**',
+      ],
+    },
+  ];
+
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function buildNhapDaoPanelEmbed() {
+    return new EmbedBuilder()
+      .setColor(0x0f172a)
+      .setDescription('\u200B')
+      .setFooter({ text: 'Hư Vô Giới · không có gì ngoài một dấu hỏi.' });
+  }
+
+  function buildNhapDaoStartRows(options = {}) {
+    const mysterious = Boolean(options.mysterious);
+    const button = new ButtonBuilder()
+      .setCustomId(NHAP_DAO_START_BUTTON)
+      .setStyle(mysterious ? ButtonStyle.Secondary : ButtonStyle.Primary);
+    if (mysterious) {
+      button.setLabel('?');
+    } else {
+      button.setLabel('Khởi Động Hệ Thống');
+    }
+    return [new ActionRowBuilder().addComponents(button)];
+  }
+
+  function buildNhapDaoCloseRows(userId) {
+    return [new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(`${NHAP_DAO_CLOSE_BUTTON_PREFIX}${userId}`)
+        .setLabel('Đóng')
+        .setStyle(ButtonStyle.Secondary),
+    )];
+  }
+
+  function buildNhapDaoOpeningEmbed(user) {
+    return new EmbedBuilder()
+      .setColor(0x0f172a)
+      .setTitle(NHAP_DAO_OPENING_STEP.title)
+      .setDescription([
+        ...(NHAP_DAO_OPENING_STEP.lines || []),
+        '',
+        user ? `Ký Chủ: ${user}` : null,
+      ].filter((line) => line !== null).join('\n'))
+      .setFooter({ text: 'Hư Vô Giới · xác minh ban đầu.' });
+  }
+
+  function buildNhapDaoLoadingEmbed(step, user) {
+    return new EmbedBuilder()
+      .setColor(step.percent >= 100 ? 0xef4444 : 0x38bdf8)
+      .setTitle(step.title)
+      .setDescription([
+        `\`${step.bar}\` **${step.percent}%**`,
+        '',
+        ...(step.lines || []),
+        '',
+        user ? `Ký Chủ: ${user}` : null,
+      ].filter((line) => line !== null).join('\n'))
+      .setFooter({ text: step.percent >= 100 ? 'Hệ Thống đã tải xong · cần đóng giao diện để ghi nhận danh phận.' : 'Hệ Thống đang tải · đừng thử refresh vũ trụ.' });
+  }
+
+  function buildNhapDaoReadyEmbed(user) {
+    return new EmbedBuilder()
+      .setColor(0x22c55e)
+      .setTitle('【HỆ THỐNG ĐÃ KHỞI ĐỘNG】')
+      .setDescription([
+        'Ký Chủ đã được xác nhận.',
+        '',
+        'Danh phận hiện tại:',
+        '',
+        '**Tàn Mã Giả**',
+        '',
+        'Ngươi chưa được Thiên Đạo công nhận.',
+        'Nhưng từ thời khắc này, ngươi đã không còn là một linh hồn vô danh trong Hư Vô Giới.',
+        '',
+        'Hệ Thống sẽ tiếp tục theo dõi mức độ hợp thức hóa mã sinh mệnh của ngươi.',
+        '',
+        'Bấm **Đóng** để ghi nhận danh phận.',
+        '',
+        user ? `Ký Chủ: ${user}` : null,
+      ].filter((line) => line !== null).join('\n'))
+      .setFooter({ text: 'Sau khi đóng, role Tàn Mã Giả sẽ được gán nếu bot đủ quyền.' });
+  }
+
+  function buildNhapDaoClosedEmbed(user, roleStatusText) {
+    return new EmbedBuilder()
+      .setColor(0x22c55e)
+      .setTitle('【DANH PHẬN ĐÃ GHI NHẬN】')
+      .setDescription([
+        `Ký Chủ: ${user || 'không rõ'}`,
+        '',
+        'Danh phận: **Tàn Mã Giả**',
+        roleStatusText || 'Role đã được xử lý.',
+        '',
+        'Hệ Thống đã mở. Dùng `/hethong` để xem nhiệm vụ chính tuyến tiếp theo.',
+      ].join('\n'))
+      .setFooter({ text: 'MAIN-001 sẽ xuất hiện trong /hethong.' });
+  }
+
+  function buildHeThongNotStartedEmbed(user) {
+    return new EmbedBuilder()
+      .setColor(0x64748b)
+      .setTitle('【HỆ THỐNG CHƯA KHỞI ĐỘNG】')
+      .setDescription([
+        `Ký Chủ: ${user || 'chưa xác nhận'}`,
+        '',
+        'Không tìm thấy bản ghi Ký Chủ đã được kích hoạt trong Đại Source.',
+        'Hãy dùng `/nhapdao` hoặc bấm nút **?** tại Hư Vô Giới.',
+        '',
+        'Sau khi đóng giao diện, Hệ Thống sẽ ghi nhận danh phận **Tàn Mã Giả** và mở **MAIN-001 · Gia Nhập Đại Đạo Tông**.',
+      ].join('\n'))
+      .setFooter({ text: 'Hư Vô Giới chỉ cần một dấu hỏi. Con người sẽ tự bấm, vì tất nhiên là vậy.' });
+  }
+
+  function buildHeThongNotStartedRows() {
+    return buildNhapDaoStartRows();
+  }
+
+  function buildMainQuestActionRows(userId, userData) {
+    const mainQuest = normalizeHeThongData(userData);
+    const rows = [];
+    if (!mainQuest.joinedDaiDaoTong) {
+      rows.push(new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setCustomId(REQUEST_DISCIPLE_BUTTON)
+          .setLabel('Gia Nhập Đại Đạo Tông')
+          .setStyle(ButtonStyle.Success),
+        new ButtonBuilder()
+          .setCustomId(`${HETHONG_NAV_BUTTON_PREFIX}${userId}:home`)
+          .setLabel('Về Hệ Thống')
+          .setStyle(ButtonStyle.Secondary),
+      ));
+      return rows;
+    }
+    return buildHeThongRows(userId);
+  }
+
+  async function handleSetupNhapDao(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Lệnh này chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({ content: 'Chỉ admin mới được dựng Nhập Đạo Đài. Thiên Đạo không phát quyền dựng cổng miễn phí đâu.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const recentMessages = await interaction.channel.messages.fetch({ limit: 30 }).catch(() => null);
+    if (recentMessages) {
+      const oldPanel = recentMessages.find((message) =>
+        message.author.id === client.user.id &&
+        String(message.embeds?.[0]?.title || '').includes('NHẬP ĐẠO ĐÀI') || message.components?.some((row) => row.components?.some((component) => component.customId === NHAP_DAO_START_BUTTON))
+      );
+      if (oldPanel) await oldPanel.delete().catch(() => null);
+    }
+
+    await interaction.channel.send({ content: '\u200B', components: buildNhapDaoStartRows({ mysterious: true }) });
+    await interaction.reply({ content: 'Đã dựng **Hư Vô Giới**: public chỉ còn nút **?**. Ai bấm sẽ thấy toàn bộ Hệ Thống riêng tư.', flags: MessageFlags.Ephemeral });
+  }
+
+  async function handleNhapDao(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Hệ Thống chỉ khởi động trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => interaction.member);
+    syncMainQuestProgress(member, userData);
+
+    if (userData.mainQuest?.systemLoaded) {
+      const rows = userData.mainQuest.joinedDaiDaoTong ? buildHeThongRows(interaction.user.id) : buildMainQuestActionRows(interaction.user.id, userData);
+      await interaction.editReply({
+        embeds: [userData.mainQuest.joinedDaiDaoTong ? buildHeThongEmbed(member, userData) : buildMainQuestEmbed(member, userData)],
+        components: rows,
+      });
+      saveUsers(users);
+      return;
+    }
+
+    await interaction.editReply({ embeds: [buildNhapDaoOpeningEmbed(interaction.user)], components: [] }).catch(() => null);
+    await sleep(750);
+
+    for (const [index, step] of NHAP_DAO_LOADING_STEPS.entries()) {
+      await interaction.editReply({ embeds: [buildNhapDaoLoadingEmbed(step, interaction.user)], components: [] }).catch(() => null);
+      if (index < NHAP_DAO_LOADING_STEPS.length - 1) await sleep(700);
+    }
+
+    await sleep(450);
+    await interaction.editReply({
+      embeds: [buildNhapDaoReadyEmbed(interaction.user)],
+      components: buildNhapDaoCloseRows(interaction.user.id),
+    }).catch(() => null);
+  }
+
+  async function handleNhapDaoClose(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Nút này chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const ownerId = interaction.customId.slice(NHAP_DAO_CLOSE_BUTTON_PREFIX.length);
+    if (ownerId && ownerId !== interaction.user.id) {
+      await interaction.reply({ content: 'Đây không phải giao diện Hệ Thống của ngươi. Vũ trụ đã đủ rối, đừng bấm hộ người khác.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    await interaction.deferUpdate();
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    normalizeHeThongData(userData);
+    userData.mainQuest.systemLoaded = true;
+    userData.mainQuest.hostConfirmed = true;
+    userData.mainQuest.truthFlags.humanMemoryLeak = true;
+    userData.mainQuest.truthFlags.linhKhiIsCode = true;
+    if (!userData.onboardingStartedAt) userData.onboardingStartedAt = new Date().toISOString();
+
+    let roleStatusText = `Role **${TAN_MA_GIA_ROLE_NAME}** đã được ghi nhận trong dữ liệu.`;
+    const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => interaction.member);
+    const tanMaRole = findRoleByName(interaction.guild, TAN_MA_GIA_ROLE_NAME);
+    if (!tanMaRole) {
+      roleStatusText = `Thiếu role **${TAN_MA_GIA_ROLE_NAME}**. Hãy tạo role này thủ công, rồi dùng lại nút hoặc /nhapdao.`;
+    } else if (member?.roles?.cache?.has(tanMaRole.id)) {
+      roleStatusText = `Role **${TAN_MA_GIA_ROLE_NAME}** đã có sẵn.`;
+    } else {
+      await member.roles.add(tanMaRole, 'Nhap Dao: xac nhan Tan Ma Gia.').then(() => {
+        roleStatusText = `Đã gán role **${TAN_MA_GIA_ROLE_NAME}**.`;
+      }).catch((error) => {
+        roleStatusText = `Không thể gán role **${TAN_MA_GIA_ROLE_NAME}**. Kiểm tra role bot có nằm cao hơn role này không. (${error?.message || 'không rõ lỗi'})`;
+      });
+    }
+
+    saveUsers(users);
+    await interaction.editReply({ embeds: [buildNhapDaoClosedEmbed(interaction.user, roleStatusText)], components: [] }).catch(() => null);
+  }
+
+
   const MAIN_QUEST_CHAIN = [
     {
       id: 'MAIN-001',
@@ -10482,7 +10831,7 @@ Rủi ro: ${formatSourceRiskStatsCompact(snapshot.riskStats)}`, inline: false },
 
     return new EmbedBuilder()
       .setColor(0x38bdf8)
-      .setTitle('【HỆ THỐNG ĐẠI ĐẠO】')
+      .setTitle('【HỆ THỐNG】')
       .setDescription([
         `Ký Chủ: ${member ? `<@${member.id}>` : 'không rõ'}`,
         'Danh phận: **Tàn Mã Giả**',
@@ -10495,7 +10844,7 @@ Rủi ro: ${formatSourceRiskStatsCompact(snapshot.riskStats)}`, inline: false },
         `Đạo Lộ Source: **${snapshot.sourcePath}**`,
       ].join('\n'))
       .addFields(...fields)
-      .setFooter({ text: 'Hệ Thống Đại Đạo · mọi chỉ số đi qua cùng một snapshot, không để Thiên Đạo mỗi nơi tính một kiểu.' });
+      .setFooter({ text: 'Hệ Thống · mọi chỉ số đi qua cùng một snapshot, không để Thiên Đạo mỗi nơi tính một kiểu.' });
   }
 
   function buildHeThongRows(userId) {
@@ -10590,6 +10939,17 @@ Rủi ro: ${formatSourceRiskStatsCompact(snapshot.riskStats)}`, inline: false },
     const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => interaction.member);
     syncMainQuestProgress(member, userData);
     saveUsers(users);
+
+    if (!userData.mainQuest?.systemLoaded) {
+      await interaction.reply({ embeds: [buildHeThongNotStartedEmbed(interaction.user)], components: buildHeThongNotStartedRows(), flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (!userData.mainQuest?.joinedDaiDaoTong) {
+      await interaction.reply({ embeds: [buildMainQuestEmbed(member, userData)], components: buildMainQuestActionRows(interaction.user.id, userData), flags: MessageFlags.Ephemeral });
+      return;
+    }
+
     await interaction.reply({ embeds: [buildHeThongEmbed(member, userData)], components: buildHeThongRows(interaction.user.id), flags: MessageFlags.Ephemeral });
   }
 
@@ -10608,8 +10968,12 @@ Rủi ro: ${formatSourceRiskStatsCompact(snapshot.riskStats)}`, inline: false },
     const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => interaction.member);
     syncMainQuestProgress(member, userData);
     saveUsers(users);
+    if (!userData.mainQuest?.systemLoaded) {
+      await interaction.editReply({ embeds: [buildHeThongNotStartedEmbed(interaction.user)], components: buildHeThongNotStartedRows(), content: null }).catch(() => null);
+      return;
+    }
     if (view === 'main') {
-      await interaction.editReply({ embeds: [buildMainQuestEmbed(member, userData)], components: buildHeThongRows(interaction.user.id), content: null }).catch(() => null);
+      await interaction.editReply({ embeds: [buildMainQuestEmbed(member, userData)], components: buildMainQuestActionRows(interaction.user.id, userData), content: null }).catch(() => null);
       return;
     }
     if (view === 'today') {
@@ -10626,6 +10990,10 @@ Rủi ro: ${formatSourceRiskStatsCompact(snapshot.riskStats)}`, inline: false },
     }
     if (view === 'shop') {
       await interaction.editReply({ embeds: [buildShopMenuEmbed(userData, member)], components: buildShopMenuRows(interaction.user.id), content: null }).catch(() => null);
+      return;
+    }
+    if (!userData.mainQuest?.joinedDaiDaoTong) {
+      await interaction.editReply({ embeds: [buildMainQuestEmbed(member, userData)], components: buildMainQuestActionRows(interaction.user.id, userData), content: null }).catch(() => null);
       return;
     }
     await interaction.editReply({ embeds: [buildHeThongEmbed(member, userData)], components: buildHeThongRows(interaction.user.id), content: null }).catch(() => null);
@@ -10682,7 +11050,14 @@ Rủi ro: ${formatSourceRiskStatsCompact(snapshot.riskStats)}`, inline: false },
     }
     const users = loadUsers();
     const userData = getOrCreateUser(users, interaction.user.id);
+    normalizeHeThongData(userData);
     const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => interaction.member);
+    syncMainQuestProgress(member, userData);
+    if (!userData.mainQuest?.systemLoaded) {
+      saveUsers(users);
+      await interaction.reply({ embeds: [buildHeThongNotStartedEmbed(interaction.user)], components: buildHeThongNotStartedRows(), flags: MessageFlags.Ephemeral });
+      return;
+    }
     normalizeXuatSonDailyCounter(userData);
     saveUsers(users);
     await interaction.reply({ embeds: [buildHomNayEmbed(member, userData)], components: buildHomNayRows(interaction.user.id), flags: MessageFlags.Ephemeral });
@@ -10695,7 +11070,15 @@ Rủi ro: ${formatSourceRiskStatsCompact(snapshot.riskStats)}`, inline: false },
     }
     const users = loadUsers();
     const userData = getOrCreateUser(users, interaction.user.id);
+    normalizeHeThongData(userData);
     const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => interaction.member);
+    syncMainQuestProgress(member, userData);
+    if (!userData.mainQuest?.systemLoaded) {
+      saveUsers(users);
+      await interaction.reply({ embeds: [buildHeThongNotStartedEmbed(interaction.user)], components: buildHeThongNotStartedRows(), flags: MessageFlags.Ephemeral });
+      return;
+    }
+    saveUsers(users);
     await interaction.reply({ embeds: [buildGoiYEmbed(member, userData)], components: buildHomNayRows(interaction.user.id), flags: MessageFlags.Ephemeral });
   }
 
@@ -20289,6 +20672,7 @@ ${getDauPhapFinalLine(defenderUnit)}`, inline: false },
 
   function getFullResetGameRoleNames(includePositionRoles = false) {
     const roleNames = [
+      TAN_MA_GIA_ROLE_NAME,
       DAI_DAO_TONG_ROLE_NAME,
       XUAT_SON_STATUS_ROLE_NAME,
       ...DISCIPLE_RANK_ROLES,

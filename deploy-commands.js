@@ -105,6 +105,20 @@ const commands = [
     .setDMPermission(false)
     .setDefaultMemberPermissions(ADMIN_PERMISSION),
   new SlashCommandBuilder()
+    .setName('setupnhapdao')
+    .setDescription('Admin: dựng Hư Vô Giới public chỉ có nút ? để khởi động Hệ Thống riêng tư.')
+    .setDMPermission(false)
+    .setDefaultMemberPermissions(ADMIN_PERMISSION),
+  new SlashCommandBuilder()
+    .setName('setuphuvo')
+    .setDescription('Admin: dựng Hư Vô Giới public chỉ có nút ? để khởi động Hệ Thống riêng tư.')
+    .setDMPermission(false)
+    .setDefaultMemberPermissions(ADMIN_PERMISSION),
+  new SlashCommandBuilder()
+    .setName('nhapdao')
+    .setDescription('Khởi động Hệ Thống và xác nhận danh phận Tàn Mã Giả.')
+    .setDMPermission(false),
+  new SlashCommandBuilder()
     .setName('linhcan')
     .setDescription('Dò Linh Mạch / Căn Cơ trong Động Phủ Nhập Môn.')
     .setDMPermission(false)
