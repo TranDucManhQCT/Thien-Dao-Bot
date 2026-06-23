@@ -303,6 +303,7 @@
   const XUAT_SON_STATUS_ROLE_NAME = 'Đang Xuất Sơn';
   const XUAT_SON_PUBLIC_PICK_OWNER = 'public';
   const HOMNAY_NAV_BUTTON_PREFIX = 'td_today_nav:';
+  const HETHONG_NAV_BUTTON_PREFIX = 'td_system_nav:';
   const BICANH_ROUTE_BUTTON_PREFIX = 'td_bc_route:';
   const BICANH_COMBAT_SKILL_PREFIX = 'td_bc_skill:';
   const BICANH_COMBAT_DEFEND_PREFIX = 'td_bc_def:';
@@ -4826,6 +4827,11 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
           return;
         }
 
+        if (interaction.commandName === 'hethong') {
+          await handleHeThong(interaction);
+          return;
+        }
+
         if (interaction.commandName === 'homnay') {
           await handleHomNay(interaction);
           return;
@@ -5362,6 +5368,11 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
 
         if (interaction.customId.startsWith(XUAT_SON_PREP_BUTTON_PREFIX)) {
           await handleXuatSonPrepButton(interaction);
+          return;
+        }
+
+        if (interaction.customId.startsWith(HETHONG_NAV_BUTTON_PREFIX)) {
+          await handleHeThongNavButton(interaction);
           return;
         }
 
@@ -6379,7 +6390,7 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     const embed = new EmbedBuilder()
       .setColor(GOLD)
       .setTitle('⚡ Source Audit · Thiên Kiếp Đang Diễn Ra')
-      .setDescription(lines.join('\n'));
+      .setDescription(['Hệ Thống đã tính toán đạo lộ phù hợp cho hôm nay.', '', ...lines].join('\n'));
 
     if (stillActive.length > 0) {
       await interaction.reply({ embeds: [embed] });
@@ -7372,7 +7383,7 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     const embed = new EmbedBuilder()
       .setColor(GOLD)
       .setTitle(`Bảng Xếp Hạng ${config.title}`)
-      .setDescription(lines.join('\n'));
+      .setDescription(['Hệ Thống đã tính toán đạo lộ phù hợp cho hôm nay.', '', ...lines].join('\n'));
 
     await interaction.reply({ embeds: [embed] });
   }
@@ -10272,6 +10283,289 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
       .setFooter({ text: 'Gợi ý dựa trên cảnh giới, nghề, Đạo Lộ Source, trang bị, craft và bảng hôm nay.' });
   }
 
+
+  const MAIN_QUEST_CHAIN = [
+    {
+      id: 'MAIN-001',
+      title: 'Gia Nhập Đại Đạo Tông',
+      minLevel: 0,
+      lore: 'Đại Đạo Tông là nơi che giấu những Tàn Mã Giả chưa được Thiên Đạo công nhận.',
+      objective: 'Gia nhập Đại Đạo Tông',
+      reward: 'Công pháp: Đại Đạo Git Linh Quyết\nHiệu quả: hấp thụ linh khí từ GitHub Commit',
+      unlock: 'Mở khóa con đường tu tiên hợp thức hóa mã sinh mệnh.',
+      truth: 'Ngươi là một Tàn Mã Giả mang dấu vết ký ức rò rỉ.',
+    },
+    {
+      id: 'MAIN-002',
+      title: 'Commit Đầu Tiên',
+      minLevel: 1,
+      lore: 'Mỗi commit là một đạo văn khắc vào thế giới ngoài mô phỏng. Hệ Thống dùng đạo văn đó để hấp thụ linh khí.',
+      objective: 'Dùng /checkcommit lần đầu',
+      reward: 'Tu vi +100\nCống hiến +50\nMở khóa nhịp tu luyện GitHub hằng ngày',
+      unlock: 'Đại Đạo Git Linh Quyết bắt đầu vận hành ổn định.',
+      truth: 'Commit sạch giúp Đạo Cơ ổn định; commit spam chỉ làm Thiên Đạo khinh bỉ, mà nó vốn đã khó ưa.',
+    },
+    {
+      id: 'MAIN-003',
+      title: 'Luyện Khí: Quyền Đọc',
+      minLevel: 4,
+      lore: 'Linh khí là code trời đất: dòng quyền hạn hợp pháp thấp nhất nhưng ổn định nhất trong Đại Source.',
+      objective: 'Đạt Luyện Khí và ổn định Đạo Cơ',
+      reward: 'Mở giải thích Tu Vi / Đột Phá\nMở gợi ý nâng cảnh giới trong /hethong',
+      unlock: 'Sự thật: linh khí không phải phép màu, mà là mã nền hợp pháp.',
+      truth: 'Luyện Khí là mở quyền đọc với code trời đất.',
+    },
+    {
+      id: 'MAIN-004',
+      title: 'Tàn Mã Nhân Hồn',
+      minLevel: 8,
+      lore: 'Déjà vu, giấc mơ lạ, thiên tài sinh ra đã nhớ công thức cũ: đó là Human Memory Leak.',
+      objective: 'Đạt Trúc Cơ để khóa nền mã sinh mệnh',
+      reward: 'Mở lore Human Memory Leak sâu hơn\nGợi ý Bí Cảnh: dữ liệu timeline cũ',
+      unlock: 'Sự thật: nhân loại là cache lỗi của vũ trụ.',
+      truth: 'Trúc Cơ là đóng lại nền tảng mã sinh mệnh để không bị rollback cuốn trôi.',
+    },
+    {
+      id: 'MAIN-005',
+      title: 'Thiên Đạo Đang Nhìn',
+      minLevel: 12,
+      lore: 'Khi ký ức rò rỉ vượt ngưỡng, Thiên Đạo không gọi đó là kỳ tích. Nó gọi đó là bug.',
+      objective: 'Đạt Kim Đan và xử lý một Source Incident',
+      reward: 'Mở tuyến Xuất Sơn rõ hơn\nMở cảnh báo Thiên Kiếp / Security Check',
+      unlock: 'Sự thật: dị thường thì bị sửa, không sửa được thì bị xóa.',
+      truth: 'Kim Đan là lõi vận hành độc lập đầu tiên của Ký Chủ.',
+    },
+    {
+      id: 'MAIN-006',
+      title: 'Hidden Branch Đại Đạo Tông',
+      minLevel: 16,
+      lore: 'Đại Đạo Tông không phải tông môn bình thường. Nó là một nhánh ẩn ngoài bản ghi chính của Thiên Đạo.',
+      objective: 'Đạt Nguyên Anh và chứng minh quyền tồn tại độc lập',
+      reward: 'Mở lore Hidden Branch\nMở mục tiêu tông môn cấp cao',
+      unlock: 'Sự thật: Đại Đạo Tông đang sàng lọc nhiều Ký Chủ, không chỉ một người.',
+      truth: 'Nguyên Anh là lúc ý thức bắt đầu tách khỏi thân xác vật lý của mô phỏng.',
+    },
+    {
+      id: 'MAIN-ROOT',
+      title: 'Đường Phá Thiên',
+      minLevel: 72,
+      lore: 'Thành Đế là được hệ thống công nhận. Phá Thiên là khiến hệ thống không còn quyền quyết định ai được sống.',
+      objective: 'Đạt Đạo Tổ và quy tụ Ký Chủ đủ tư cách',
+      reward: 'Mở tuyến Đại Đạo Phản Thiên\nMở sự thật về Đạo Tổ đời đầu',
+      unlock: 'Sự thật cuối: Hệ Thống là bẫy tuyển quân của Đạo Tổ.',
+      truth: 'Chân Mệnh không phải kẻ được trời chọn. Chân Mệnh là kẻ khiến trời không còn quyền chọn.',
+    },
+  ];
+
+  function normalizeHeThongData(userData) {
+    const current = userData.mainQuest && typeof userData.mainQuest === 'object' ? userData.mainQuest : {};
+    const truthFlags = current.truthFlags && typeof current.truthFlags === 'object' ? current.truthFlags : {};
+    userData.mainQuest = {
+      chapter: Math.max(1, Number(current.chapter) || 1),
+      step: Math.max(1, Number(current.step) || 1),
+      completed: Array.isArray(current.completed) ? current.completed.map(String).slice(0, 200) : [],
+      systemLoaded: Boolean(current.systemLoaded),
+      hostConfirmed: Boolean(current.hostConfirmed),
+      joinedDaiDaoTong: Boolean(current.joinedDaiDaoTong),
+      gitCultivationUnlocked: Boolean(current.gitCultivationUnlocked || userData.githubVerified),
+      truthFlags: {
+        humanMemoryLeak: Boolean(truthFlags.humanMemoryLeak),
+        linhKhiIsCode: Boolean(truthFlags.linhKhiIsCode),
+        hiddenBranch: Boolean(truthFlags.hiddenBranch),
+        thienDaoIsJailer: Boolean(truthFlags.thienDaoIsJailer),
+        daiSourceIsPrison: Boolean(truthFlags.daiSourceIsPrison),
+        daoToCreator: Boolean(truthFlags.daoToCreator),
+        phaThienPath: Boolean(truthFlags.phaThienPath),
+      },
+    };
+    return userData.mainQuest;
+  }
+
+  function getHeThongQuestForUser(userData) {
+    const tuVi = getTuViFromExp(Number(userData.tuViExp) || 0);
+    const completed = new Set((userData.mainQuest?.completed || []).map(String));
+    const available = MAIN_QUEST_CHAIN.filter((quest) => tuVi.level >= quest.minLevel);
+    return available.find((quest) => !completed.has(quest.id)) || available[available.length - 1] || MAIN_QUEST_CHAIN[0];
+  }
+
+  function getHeThongTruthLines(userData, tuVi = getTuViFromExp(Number(userData.tuViExp) || 0)) {
+    const lines = ['- Ngươi là **Tàn Mã Giả** mang dấu vết ký ức rò rỉ.'];
+    if (tuVi.level >= 4) lines.push('- **Linh khí** là code trời đất hợp pháp.');
+    if (tuVi.level >= 8) lines.push('- Déjà vu và mộng cũ là **Human Memory Leak**.');
+    if (tuVi.level >= 12) lines.push('- Thiên kiếp là kiểm tra dị thường của Đại Source.');
+    if (tuVi.level >= 16) lines.push('- Đại Đạo Tông là **Hidden Branch** ngoài bản ghi chính.');
+    if (tuVi.level >= 72) lines.push('- Đạo Tổ đời đầu tạo Hệ Thống để mở đường **Phá Thiên**.');
+    return lines;
+  }
+
+  function getLegitimacyPercent(userData) {
+    const tuVi = getTuViFromExp(Number(userData.tuViExp) || 0);
+    const base = Math.min(99.9, 3.2 + (tuVi.level * 1.15));
+    const githubBonus = userData.githubVerified ? 2.4 : 0;
+    const sectBonus = userData.mainQuest?.joinedDaiDaoTong ? 1.8 : 0;
+    return Math.min(99.9, base + githubBonus + sectBonus).toFixed(1);
+  }
+
+  function buildHeThongEmbed(member, userData) {
+    normalizeHeThongData(userData);
+    const tuVi = getTuViFromExp(Number(userData.tuViExp) || 0);
+    const quest = getHeThongQuestForUser(userData);
+    const dao = getUserDaoNgheDefinition(userData);
+    const legitimacy = getLegitimacyPercent(userData);
+    const status = userData.githubVerified ? 'đang hợp thức hóa ổn định' : 'chưa liên kết đạo văn GitHub';
+    const fields = [
+      { name: 'Nhiệm vụ chính tuyến hiện tại', value: `**${quest.id} · ${quest.title}**\n${quest.objective}`, inline: false },
+      { name: 'Sự thật đã mở', value: getHeThongTruthLines(userData, tuVi).join('\n').slice(0, 1024), inline: false },
+      { name: 'Gợi ý từ Hệ Thống', value: userData.githubVerified ? 'Dùng **Tu Luyện GitHub** để hấp thụ linh khí từ commit, rồi theo **Thiên Cơ Dẫn Lộ** để chọn việc hôm nay.' : 'Hãy hoàn thành main quest đầu để nhận **Đại Đạo Git Linh Quyết** và mở khóa `/checkcommit`.', inline: false },
+    ];
+
+    return new EmbedBuilder()
+      .setColor(0x38bdf8)
+      .setTitle('【HỆ THỐNG ĐẠI ĐẠO】')
+      .setDescription([
+        `Ký Chủ: ${member ? `<@${member.id}>` : 'không rõ'}`,
+        'Danh phận: **Tàn Mã Giả**',
+        `Cảnh giới: **${tuVi.realm} ${tuVi.minor}**`,
+        `Mức hợp thức hóa: **${legitimacy}%**`,
+        '',
+        `Công pháp lõi: **Đại Đạo Git Linh Quyết**`,
+        `Trạng thái Thiên Đạo: **${status}**`,
+        `Đạo nghiệp: **${dao?.name || 'chưa chọn nghề'}**`,
+      ].join('\n'))
+      .addFields(...fields)
+      .setFooter({ text: 'Hệ Thống Đại Đạo · dashboard Ký Chủ, main quest và đạo lộ hôm nay.' });
+  }
+
+  function buildHeThongRows(userId) {
+    return [
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`${HETHONG_NAV_BUTTON_PREFIX}${userId}:main`).setLabel('Nhiệm Vụ Chính Tuyến').setStyle(ButtonStyle.Primary),
+        new ButtonBuilder().setCustomId(`${HETHONG_NAV_BUTTON_PREFIX}${userId}:today`).setLabel('Thiên Cơ Dẫn Lộ').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(`${HETHONG_NAV_BUTTON_PREFIX}${userId}:github`).setLabel('Tu Luyện GitHub').setStyle(ButtonStyle.Secondary),
+      ),
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`${HETHONG_NAV_BUTTON_PREFIX}${userId}:inventory`).setLabel('Kho & Trang Bị').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`${HETHONG_NAV_BUTTON_PREFIX}${userId}:shop`).setLabel('Shop Tông Môn').setStyle(ButtonStyle.Secondary),
+        new ButtonBuilder().setCustomId(`${HETHONG_NAV_BUTTON_PREFIX}${userId}:home`).setLabel('Về Hệ Thống').setStyle(ButtonStyle.Secondary),
+      ),
+    ];
+  }
+
+  function buildMainQuestEmbed(member, userData) {
+    normalizeHeThongData(userData);
+    const quest = getHeThongQuestForUser(userData);
+    const tuVi = getTuViFromExp(Number(userData.tuViExp) || 0);
+    const nextQuest = MAIN_QUEST_CHAIN.find((entry) => entry.minLevel > tuVi.level);
+    return new EmbedBuilder()
+      .setColor(0xa78bfa)
+      .setTitle(`【NHIỆM VỤ CHÍNH TUYẾN】`)
+      .setDescription([
+        `**${quest.id} · ${quest.title}**`,
+        '',
+        quest.lore,
+        '',
+        `**Mục tiêu:**\n${quest.objective}`,
+        '',
+        `**Phần thưởng:**\n${quest.reward}`,
+      ].join('\n'))
+      .addFields(
+        { name: 'Lore mở khóa', value: quest.unlock, inline: false },
+        { name: 'Sự thật liên quan', value: quest.truth, inline: false },
+        { name: 'Mốc kế tiếp', value: nextQuest ? `Đạt **${getTuViByLevel(nextQuest.minLevel).realm} ${getTuViByLevel(nextQuest.minLevel).minor}** để mở **${nextQuest.id} · ${nextQuest.title}**.` : 'Đã chạm vùng endgame. Hệ Thống sẽ bắt đầu nói những điều nó từng cố giấu, rất lịch sự theo kiểu phản bội.', inline: false },
+      )
+      .setFooter({ text: 'Main quest mở theo cảnh giới · mỗi mốc có lore và phần thưởng riêng.' });
+  }
+
+  function buildGitCultivationEmbed(member, userData) {
+    const today = getTodayString();
+    const githubState = userData.githubVerified
+      ? (userData.lastGithubRewardDate === today ? 'Hôm nay đã hấp thụ linh khí từ commit.' : 'Hôm nay còn có thể dùng /checkcommit.')
+      : 'Chưa liên kết GitHub. Dùng /linkgithub rồi /verifygithub để mở công pháp.';
+    return new EmbedBuilder()
+      .setColor(0x22c55e)
+      .setTitle('【ĐẠI ĐẠO GIT LINH QUYẾT】')
+      .setDescription([
+        'Mỗi commit là một đạo văn khắc vào thế giới bên ngoài.',
+        'Hệ Thống dùng đạo văn đó để hấp thụ linh khí, ổn định Đạo Cơ và hợp thức hóa mã sinh mệnh của Ký Chủ.',
+        '',
+        `Trạng thái: **${githubState}**`,
+      ].join('\n'))
+      .addFields(
+        { name: 'Cách tu luyện', value: '1. Liên kết GitHub bằng `/linkgithub`\n2. Xác minh bằng `/verifygithub`\n3. Dùng `/checkcommit` mỗi ngày để nhận tu vi từ commit hợp lệ.', inline: false },
+        { name: 'Luật Hệ Thống', value: 'Commit đều giúp Đạo Cơ ổn định. Commit spam bị giảm hiệu quả. Commit sạch vẫn là lựa chọn văn minh, nghe lạ nhưng có thật.', inline: false },
+      )
+      .setFooter({ text: 'Tu luyện GitHub · biến công việc dev thành linh khí trong game.' });
+  }
+
+  function buildInventoryHubEmbed(member, userData) {
+    normalizeInventoryData(userData);
+    const equipped = getEquippedGearKeys(userData).map((key) => getShopItemByKey(key)?.name || key).slice(0, 6);
+    const capacity = getStorageCapacity(userData);
+    const used = getInventoryUsed(userData);
+    return new EmbedBuilder()
+      .setColor(0xf59e0b)
+      .setTitle('【KHO & TRANG BỊ】')
+      .setDescription([
+        `Ô túi đang dùng: **${used}/${capacity}**`,
+        equipped.length ? `Trang bị đang dùng: ${equipped.map((name) => `**${name}**`).join(' · ')}` : 'Trang bị đang dùng: chưa có món nổi bật.',
+        '',
+        'Dùng các lệnh dưới để xem chi tiết. Discord chưa cho nút bấm tự hóa thành slash command, đáng tiếc thay cho văn minh UI.',
+      ].join('\n'))
+      .addFields(
+        { name: 'Lệnh nhanh', value: '`/tuido` hoặc `/vatpham` · xem túi đồ\n`/trangbi` · mặc trang bị\n`/thaotrangbi` · tháo trang bị\n`/nangpham` · nâng phẩm vật phẩm', inline: false },
+      );
+  }
+
+  async function handleHeThong(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Hệ Thống Đại Đạo chỉ hoạt động trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    normalizeHeThongData(userData);
+    normalizeInventoryData(userData);
+    const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => interaction.member);
+    saveUsers(users);
+    await interaction.reply({ embeds: [buildHeThongEmbed(member, userData)], components: buildHeThongRows(interaction.user.id), flags: MessageFlags.Ephemeral });
+  }
+
+  async function handleHeThongNavButton(interaction) {
+    if (!interaction.deferred && !interaction.replied) await interaction.deferUpdate().catch(async () => interaction.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => null));
+    const raw = String(interaction.customId || '').slice(HETHONG_NAV_BUTTON_PREFIX.length);
+    const [ownerId, view] = raw.split(':');
+    if (ownerId && ownerId !== interaction.user.id) {
+      await interaction.followUp?.({ content: 'Hệ Thống này không phải của đạo hữu. Dùng `/hethong` để mở bảng riêng, đừng nhìn trộm số hợp thức hóa của người khác như Thiên Đạo tập sự.', flags: MessageFlags.Ephemeral }).catch(() => null);
+      return;
+    }
+    const users = loadUsers();
+    const userData = getOrCreateUser(users, interaction.user.id);
+    normalizeHeThongData(userData);
+    normalizeInventoryData(userData);
+    const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => interaction.member);
+    if (view === 'main') {
+      await interaction.editReply({ embeds: [buildMainQuestEmbed(member, userData)], components: buildHeThongRows(interaction.user.id), content: null }).catch(() => null);
+      return;
+    }
+    if (view === 'today') {
+      await interaction.editReply({ embeds: [buildHomNayEmbed(member, userData)], components: buildHomNayRows(interaction.user.id), content: null }).catch(() => null);
+      return;
+    }
+    if (view === 'github') {
+      await interaction.editReply({ embeds: [buildGitCultivationEmbed(member, userData)], components: buildHeThongRows(interaction.user.id), content: null }).catch(() => null);
+      return;
+    }
+    if (view === 'inventory') {
+      await interaction.editReply({ embeds: [buildInventoryHubEmbed(member, userData)], components: buildHeThongRows(interaction.user.id), content: null }).catch(() => null);
+      return;
+    }
+    if (view === 'shop') {
+      await interaction.editReply({ embeds: [buildShopMenuEmbed(userData, member)], components: buildShopMenuRows(interaction.user.id), content: null }).catch(() => null);
+      return;
+    }
+    await interaction.editReply({ embeds: [buildHeThongEmbed(member, userData)], components: buildHeThongRows(interaction.user.id), content: null }).catch(() => null);
+  }
+
   function buildHomNayEmbed(member, userData) {
     normalizeXuatSonDailyCounter(userData);
     const users = loadUsers();
@@ -10295,30 +10589,30 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
 
     return new EmbedBuilder()
       .setColor(0x22c55e)
-      .setTitle('Hôm Nay Nên Làm Gì?')
-      .setDescription(lines.join('\n'))
+      .setTitle('【THIÊN CƠ DẪN LỘ】')
+      .setDescription(['Hệ Thống đã tính toán đạo lộ phù hợp cho hôm nay.', '', ...lines].join('\n'))
       .addFields(
         { name: 'Mục tiêu gần nhất', value: getPersonalGoalLines(member, userData, users).join('\n'), inline: false },
         { name: 'Đạo Lộ Source', value: getSourcePathProgressText(userData), inline: false },
         { name: 'Mục tiêu tuần tông môn', value: `${weekly.text}\nGóp điểm bằng: Xuất Sơn, Nhiệm Vụ, Bí Cảnh, hạ boss. Tức là chơi game cũng có KPI, vì nhân loại không thể thoát khỏi quản trị.`, inline: false },
         { name: 'Build nhanh', value: `**${getPlayerBuildIdentity(userData, member)}**\nDùng nút **Gợi ý build** để xem món craft kế tiếp và nguồn farm.`, inline: false },
       )
-      .setFooter({ text: 'Daily Hub · mục tiêu cá nhân + mục tiêu tuần + việc còn lại trong ngày.' });
+      .setFooter({ text: 'Thiên Cơ Dẫn Lộ · thay cho /homnay, gợi ý việc nên làm hôm nay.' });
   }
 
   function buildHomNayRows(userId) {
     return [new ActionRowBuilder().addComponents(
-      new ButtonBuilder().setCustomId(`${HOMNAY_NAV_BUTTON_PREFIX}${userId}:bicanh`).setLabel('Bí cảnh').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId(`${HOMNAY_NAV_BUTTON_PREFIX}${userId}:bicanh`).setLabel('Bí Cảnh').setStyle(ButtonStyle.Primary),
       new ButtonBuilder().setCustomId(`${HOMNAY_NAV_BUTTON_PREFIX}${userId}:xuatson`).setLabel('Xuất Sơn').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId(`${HOMNAY_NAV_BUTTON_PREFIX}${userId}:nhiemvu`).setLabel('Nhiệm vụ').setStyle(ButtonStyle.Success),
-      new ButtonBuilder().setCustomId(`${HOMNAY_NAV_BUTTON_PREFIX}${userId}:goiy`).setLabel('Gợi ý build').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId(`${HOMNAY_NAV_BUTTON_PREFIX}${userId}:shop`).setLabel('Shop gợi ý').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`${HOMNAY_NAV_BUTTON_PREFIX}${userId}:nhiemvu`).setLabel('Nội Tông').setStyle(ButtonStyle.Success),
+      new ButtonBuilder().setCustomId(`${HOMNAY_NAV_BUTTON_PREFIX}${userId}:goiy`).setLabel('Gợi Ý Build').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId(`${HOMNAY_NAV_BUTTON_PREFIX}${userId}:shop`).setLabel('Shop Tông Môn').setStyle(ButtonStyle.Secondary),
     )];
   }
 
   async function handleHomNay(interaction) {
     if (!interaction.inGuild()) {
-      await interaction.reply({ content: 'Daily Hub chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+      await interaction.reply({ content: 'Thiên Cơ Dẫn Lộ chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
       return;
     }
     const users = loadUsers();
@@ -10345,7 +10639,7 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     const raw = String(interaction.customId || '').slice(HOMNAY_NAV_BUTTON_PREFIX.length);
     const [ownerId, view] = raw.split(':');
     if (ownerId && ownerId !== interaction.user.id) {
-      await interaction.followUp?.({ content: 'Bảng hôm nay này không phải của đạo hữu. Dùng `/homnay` để mở bảng riêng.', flags: MessageFlags.Ephemeral }).catch(() => null);
+      await interaction.followUp?.({ content: 'Bảng Thiên Cơ này không phải của đạo hữu. Dùng `/hethong` hoặc `/homnay` để mở bảng riêng.', flags: MessageFlags.Ephemeral }).catch(() => null);
       return;
     }
     const users = loadUsers();
@@ -10362,7 +10656,7 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
       const run = getDailyBicanhRun(data, interaction.user.id);
       const payload = { embeds: [run ? buildDailyBicanhRunEmbed(data, run) : buildWeeklyBicanhEmbed(data)], components: ['choice', 'event_choice'].includes(String(run?.status)) ? buildDailyEventActionRows(data, run) : buildWeeklyBicanhPanelRows(data, run), content: null };
       await interaction.channel?.send(payload).catch(() => null);
-      await interaction.followUp?.({ content: 'Đã mở **Bí Cảnh** công khai trong kênh để tổ đội cùng thấy và bấm nút. Bảng `/homnay` vẫn riêng tư, vì lịch sinh hoạt cá nhân chưa cần cả tông môn soi.', flags: MessageFlags.Ephemeral }).catch(() => null);
+      await interaction.followUp?.({ content: 'Đã mở **Bí Cảnh** công khai trong kênh để tổ đội cùng thấy và bấm nút. Bảng **Thiên Cơ Dẫn Lộ** vẫn riêng tư, vì lịch sinh hoạt cá nhân chưa cần cả tông môn soi.', flags: MessageFlags.Ephemeral }).catch(() => null);
       return;
     }
     if (view === 'nhiemvu') {
@@ -14202,7 +14496,7 @@ ${scenario.text}`;
     const embed = new EmbedBuilder()
       .setColor(success ? GOLD : 0x64748b)
       .setTitle('Nâng Phẩm Vật Phẩm')
-      .setDescription(lines.join('\n'))
+      .setDescription(['Hệ Thống đã tính toán đạo lộ phù hợp cho hôm nay.', '', ...lines].join('\n'))
       .addFields(
         { name: 'Vật phẩm', value: `${beforeText}
 Đã chọn: **${selectedUpgradeEntry.reason}**`, inline: false },
@@ -17858,6 +18152,7 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
 
 
   const BE_QUAN_READONLY_COMMANDS = new Set([
+    'hethong',
     'profile',
     'tuvi',
     'trangthai',
@@ -17877,7 +18172,7 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
   }
 
   function getBeQuanBlockedActionMessage() {
-    return 'Đạo hữu đang **Bế Quan**. Trong thời gian này chỉ được xem chỉ số qua `/profile`, `/tuvi`, `/trangthai`, `/skill`, `/capcongphap`, `/congphap hanhdong:xem` hoặc dùng `/xuatquan`.';
+    return 'Đạo hữu đang **Bế Quan**. Trong thời gian này chỉ được xem chỉ số qua `/hethong`, `/profile`, `/tuvi`, `/trangthai`, `/skill`, `/capcongphap`, `/congphap hanhdong:xem` hoặc dùng `/xuatquan`.';
   }
 
   async function shouldBlockInteractionForBeQuan(interaction) {
@@ -17894,6 +18189,10 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
     }
 
     if (interaction.isChatInputCommand?.() && isReadOnlyCommandDuringBeQuan(interaction)) {
+      return false;
+    }
+
+    if (interaction.isButton?.() && String(interaction.customId || '').startsWith(HETHONG_NAV_BUTTON_PREFIX)) {
       return false;
     }
 
@@ -17914,6 +18213,7 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
     'profile',
     'tuvi',
     'trangthai',
+    'hethong',
     'homnay',
     'goiy',
   ]);
@@ -17924,6 +18224,7 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
       || id.startsWith(XUAT_SON_VIEW_BUTTON_PREFIX)
       || id.startsWith(XUAT_SON_PREP_BUTTON_PREFIX)
       || id.startsWith(XUAT_SON_METHOD_BUTTON_PREFIX)
+      || (id.startsWith(HETHONG_NAV_BUTTON_PREFIX) && /:(home|main|today|github)$/.test(id))
       || (id.startsWith(HOMNAY_NAV_BUTTON_PREFIX) && (id.endsWith(':xuatson') || id.endsWith(':goiy')));
   }
 

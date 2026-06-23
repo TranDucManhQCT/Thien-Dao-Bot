@@ -143,8 +143,12 @@ const commands = [
         .setRequired(false),
     ),
   new SlashCommandBuilder()
+    .setName('hethong')
+    .setDescription('Mở Hệ Thống Đại Đạo: nhiệm vụ chính tuyến, đạo lộ hôm nay và trạng thái Ký Chủ.')
+    .setDMPermission(false),
+  new SlashCommandBuilder()
     .setName('homnay')
-    .setDescription('Daily Hub: xem hôm nay nên làm gì, lượt còn lại và gợi ý nhanh.')
+    .setDescription('Thiên Cơ Dẫn Lộ: xem hôm nay nên làm gì, lượt còn lại và gợi ý nhanh.')
     .setDMPermission(false),
   new SlashCommandBuilder()
     .setName('goiy')
