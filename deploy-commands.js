@@ -147,6 +147,55 @@ const commands = [
     .setDescription('Mở Hệ Thống Đại Đạo: nhiệm vụ chính tuyến, đạo lộ hôm nay và trạng thái Ký Chủ.')
     .setDMPermission(false),
   new SlashCommandBuilder()
+    .setName('xoanguoichoi')
+    .setDescription('Admin: xóa full dữ liệu game của một người chơi và dọn liên kết hệ phụ.')
+    .setDMPermission(false)
+    .setDefaultMemberPermissions(ADMIN_PERMISSION)
+    .addUserOption((option) =>
+      option
+        .setName('thanhvien')
+        .setDescription('Người chơi cần xóa full dữ liệu.')
+        .setRequired(true),
+    )
+    .addStringOption((option) =>
+      option
+        .setName('xacnhan')
+        .setDescription('Gõ chính xác: XOA FULL')
+        .setRequired(true),
+    )
+    .addBooleanOption((option) =>
+      option
+        .setName('xoarole')
+        .setDescription('Có gỡ role gameplay khỏi member không? Mặc định: có.'),
+    )
+    .addBooleanOption((option) =>
+      option
+        .setName('xoachucvu')
+        .setDescription('Có gỡ cả chức vụ tông môn không? Mặc định: không.'),
+    ),
+  new SlashCommandBuilder()
+    .setName('dondulieu')
+    .setDescription('Admin: dọn thuộc tính rác trong users.json mà không reset nhân vật.')
+    .setDMPermission(false)
+    .setDefaultMemberPermissions(ADMIN_PERMISSION)
+    .addStringOption((option) =>
+      option
+        .setName('xacnhan')
+        .setDescription('Gõ chính xác: DON DATA')
+        .setRequired(true),
+    )
+    .addUserOption((option) =>
+      option
+        .setName('thanhvien')
+        .setDescription('Chỉ dọn một người chơi. Bỏ trống để dọn toàn bộ.')
+        .setRequired(false),
+    )
+    .addBooleanOption((option) =>
+      option
+        .setName('xemtruoc')
+        .setDescription('Chỉ xem trước dung lượng giảm, không ghi file.'),
+    ),
+  new SlashCommandBuilder()
     .setName('homnay')
     .setDescription('Thiên Cơ Dẫn Lộ: xem hôm nay nên làm gì, lượt còn lại và gợi ý nhanh.')
     .setDMPermission(false),

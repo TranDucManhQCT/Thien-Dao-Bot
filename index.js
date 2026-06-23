@@ -4832,6 +4832,16 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
           return;
         }
 
+        if (interaction.commandName === 'xoanguoichoi') {
+          await handleXoaNguoiChoi(interaction);
+          return;
+        }
+
+        if (interaction.commandName === 'dondulieu') {
+          await handleDonDuLieu(interaction);
+          return;
+        }
+
         if (interaction.commandName === 'homnay') {
           await handleHomNay(interaction);
           return;
@@ -6203,14 +6213,14 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     const rawBeforeCap = base + commitBonus + streakBonus + repoBonus;
     const rawGain = Math.min(rawBeforeCap, GITHUB_DAILY_EXP_CAP);
     const multiplier = getTuViRewardMultiplier(userData, member, 'github', githubActivity);
-    const calculatedGain = Math.floor(rawGain * multiplier.value);
     const remainingDailyGain = Math.max(0, GITHUB_DAILY_TUVI_CAP - userData.githubDailyExp);
-    const gain = Math.min(calculatedGain, remainingDailyGain);
-    const cappedText = gain < calculatedGain
-      ? `\nĐã chạm giới hạn ngày, chỉ nhận phần còn lại: ${gain}/${calculatedGain}.`
+    const grant = grantTuViReward(userData, member, rawGain, 'github', { sourceMultiplier: multiplier, dailyCapRemaining: remainingDailyGain });
+    const calculatedGain = grant.calculatedAmount;
+    const gain = grant.finalAmount;
+    const cappedText = grant.capped
+      ? `
+Đã chạm giới hạn ngày, chỉ nhận phần còn lại: ${gain}/${calculatedGain}.`
       : '';
-
-    userData.tuViExp += gain;
     userData.lastGithubRewardDate = today;
     userData.githubDailyExp += gain;
     userData.githubDailyRewardCount += 1;
@@ -6261,12 +6271,12 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
 
     userData = getOrCreateUser(users, interaction.user.id);
     const member = await interaction.guild.members.fetch(interaction.user.id);
-    const level = getCurrentTuViLevel(member, userData.tuViExp);
-    const tuVi = getTuViByLevel(level);
-    const needed = getExpNeededForBreakthrough(userData.tuViExp, level);
-    const nextTuVi = level >= MAX_TU_VI_LEVEL ? null : getTuViByLevel(level + 1);
-    const progressInfo = getTuViProgressInfo(userData.tuViExp, level);
-    const progressText = uiBar(progressInfo.segmentCurrent, progressInfo.segmentTotal, 14);
+    const snapshot = buildPlayerStatsSnapshot(member, userData);
+    const realm = snapshot.realm;
+    const tuVi = realm.currentTuVi;
+    const needed = realm.nextNeed;
+    const nextTuVi = realm.nextTuVi;
+    const progressText = snapshot.progressBar;
     const breakthroughText = nextTuVi
       ? needed > 0
         ? `Còn thiếu **${uiNumber(needed)}** tu vi để đột phá lên **${nextTuVi.realm} ${nextTuVi.minor}**.`
@@ -6278,9 +6288,10 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
       .setTitle(`🧘 Tu Vi · ${member.displayName}`)
       .setDescription('Thông tin tu vi được gửi riêng tư. Cả tông môn không cần biết đạo hữu thiếu bao nhiêu exp, dù họ chắc chắn sẽ tò mò.')
       .addFields(
-        { name: 'Cảnh giới', value: `**${tuVi.realm} · ${tuVi.minor}**`, inline: true },
-        { name: 'Tu vi hiện có', value: `**${uiNumber(userData.tuViExp)}**`, inline: true },
-        { name: 'Tiến độ', value: progressText, inline: false },
+        { name: 'Cảnh giới thật', value: `**${tuVi.realm} · ${tuVi.minor}**`, inline: true },
+        { name: 'Tu vi tích lũy', value: `**${uiNumber(userData.tuViExp)}**`, inline: true },
+        { name: 'Tu vi khả dụng', value: `**${uiNumber(realm.spendableTuVi)}**`, inline: true },
+        { name: 'Tiến độ đột phá', value: progressText, inline: false },
         { name: 'Đột phá', value: breakthroughText, inline: false },
         { name: 'Commit Đạo hôm nay', value: [`GitHub: **${userData.githubUsername ?? 'Chưa liên kết'}**`, `Xác minh: **${userData.githubVerified ? 'Đã xác minh' : 'Chưa xác minh'}**`, `Thưởng gần nhất: **${userData.lastGithubRewardDate ?? 'Chưa có'}**`, `Tiến độ ngày: **${uiNumber(userData.githubDailyExp ?? 0)}/${uiNumber(GITHUB_DAILY_TUVI_CAP)}**`].join('\n'), inline: false },
       )
@@ -8714,7 +8725,7 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     ) ?? null;
   }
 
-  function canJoinMission(mission, userData, data, userId) {
+  function canJoinMission(mission, userData, data, userId, member = null) {
     normalizeMissionUserData(userData);
 
     if (mission.status !== MISSION_STATUS_OPEN) {
@@ -8732,7 +8743,8 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
       return { ok: false, message: `Đang ở tiểu đội **${activeMission.name}**.` };
     }
 
-    const tuVi = getTuViFromExp(Number(userData.tuViExp) || 0);
+    const realmState = getPlayerRealmState(member, userData);
+    const tuVi = realmState.currentTuVi;
 
     if (tuVi.realmIndex < mission.requiredRealmIndex) {
       return { ok: false, message: `Cần tối thiểu **${getMissionRequiredText(mission)}**.` };
@@ -10205,8 +10217,8 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
   }
 
   function getPersonalGoalLines(member, userData, users = loadUsers()) {
-    const tuVi = getTuViFromExp(Number(userData.tuViExp) || 0);
-    const nextNeed = getExpNeededForBreakthrough(Number(userData.tuViExp) || 0, tuVi.level);
+    const realm = getPlayerRealmState(member, userData);
+    const nextNeed = realm.nextNeed;
     const craft = getBestNextCraftTarget(userData, member);
     const weekly = getWeeklySectGoalStatus(users);
     const lines = [];
@@ -10233,8 +10245,9 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
 
   function buildGoiYEmbed(member, userData) {
     normalizeUserSourceState(userData);
-    const tuVi = getTuViFromExp(Number(userData.tuViExp) || 0);
-    const nextNeed = getExpNeededForBreakthrough(Number(userData.tuViExp) || 0, tuVi.level);
+    const realm = getPlayerRealmState(member, userData);
+    const tuVi = realm.currentTuVi;
+    const nextNeed = realm.nextNeed;
     const dao = getUserDaoNgheDefinition(userData);
     const equipped = getEquippedGearKeys(userData).map((key) => getShopItemByKey(key)?.name || key);
     const shopItems = getDailyShopUnlockedItems(member)
@@ -10381,41 +10394,89 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     return userData.mainQuest;
   }
 
-  function getHeThongQuestForUser(userData) {
-    const tuVi = getTuViFromExp(Number(userData.tuViExp) || 0);
+  function syncMainQuestProgress(member, userData) {
+    const mainQuest = normalizeHeThongData(userData);
+    const completed = new Set((mainQuest.completed || []).map(String));
+    const realm = getPlayerRealmState(member, userData);
+    const hasSectRole = Boolean(member?.roles?.cache?.some((role) => [DAI_DAO_TONG_ROLE_NAME, ...DISCIPLE_RANK_ROLES.filter((name) => name !== 'Tán Tu')].includes(role.name)));
+    const hasGithubCultivation = Boolean(userData.githubVerified || userData.lastGithubRewardDate || userData.githubTotalExp > 0);
+    const hasResolvedXuatSon = Object.values(userData.xuatSonCases || {}).some((entry) => entry?.resolved || Number(entry?.stage || 0) >= 3);
+
+    if (hasSectRole || mainQuest.joinedDaiDaoTong) {
+      mainQuest.joinedDaiDaoTong = true;
+      mainQuest.systemLoaded = true;
+      mainQuest.hostConfirmed = true;
+      completed.add('MAIN-001');
+    }
+    if (hasGithubCultivation) {
+      mainQuest.gitCultivationUnlocked = true;
+      completed.add('MAIN-002');
+    }
+    if (realm.currentLevel >= 4) completed.add('MAIN-003');
+    if (realm.currentLevel >= 8) completed.add('MAIN-004');
+    if (realm.currentLevel >= 12 && hasResolvedXuatSon) completed.add('MAIN-005');
+    if (realm.currentLevel >= 16) completed.add('MAIN-006');
+    if (realm.currentLevel >= 72) completed.add('MAIN-ROOT');
+
+    mainQuest.truthFlags.humanMemoryLeak = mainQuest.truthFlags.humanMemoryLeak || realm.currentLevel >= 8;
+    mainQuest.truthFlags.linhKhiIsCode = mainQuest.truthFlags.linhKhiIsCode || realm.currentLevel >= 4;
+    mainQuest.truthFlags.hiddenBranch = mainQuest.truthFlags.hiddenBranch || realm.currentLevel >= 16;
+    mainQuest.truthFlags.daoToCreator = mainQuest.truthFlags.daoToCreator || realm.currentLevel >= 72;
+    mainQuest.truthFlags.phaThienPath = mainQuest.truthFlags.phaThienPath || realm.currentLevel >= 72;
+    mainQuest.completed = Array.from(completed).filter((id) => MAIN_QUEST_CHAIN.some((quest) => quest.id === id)).slice(0, 200);
+    return mainQuest;
+  }
+
+  function getHeThongQuestForUser(userData, member = null) {
+    syncMainQuestProgress(member, userData);
+    const realm = getPlayerRealmState(member, userData);
     const completed = new Set((userData.mainQuest?.completed || []).map(String));
-    const available = MAIN_QUEST_CHAIN.filter((quest) => tuVi.level >= quest.minLevel);
+    const available = MAIN_QUEST_CHAIN.filter((quest) => realm.currentLevel >= quest.minLevel);
     return available.find((quest) => !completed.has(quest.id)) || available[available.length - 1] || MAIN_QUEST_CHAIN[0];
   }
 
-  function getHeThongTruthLines(userData, tuVi = getTuViFromExp(Number(userData.tuViExp) || 0)) {
+  function getHeThongTruthLines(userData, realmState = getPlayerRealmState(null, userData)) {
+    const level = Number(realmState.currentLevel) || 0;
     const lines = ['- Ngươi là **Tàn Mã Giả** mang dấu vết ký ức rò rỉ.'];
-    if (tuVi.level >= 4) lines.push('- **Linh khí** là code trời đất hợp pháp.');
-    if (tuVi.level >= 8) lines.push('- Déjà vu và mộng cũ là **Human Memory Leak**.');
-    if (tuVi.level >= 12) lines.push('- Thiên kiếp là kiểm tra dị thường của Đại Source.');
-    if (tuVi.level >= 16) lines.push('- Đại Đạo Tông là **Hidden Branch** ngoài bản ghi chính.');
-    if (tuVi.level >= 72) lines.push('- Đạo Tổ đời đầu tạo Hệ Thống để mở đường **Phá Thiên**.');
+    if (level >= 4 || userData.mainQuest?.truthFlags?.linhKhiIsCode) lines.push('- **Linh khí** là code trời đất hợp pháp.');
+    if (level >= 8 || userData.mainQuest?.truthFlags?.humanMemoryLeak) lines.push('- Déjà vu và mộng cũ là **Human Memory Leak**.');
+    if (level >= 12) lines.push('- Thiên kiếp là kiểm tra dị thường của Đại Source.');
+    if (level >= 16 || userData.mainQuest?.truthFlags?.hiddenBranch) lines.push('- Đại Đạo Tông là **Hidden Branch** ngoài bản ghi chính.');
+    if (level >= 72 || userData.mainQuest?.truthFlags?.daoToCreator) lines.push('- Đạo Tổ đời đầu tạo Hệ Thống để mở đường **Phá Thiên**.');
     return lines;
   }
 
-  function getLegitimacyPercent(userData) {
-    const tuVi = getTuViFromExp(Number(userData.tuViExp) || 0);
-    const base = Math.min(99.9, 3.2 + (tuVi.level * 1.15));
-    const githubBonus = userData.githubVerified ? 2.4 : 0;
-    const sectBonus = userData.mainQuest?.joinedDaiDaoTong ? 1.8 : 0;
-    return Math.min(99.9, base + githubBonus + sectBonus).toFixed(1);
+  function getLegitimacyPercent(userData, member = null) {
+    const realm = getPlayerRealmState(member, userData);
+    const mainQuest = normalizeHeThongData(userData);
+    const completedCount = new Set(mainQuest.completed || []).size;
+    const realmPart = Math.min(45, (realm.currentLevel / Math.max(1, MAX_TU_VI_LEVEL)) * 45);
+    const questPart = Math.min(20, completedCount * 3.5);
+    const githubPart = userData.githubVerified ? 10 : userData.githubUsername ? 4 : 0;
+    const congPhapPart = member && getMemberCongPhapOption(member) ? 10 : 0;
+    const daoPart = getUserDaoNgheDefinition(userData)?.key ? 5 : 0;
+    const weekly = Number(userData.weeklyContribution?.[getWeeklyGoalKey()]?.points) || 0;
+    const activityPart = Math.min(10, weekly / 12);
+    return Math.min(99.9, 3.2 + realmPart + questPart + githubPart + congPhapPart + daoPart + activityPart).toFixed(1);
   }
 
   function buildHeThongEmbed(member, userData) {
-    normalizeHeThongData(userData);
-    const tuVi = getTuViFromExp(Number(userData.tuViExp) || 0);
-    const quest = getHeThongQuestForUser(userData);
+    syncMainQuestProgress(member, userData);
+    const snapshot = buildPlayerStatsSnapshot(member, userData);
+    const realm = snapshot.realm;
+    const quest = getHeThongQuestForUser(userData, member);
     const dao = getUserDaoNgheDefinition(userData);
-    const legitimacy = getLegitimacyPercent(userData);
+    const legitimacy = getLegitimacyPercent(userData, member);
     const status = userData.githubVerified ? 'đang hợp thức hóa ổn định' : 'chưa liên kết đạo văn GitHub';
     const fields = [
-      { name: 'Nhiệm vụ chính tuyến hiện tại', value: `**${quest.id} · ${quest.title}**\n${quest.objective}`, inline: false },
-      { name: 'Sự thật đã mở', value: getHeThongTruthLines(userData, tuVi).join('\n').slice(0, 1024), inline: false },
+      { name: 'Nhiệm vụ chính tuyến hiện tại', value: `**${quest.id} · ${quest.title}**
+${quest.objective}`, inline: false },
+      { name: 'Chỉ số tu luyện thống nhất', value: formatUnifiedStatsText(snapshot), inline: false },
+      { name: 'Chiến lực / Linh Khí', value: formatCombatStatsText(snapshot), inline: false },
+      { name: 'Chỉ số tổng quát', value: formatDirectStatsCompact(snapshot.directStats, { emptyText: 'Không có chỉ số cộng thêm.' }), inline: false },
+      { name: 'Lục trục Source / rủi ro', value: `${formatSourceStatsCompact(snapshot.sourceProfile)}
+Rủi ro: ${formatSourceRiskStatsCompact(snapshot.riskStats)}`, inline: false },
+      { name: 'Sự thật đã mở', value: getHeThongTruthLines(userData, realm).join('\n').slice(0, 1024), inline: false },
       { name: 'Gợi ý từ Hệ Thống', value: userData.githubVerified ? 'Dùng **Tu Luyện GitHub** để hấp thụ linh khí từ commit, rồi theo **Thiên Cơ Dẫn Lộ** để chọn việc hôm nay.' : 'Hãy hoàn thành main quest đầu để nhận **Đại Đạo Git Linh Quyết** và mở khóa `/checkcommit`.', inline: false },
     ];
 
@@ -10425,15 +10486,16 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
       .setDescription([
         `Ký Chủ: ${member ? `<@${member.id}>` : 'không rõ'}`,
         'Danh phận: **Tàn Mã Giả**',
-        `Cảnh giới: **${tuVi.realm} ${tuVi.minor}**`,
+        `Cảnh giới thật: **${realm.displayRealm}**${formatRealmMismatchHint(snapshot)}`,
         `Mức hợp thức hóa: **${legitimacy}%**`,
         '',
         `Công pháp lõi: **Đại Đạo Git Linh Quyết**`,
         `Trạng thái Thiên Đạo: **${status}**`,
         `Đạo nghiệp: **${dao?.name || 'chưa chọn nghề'}**`,
+        `Đạo Lộ Source: **${snapshot.sourcePath}**`,
       ].join('\n'))
       .addFields(...fields)
-      .setFooter({ text: 'Hệ Thống Đại Đạo · dashboard Ký Chủ, main quest và đạo lộ hôm nay.' });
+      .setFooter({ text: 'Hệ Thống Đại Đạo · mọi chỉ số đi qua cùng một snapshot, không để Thiên Đạo mỗi nơi tính một kiểu.' });
   }
 
   function buildHeThongRows(userId) {
@@ -10452,10 +10514,10 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
   }
 
   function buildMainQuestEmbed(member, userData) {
-    normalizeHeThongData(userData);
-    const quest = getHeThongQuestForUser(userData);
-    const tuVi = getTuViFromExp(Number(userData.tuViExp) || 0);
-    const nextQuest = MAIN_QUEST_CHAIN.find((entry) => entry.minLevel > tuVi.level);
+    syncMainQuestProgress(member, userData);
+    const quest = getHeThongQuestForUser(userData, member);
+    const realm = getPlayerRealmState(member, userData);
+    const nextQuest = MAIN_QUEST_CHAIN.find((entry) => entry.minLevel > realm.currentLevel);
     return new EmbedBuilder()
       .setColor(0xa78bfa)
       .setTitle(`【NHIỆM VỤ CHÍNH TUYẾN】`)
@@ -10526,6 +10588,7 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     normalizeHeThongData(userData);
     normalizeInventoryData(userData);
     const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => interaction.member);
+    syncMainQuestProgress(member, userData);
     saveUsers(users);
     await interaction.reply({ embeds: [buildHeThongEmbed(member, userData)], components: buildHeThongRows(interaction.user.id), flags: MessageFlags.Ephemeral });
   }
@@ -10543,6 +10606,8 @@ function buildSafePageButtons({ userId, prefix, previousPage, nextPage, previous
     normalizeHeThongData(userData);
     normalizeInventoryData(userData);
     const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => interaction.member);
+    syncMainQuestProgress(member, userData);
+    saveUsers(users);
     if (view === 'main') {
       await interaction.editReply({ embeds: [buildMainQuestEmbed(member, userData)], components: buildHeThongRows(interaction.user.id), content: null }).catch(() => null);
       return;
@@ -11825,7 +11890,9 @@ Giai đoạn tiếp theo: **${getXuatSonStageLabel(state.stage)}**`, inline: fal
     const userData = getOrCreateUser(users, interaction.user.id);
     normalizeMissionUserData(userData);
     const activeMission = findActiveMissionOfUser(getMissionDataForToday(), interaction.user.id);
-    const tuVi = getTuViFromExp(Number(userData.tuViExp) || 0);
+    const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => interaction.member);
+    const realm = getPlayerRealmState(member, userData);
+    const tuVi = realm.currentTuVi;
 
     await interaction.reply({
       content: [
@@ -11901,7 +11968,7 @@ Giai đoạn tiếp theo: **${getXuatSonStageLabel(state.stage)}**`, inline: fal
       return;
     }
 
-    const canJoin = canJoinMission(mission, userData, data, interaction.user.id);
+    const canJoin = canJoinMission(mission, userData, data, interaction.user.id, interaction.member);
 
     if (!canJoin.ok) {
       await interaction.reply({ content: canJoin.message, flags: MessageFlags.Ephemeral });
@@ -13926,6 +13993,141 @@ ${scenario.text}`;
       .setTitle('Dùng Đan Dược')
       .setDescription(`${member} đã dùng **${item.name}**.`)
       .addFields({ name: 'Hiệu quả', value: resultText || item.effect, inline: false });
+
+    await interaction.editReply({ embeds: [embed] });
+  }
+
+  async function handleDonDuLieu(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Lệnh này chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({ content: 'Chỉ chưởng quản tông môn mới được dọn dữ liệu người chơi.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const confirmText = interaction.options.getString('xacnhan', true).trim();
+    const targetUser = interaction.options.getUser('thanhvien', false);
+    const dryRun = interaction.options.getBoolean('xemtruoc') ?? false;
+
+    if (confirmText !== 'DON DATA') {
+      await interaction.reply({
+        content: 'Sai xác nhận. Gõ chính xác `DON DATA` để dọn thuộc tính rác. Không cho bot tự động quét não data bằng niềm tin được, cảm ơn nền văn minh.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    let report;
+    try {
+      report = compactUsersStorage(targetUser?.id || null, { dryRun });
+    } catch (error) {
+      console.error('Loi don du lieu users.json:', error);
+      await interaction.editReply('Dọn dữ liệu thất bại. Xem log console để biết đoạn JSON nào lại quyết định trở thành Dị Lỗi.');
+      return;
+    }
+
+    const scopeText = targetUser ? `${targetUser}` : 'toàn bộ người chơi';
+    const embed = new EmbedBuilder()
+      .setColor(dryRun ? 0xf59e0b : 0x22c55e)
+      .setTitle(dryRun ? 'Xem Trước Dọn Dữ Liệu' : 'Đã Dọn Dữ Liệu Người Chơi')
+      .setDescription([
+        `Phạm vi: **${scopeText}**`,
+        dryRun ? 'Chưa ghi file. Đây chỉ là bản xem trước.' : 'Đã ghi lại `users.json` bằng atomic write.',
+        '',
+        'Lệnh này không reset nhân vật. Nó chỉ bỏ thuộc tính mặc định, field hết hạn, object rỗng và dữ liệu legacy để file đỡ giống kho di tích tiền sử.',
+      ].join('\n'))
+      .addFields(
+        { name: 'Kết quả', value: [
+          `User đã quét: **${report.usersTouched}**`,
+          `Dung lượng trước: **${uiNumber(report.beforeBytes)} bytes**`,
+          `Dung lượng sau: **${uiNumber(report.afterBytes)} bytes**`,
+          `Ước tính giảm: **${uiNumber(report.savedBytes)} bytes**`,
+          `Thuộc tính top-level giảm: **${report.removedKeys}**`,
+        ].join('\n'), inline: false },
+        { name: 'Đã dọn loại gì', value: [
+          '• Field mặc định không cần lưu',
+          '• Buff/trạng thái đã hết hạn',
+          '• Daily counter cũ',
+          '• `mainQuest` rỗng hoặc tự suy ra được',
+          '• `congPhapProgress` toàn số 0',
+          '• `daoNghe`/`sourceProfile`/`sourcePathPoints` rỗng',
+          '• Xuất Sơn đã resolved chỉ giữ mốc resolved, bỏ manh mối/log thừa',
+          '• `bicanhMap` legacy và `onboardingStartedAt` không còn dùng',
+        ].join('\n'), inline: false },
+        { name: 'Bước tiếp theo', value: dryRun ? 'Chạy lại với `xemtruoc:false` để ghi file.' : 'Từ giờ mỗi lần `saveUsers()` cũng sẽ lưu bản compact, không phình lại vì mấy field mặc định vô nghĩa.', inline: false },
+      );
+
+    await interaction.editReply({ embeds: [embed] });
+  }
+
+  async function handleXoaNguoiChoi(interaction) {
+    if (!interaction.inGuild()) {
+      await interaction.reply({ content: 'Lệnh này chỉ dùng trong tông môn.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+      await interaction.reply({ content: 'Chỉ chưởng quản tông môn mới được xóa full dữ liệu người chơi.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    const targetUser = interaction.options.getUser('thanhvien', true);
+    const confirmText = interaction.options.getString('xacnhan', true).trim();
+    const removeRoles = interaction.options.getBoolean('xoarole') ?? true;
+    const includePositionRoles = interaction.options.getBoolean('xoachucvu') ?? false;
+
+    if (targetUser.bot) {
+      await interaction.reply({ content: 'Không xóa dữ liệu bot. Bot đã đủ vô tri rồi, đừng rollback đồng loại.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (targetUser.id === interaction.user.id) {
+      await interaction.reply({ content: 'Không tự xóa full dữ liệu chính mình bằng lệnh này. Nếu muốn tự độ kiếp hành chính, nhờ admin khác làm.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
+    if (confirmText !== 'XOA FULL') {
+      await interaction.reply({
+        content: 'Sai xác nhận. Gõ chính xác `XOA FULL` vào option `xacnhan` để xóa. Không có xác nhận mơ hồ, vì mất data không phải trò bói quẻ.',
+        flags: MessageFlags.Ephemeral,
+      });
+      return;
+    }
+
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+    const report = await resetFullPlayerData(interaction.guild, targetUser, { removeRoles, includePositionRoles });
+
+    const embed = new EmbedBuilder()
+      .setColor(0xef4444)
+      .setTitle('Đã Xóa Full Dữ Liệu Người Chơi')
+      .setDescription([
+        `${targetUser} đã bị đưa về trạng thái **chưa từng nhập đạo** trong data bot.`,
+        '',
+        'Lệnh này xóa dữ liệu game và dọn liên kết ở các hệ phụ. Nó không ban/kick người chơi khỏi server.',
+      ].join('\n'))
+      .addFields(
+        { name: 'Data chính', value: report.hadUserData ? 'Đã xóa khỏi `users.json`.' : 'Không có data chính, vẫn dọn các hệ phụ.', inline: false },
+        { name: 'Dọn liên kết', value: [
+          `Quan hệ liên quan: **${report.relatedUsersTouched}** người`,
+          `Nhiệm vụ Nội Tông: **${report.missionTouched}** mục`,
+          `Bí Cảnh: **${report.bicanhTouched}** lượt`,
+          `Luận Đạo: xóa **${report.luanDaoRemovedQuestions}** câu hỏi, **${report.luanDaoRemovedAnswers}** câu trả lời`,
+          `Thiên Kiếp: xóa **${report.tribulationsRemoved}** kiếp, sửa **${report.tribulationsTouched}** kiếp liên quan`,
+          `Sự Kiện: **${report.suKienTouched}** sự kiện`,
+          `Đấu Pháp chờ nhận: **${report.dauPhapChallengesRemoved}** chiến thư`,
+        ].join('\n'), inline: false },
+        { name: 'Role Discord', value: removeRoles
+          ? `Đã gỡ **${report.rolesRemoved}** role gameplay.${report.rolesSkipped ? ` Bỏ qua **${report.rolesSkipped}** role không gỡ được.` : ''}${report.roleWarning ? `\n${report.roleWarning}` : ''}`
+          : 'Không gỡ role vì `xoarole:false`.', inline: false },
+        { name: 'Bước tiếp theo', value: 'Nếu người này muốn chơi lại, dùng tuyến nhập môn hoặc `/hethong` để bắt đầu lại từ đầu.', inline: false },
+      )
+      .setFooter({ text: 'Xóa full data đã dùng atomic write cho các file JSON liên quan.' });
 
     await interaction.editReply({ embeds: [embed] });
   }
@@ -16947,11 +17149,29 @@ Còn dư công pháp cũ, hãy bấm chọn lại một công pháp để quy nh
     return statMultiplier(getUserDirectStats(userData).tuVi);
   }
 
-  function addTuViExp(userData, amount, member = null) {
+  function grantTuViReward(userData, member = null, amount = 0, source = 'general', context = {}) {
+    const baseAmount = Math.max(0, Math.floor(Number(amount) || 0));
     const stats = getUserDirectStats(userData, member);
-    const finalAmount = applyDirectPercent(amount, stats.tuVi);
+    const sourceMultiplier = context?.sourceMultiplier && Number.isFinite(Number(context.sourceMultiplier.value))
+      ? Number(context.sourceMultiplier.value)
+      : statMultiplier(stats.tuVi);
+    const calculatedAmount = Math.max(0, Math.floor(baseAmount * sourceMultiplier));
+    const capRemaining = Number.isFinite(Number(context?.dailyCapRemaining)) ? Math.max(0, Number(context.dailyCapRemaining)) : null;
+    const finalAmount = capRemaining === null ? calculatedAmount : Math.min(calculatedAmount, capRemaining);
     userData.tuViExp = Math.max(0, (Number(userData.tuViExp) || 0) + finalAmount);
-    return finalAmount;
+    return {
+      source,
+      baseAmount,
+      finalAmount,
+      calculatedAmount,
+      capped: capRemaining !== null && finalAmount < calculatedAmount,
+      multiplier: sourceMultiplier,
+      multiplierText: context?.sourceMultiplier?.summary || formatDirectStatsCompact(stats, { emptyText: 'Không có bonus tu vi.' }),
+    };
+  }
+
+  function addTuViExp(userData, amount, member = null, source = 'legacy') {
+    return grantTuViReward(userData, member, amount, source).finalAmount;
   }
 
   function adjustTamMaChance(userData, basePercent) {
@@ -19503,7 +19723,7 @@ ${getDauPhapFinalLine(defenderUnit)}`, inline: false },
     const normalizedUsers = {};
 
     for (const [userId, userData] of Object.entries(users)) {
-      normalizedUsers[userId] = normalizeUserData(userData);
+      normalizedUsers[userId] = compactUserDataForStorage(userData);
     }
 
     writeJsonAtomic(USERS_FILE, normalizedUsers);
@@ -19596,6 +19816,332 @@ ${getDauPhapFinalLine(defenderUnit)}`, inline: false },
     ensureSuKienFile();
     ensureBicanhFile();
     writeJsonAtomic(SU_KIEN_FILE, { active: data.active && typeof data.active === 'object' ? data.active : {} });
+  }
+
+  function isPlainObject(value) {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  function isEmptyPlainObject(value) {
+    return isPlainObject(value) && Object.keys(value).length === 0;
+  }
+
+  function compactInventoryEntryForStorage(entry) {
+    const normalized = normalizeInventoryEntry(entry, { keepRawString: false });
+    if (!normalized) return null;
+    const compact = {
+      instanceId: getInventoryEntryInstanceId(normalized),
+      key: String(normalized.key),
+    };
+    if (normalized.id && normalized.id !== compact.instanceId) compact.id = normalized.id;
+    if (normalized.quality && normalized.quality !== DEFAULT_ITEM_QUALITY) compact.quality = normalized.quality;
+    if (normalized.cursed) {
+      compact.cursed = true;
+      if (normalized.curseKey) compact.curseKey = normalized.curseKey;
+    }
+    if (Number(normalized.createdAt) > 0) compact.createdAt = Number(normalized.createdAt);
+    return compact;
+  }
+
+  function compactCongPhapProgressForStorage(progress) {
+    if (!isPlainObject(progress)) return undefined;
+    const compact = {};
+    for (const [key, value] of Object.entries(progress)) {
+      if (!isPlainObject(value)) continue;
+      const entry = {};
+      const exp = Math.max(0, Number(value.exp) || 0);
+      const stage = Math.max(0, Number(value.stage) || 0);
+      const insight = Math.max(0, Number(value.insight) || 0);
+      const fails = Math.max(0, Number(value.breakthroughFails) || 0);
+      if (exp > 0) entry.exp = exp;
+      if (stage > 0) entry.stage = stage;
+      if (insight > 0) entry.insight = insight;
+      if (fails > 0) entry.breakthroughFails = fails;
+      if (!isEmptyPlainObject(entry)) compact[key] = entry;
+    }
+    return isEmptyPlainObject(compact) ? undefined : compact;
+  }
+
+  function compactDaoNgheForStorage(daoNghe) {
+    if (!isPlainObject(daoNghe)) return undefined;
+    const compact = {};
+    if (daoNghe.key) compact.key = String(daoNghe.key);
+    const numericFields = ['exp', 'lastCraftAt', 'craftedCount', 'craftSuccessCount', 'craftFailCount', 'decomposeCount'];
+    for (const field of numericFields) {
+      const value = Math.max(0, Number(daoNghe[field]) || 0);
+      if (value > 0) compact[field] = value;
+    }
+    for (const field of ['lastWorkDate', 'lastCraftDate', 'craftingSpec']) {
+      if (daoNghe[field]) compact[field] = String(daoNghe[field]);
+    }
+    if (isPlainObject(daoNghe.materials)) {
+      const materials = {};
+      for (const [key, value] of Object.entries(daoNghe.materials)) {
+        const amount = Math.max(0, Number(value) || 0);
+        if (amount > 0) materials[key] = amount;
+      }
+      if (!isEmptyPlainObject(materials)) compact.materials = materials;
+    }
+    if (Array.isArray(daoNghe.knownBlueprints) && daoNghe.knownBlueprints.length > 0) {
+      compact.knownBlueprints = Array.from(new Set(daoNghe.knownBlueprints.map(String))).slice(0, 200);
+    }
+    return isEmptyPlainObject(compact) ? undefined : compact;
+  }
+
+  function compactNumericObjectForStorage(value, defaultValue = {}) {
+    if (!isPlainObject(value)) return undefined;
+    const compact = {};
+    for (const [key, raw] of Object.entries(value)) {
+      const amount = Number(raw) || 0;
+      const defaultAmount = Number(defaultValue?.[key]) || 0;
+      if (amount !== defaultAmount && amount !== 0) compact[key] = amount;
+    }
+    return isEmptyPlainObject(compact) ? undefined : compact;
+  }
+
+  function compactWeeklyContributionForStorage(weeklyContribution) {
+    if (!isPlainObject(weeklyContribution)) return undefined;
+    const keys = Object.keys(weeklyContribution).sort().slice(-4);
+    const compact = {};
+    for (const key of keys) {
+      const entry = weeklyContribution[key];
+      if (!isPlainObject(entry)) continue;
+      const points = Math.max(0, Number(entry.points) || 0);
+      const clean = {};
+      if (points > 0) clean.points = points;
+      if (isPlainObject(entry.reasons)) {
+        const reasons = {};
+        for (const [reason, raw] of Object.entries(entry.reasons)) {
+          const amount = Math.max(0, Number(raw) || 0);
+          if (amount > 0) reasons[reason] = amount;
+        }
+        if (!isEmptyPlainObject(reasons)) clean.reasons = reasons;
+      }
+      if (!isEmptyPlainObject(clean)) compact[key] = clean;
+    }
+    return isEmptyPlainObject(compact) ? undefined : compact;
+  }
+
+  function compactXuatSonCasesForStorage(xuatSonCases) {
+    if (!isPlainObject(xuatSonCases)) return undefined;
+    const compact = {};
+    for (const [key, raw] of Object.entries(xuatSonCases)) {
+      if (!isPlainObject(raw)) continue;
+      const stage = Math.max(0, Math.min(4, Number(raw.stage) || 0));
+      const resolved = Boolean(raw.resolved) || stage >= 3;
+      if (resolved) {
+        compact[key] = { key: raw.key || key, stage: 3, resolved: true };
+        continue;
+      }
+      const entry = { key: raw.key || key };
+      if (stage > 0) entry.stage = stage;
+      const clues = Math.max(0, Number(raw.clues) || 0);
+      const evidence = Math.max(0, Math.min(5, Number(raw.evidence) || 0));
+      const publicTrust = Math.max(0, Math.min(5, Number(raw.publicTrust ?? 3) || 3));
+      const sourceNoise = Math.max(0, Math.min(5, Number(raw.sourceNoise ?? 2) || 2));
+      if (clues > 0) entry.clues = clues;
+      if (evidence > 0) entry.evidence = evidence;
+      if (publicTrust !== 3) entry.publicTrust = publicTrust;
+      if (sourceNoise !== 2) entry.sourceNoise = sourceNoise;
+      if (Array.isArray(raw.clueList) && raw.clueList.length > 0) entry.clueList = raw.clueList.map(String).slice(-6);
+      if (typeof raw.lastOutcome === 'string' && raw.lastOutcome.trim()) entry.lastOutcome = raw.lastOutcome.trim().slice(0, 220);
+      if (!isEmptyPlainObject(entry)) compact[key] = entry;
+    }
+    return isEmptyPlainObject(compact) ? undefined : compact;
+  }
+
+  function compactMainQuestForStorage(mainQuest, userData) {
+    if (!isPlainObject(mainQuest)) return undefined;
+    const compact = {};
+    const completed = Array.isArray(mainQuest.completed)
+      ? mainQuest.completed.map(String).filter(Boolean).slice(0, 200)
+      : [];
+    if (completed.length > 0) compact.completed = completed;
+    if (Number(mainQuest.chapter) > 1) compact.chapter = Math.max(1, Number(mainQuest.chapter) || 1);
+    if (Number(mainQuest.step) > 1) compact.step = Math.max(1, Number(mainQuest.step) || 1);
+    for (const field of ['systemLoaded', 'hostConfirmed', 'joinedDaiDaoTong']) {
+      if (mainQuest[field]) compact[field] = true;
+    }
+    if (mainQuest.gitCultivationUnlocked && !userData.githubVerified) compact.gitCultivationUnlocked = true;
+    if (isPlainObject(mainQuest.truthFlags)) {
+      const flags = {};
+      for (const [key, value] of Object.entries(mainQuest.truthFlags)) {
+        if (Boolean(value)) flags[key] = true;
+      }
+      if (!isEmptyPlainObject(flags)) compact.truthFlags = flags;
+    }
+    return isEmptyPlainObject(compact) ? undefined : compact;
+  }
+
+  function pruneExpiredRuntimeFieldsForStorage(userData, now = Date.now()) {
+    const today = getTodayString();
+    const expired = (value) => Number(value) > 0 && Number(value) <= now;
+
+    if (expired(userData.temporaryStatusExpireAt)) {
+      userData.temporaryStatus = null;
+      userData.temporaryStatusExpireAt = 0;
+      userData.temporaryDirectStats = null;
+    }
+
+    if (expired(userData.tuViMultiplierUntil)) {
+      userData.tuViMultiplierUntil = 0;
+      userData.tuViMultiplierValue = 1;
+    }
+
+    for (const field of ['dotPhaPenaltyUntil', 'dotPhaBonusUntil', 'dotPhaCooldownUntil', 'restingUntil']) {
+      if (expired(userData[field])) userData[field] = 0;
+    }
+    if (!userData.restingUntil) userData.restingReason = null;
+
+    if (expired(userData.beQuanUntil) && userData.beQuanRewardClaimed) {
+      userData.beQuanStartedAt = 0;
+      userData.beQuanUntil = 0;
+      userData.beQuanReward = 0;
+      userData.beQuanRewardExp = 0;
+      userData.beQuanRewardClaimed = true;
+      if (userData.temporaryStatus === 'Bế Quan') {
+        userData.temporaryStatus = null;
+        userData.temporaryStatusExpireAt = 0;
+      }
+    }
+
+    if (userData.dailyMessageDate !== today) {
+      userData.dailyMessageCongHien = 0;
+      userData.dailyMessageDate = null;
+    }
+    if (userData.lastMissionDate !== today) userData.lastMissionDate = null;
+    if (userData.lastXuatSonDate !== today) {
+      userData.lastXuatSonDate = null;
+      userData.dailyXuatSonCount = 0;
+    }
+    if (userData.lastDoiCongHienDate !== today) {
+      userData.lastDoiCongHienDate = null;
+      userData.dailyDoiCongHien = 0;
+    }
+    if (userData.lastGithubRewardDate !== today) {
+      userData.githubDailyExp = 0;
+      userData.githubDailyRewardCount = 0;
+    }
+
+    if (Array.isArray(userData.relationLog) && userData.relationLog.length > 30) {
+      userData.relationLog = userData.relationLog.slice(-30);
+    }
+
+    if (userData.githubVerified) {
+      userData.githubVerifyCode = null;
+    }
+
+    if (userData.beQuanReward === userData.beQuanRewardExp) {
+      userData.beQuanRewardExp = 0;
+    }
+  }
+
+  function deepCompactUserValue(value) {
+    if (Array.isArray(value)) {
+      const arr = value.map((item) => deepCompactUserValue(item)).filter((item) => item !== undefined);
+      return arr.length ? arr : undefined;
+    }
+    if (isPlainObject(value)) {
+      const object = {};
+      for (const [key, child] of Object.entries(value)) {
+        const compactChild = deepCompactUserValue(child);
+        if (compactChild !== undefined) object[key] = compactChild;
+      }
+      return isEmptyPlainObject(object) ? undefined : object;
+    }
+    if (value === null || value === undefined || value === '') return undefined;
+    if (typeof value === 'number' && !Number.isFinite(value)) return undefined;
+    return value;
+  }
+
+  function valuesEqualForStorage(value, defaultValue) {
+    return JSON.stringify(value) === JSON.stringify(defaultValue);
+  }
+
+  function compactUserDataForStorage(userData = {}) {
+    const normalized = normalizeUserData(userData);
+    pruneExpiredRuntimeFieldsForStorage(normalized);
+    const defaults = createDefaultUserData();
+    const compact = {};
+
+    for (const [key, rawValue] of Object.entries(normalized)) {
+      if (LEGACY_USER_FIELDS.includes(key)) continue;
+      let value = rawValue;
+
+      if (key === 'inventory') {
+        const entries = Array.isArray(value) ? value.map(compactInventoryEntryForStorage).filter(Boolean) : [];
+        value = entries.length ? entries : undefined;
+      } else if (key === 'congPhapProgress') {
+        value = compactCongPhapProgressForStorage(value);
+      } else if (key === 'daoNghe') {
+        value = compactDaoNgheForStorage(value);
+      } else if (key === 'sourcePathPoints' || key === 'sourceProfile') {
+        value = compactNumericObjectForStorage(value, defaults[key]);
+      } else if (key === 'weeklyContribution') {
+        value = compactWeeklyContributionForStorage(value);
+      } else if (key === 'xuatSonCases') {
+        value = compactXuatSonCasesForStorage(value);
+      } else if (key === 'mainQuest') {
+        value = compactMainQuestForStorage(value, normalized);
+      } else if (key === 'bicanhMap' || key === 'onboardingStartedAt') {
+        value = undefined;
+      } else if (key === 'congHienBalance') {
+        value = Number(value) === Number(normalized.congHienExp) ? undefined : value;
+      } else if (key === 'beQuanRewardExp') {
+        value = undefined;
+      } else {
+        value = deepCompactUserValue(value);
+      }
+
+      if (value === undefined) continue;
+      if (Object.prototype.hasOwnProperty.call(defaults, key) && valuesEqualForStorage(value, defaults[key])) continue;
+      compact[key] = value;
+    }
+
+    return compact;
+  }
+
+  function estimateJsonBytes(data) {
+    return Buffer.byteLength(`${JSON.stringify(data, null, 2)}\n`, 'utf8');
+  }
+
+  function compactUsersStorage(targetId = null, options = {}) {
+    ensureUsersFile();
+    const raw = fs.readFileSync(USERS_FILE, 'utf8');
+    const beforeBytes = Buffer.byteLength(raw || '{}\n', 'utf8');
+    const parsed = raw.trim() ? JSON.parse(raw) : {};
+    const next = {};
+    let touched = 0;
+    let beforeKeys = 0;
+    let afterKeys = 0;
+
+    for (const [userId, userData] of Object.entries(parsed)) {
+      if (targetId && String(userId) !== String(targetId)) {
+        next[userId] = userData;
+        continue;
+      }
+      const originalKeyCount = isPlainObject(userData) ? Object.keys(userData).length : 0;
+      const compacted = compactUserDataForStorage(userData);
+      next[userId] = compacted;
+      const compactKeyCount = Object.keys(compacted).length;
+      beforeKeys += originalKeyCount;
+      afterKeys += compactKeyCount;
+      touched += 1;
+    }
+
+    const afterBytes = estimateJsonBytes(next);
+    if (!options.dryRun) writeJsonAtomic(USERS_FILE, next);
+    return {
+      targetId: targetId ? String(targetId) : null,
+      usersTouched: touched,
+      beforeBytes,
+      afterBytes,
+      savedBytes: Math.max(0, beforeBytes - afterBytes),
+      beforeKeys,
+      afterKeys,
+      removedKeys: Math.max(0, beforeKeys - afterKeys),
+      dryRun: Boolean(options.dryRun),
+    };
   }
 
   function getOrCreateUser(users, userId) {
@@ -19739,6 +20285,295 @@ ${getDauPhapFinalLine(defenderUnit)}`, inline: false },
     userData.xuatSonCases = userData.xuatSonCases && typeof userData.xuatSonCases === 'object' ? userData.xuatSonCases : {};
     userData.weeklyContribution = userData.weeklyContribution && typeof userData.weeklyContribution === 'object' ? userData.weeklyContribution : {};
     return userData;
+  }
+
+  function getFullResetGameRoleNames(includePositionRoles = false) {
+    const roleNames = [
+      DAI_DAO_TONG_ROLE_NAME,
+      XUAT_SON_STATUS_ROLE_NAME,
+      ...DISCIPLE_RANK_ROLES,
+      ...ALL_TU_VI_REALM_ROLE_NAMES,
+      ...ALL_CONG_PHAP_ROLE_NAMES,
+      ...DAO_NGHE_ROLE_NAMES,
+      ...TEMPORARY_STATUS_ROLE_NAMES,
+      ...CLASSIFICATION_ROLES,
+      ...ELEMENT_ROLE_NAMES,
+      ...ALL_QUALITY_ROLE_NAMES,
+      ...LINH_CAN_COMPACT_ROLE_NAMES,
+      ...MENH_CACH_ROLE_NAMES,
+      ...DAO_THE_ROLE_NAMES,
+    ];
+
+    if (includePositionRoles) {
+      roleNames.push(...SECT_POSITION_ROLE_NAMES);
+    }
+
+    return [...new Set(roleNames.filter(Boolean))];
+  }
+
+  function cleanupUserRelationsForFullReset(users, targetId) {
+    let touched = 0;
+    for (const [userId, rawData] of Object.entries(users || {})) {
+      if (String(userId) === String(targetId)) continue;
+      const userData = normalizeUserData(rawData);
+      const before = JSON.stringify({
+        daoLuId: userData.daoLuId,
+        masterId: userData.masterId,
+        disciples: userData.disciples,
+        ketBaiIds: userData.ketBaiIds,
+      });
+
+      if (userData.daoLuId === targetId) userData.daoLuId = null;
+      if (userData.masterId === targetId) userData.masterId = null;
+      userData.disciples = removeUniqueId(userData.disciples, targetId);
+      userData.ketBaiIds = removeUniqueId(userData.ketBaiIds, targetId);
+
+      const after = JSON.stringify({
+        daoLuId: userData.daoLuId,
+        masterId: userData.masterId,
+        disciples: userData.disciples,
+        ketBaiIds: userData.ketBaiIds,
+      });
+      if (before !== after) touched += 1;
+      users[userId] = userData;
+    }
+    return touched;
+  }
+
+  function cleanupMissionDataForFullReset(targetId) {
+    const data = loadMissionData();
+    let touched = 0;
+
+    data.missions = (Array.isArray(data.missions) ? data.missions : []).map((mission) => {
+      const before = JSON.stringify(mission);
+      mission.party = (Array.isArray(mission.party) ? mission.party.map(String) : []).filter((id) => id !== targetId);
+
+      if (mission.leaderId === targetId) {
+        mission.leaderId = mission.party[0] ?? null;
+      }
+
+      if (!mission.leaderId && mission.party.length === 0 && mission.status !== MISSION_STATUS_COMPLETED) {
+        mission.status = MISSION_STATUS_OPEN;
+        mission.strategyKey = null;
+        mission.partyRoleSnapshot = null;
+        mission.combat = null;
+        mission.activeCombatId = null;
+        mission.awaitingLootChoice = false;
+        mission.pendingLoot = null;
+      }
+
+      if (mission.completedById === targetId) {
+        mission.completedById = null;
+        mission.completedByName = null;
+      }
+
+      if (mission.combat?.participants && typeof mission.combat.participants === 'object') {
+        delete mission.combat.participants[targetId];
+      }
+      if (mission.combat?.partyIds && Array.isArray(mission.combat.partyIds)) {
+        mission.combat.partyIds = mission.combat.partyIds.map(String).filter((id) => id !== targetId);
+      }
+
+      if (JSON.stringify(mission) !== before) touched += 1;
+      return mission;
+    });
+
+    saveMissionData(data);
+    return touched;
+  }
+
+  function cleanupBicanhDataForFullReset(targetId) {
+    const data = repairWeeklyBicanhData(loadBicanhData());
+    let touched = 0;
+
+    if (data.dailyUses && Object.prototype.hasOwnProperty.call(data.dailyUses, targetId)) {
+      delete data.dailyUses[targetId];
+      touched += 1;
+    }
+
+    for (const [runId, run] of Object.entries(data.runs || {})) {
+      const before = JSON.stringify(run);
+      run.party = (Array.isArray(run.party) ? run.party.map(String) : []).filter((id) => id !== targetId);
+
+      if (String(runId) === targetId || run.leaderId === targetId) {
+        if (run.party.length > 0) {
+          run.leaderId = run.party[0];
+        } else {
+          delete data.runs[runId];
+          touched += 1;
+          continue;
+        }
+      }
+
+      if (run.pendingMonster?.party) {
+        run.pendingMonster.party = run.pendingMonster.party.map(String).filter((id) => id !== targetId);
+        if (run.pendingMonster.leaderId === targetId) run.pendingMonster.leaderId = run.pendingMonster.party[0] ?? run.leaderId;
+        if (run.pendingMonster.party.length === 0) run.pendingMonster = null;
+      }
+
+      if (run.combat?.participants && typeof run.combat.participants === 'object') {
+        delete run.combat.participants[targetId];
+      }
+      if (run.combat?.partyIds && Array.isArray(run.combat.partyIds)) {
+        run.combat.partyIds = run.combat.partyIds.map(String).filter((id) => id !== targetId);
+      }
+
+      if (data.runs[runId] && JSON.stringify(run) !== before) touched += 1;
+    }
+
+    if (data.pendingMonster?.party) {
+      const before = JSON.stringify(data.pendingMonster);
+      data.pendingMonster.party = data.pendingMonster.party.map(String).filter((id) => id !== targetId);
+      if (data.pendingMonster.leaderId === targetId) data.pendingMonster.leaderId = data.pendingMonster.party[0] ?? null;
+      if (data.pendingMonster.party.length === 0) data.pendingMonster = null;
+      if (JSON.stringify(data.pendingMonster) !== before) touched += 1;
+    }
+
+    saveBicanhData(data);
+    return touched;
+  }
+
+  function cleanupLuanDaoForFullReset(targetId) {
+    const data = loadLuanDao();
+    let removedQuestions = 0;
+    let removedAnswers = 0;
+
+    for (const [questionId, question] of Object.entries(data.questions || {})) {
+      if (question.questionerId === targetId) {
+        delete data.questions[questionId];
+        removedQuestions += 1;
+        continue;
+      }
+
+      if (question.answers && Object.prototype.hasOwnProperty.call(question.answers, targetId)) {
+        delete question.answers[targetId];
+        removedAnswers += 1;
+      }
+    }
+
+    saveLuanDao(data);
+    return { removedQuestions, removedAnswers };
+  }
+
+  function cleanupTribulationsForFullReset(targetId) {
+    const data = loadTribulations();
+    let removedEvents = 0;
+    let touchedEvents = 0;
+
+    for (const [eventId, event] of Object.entries(data.events || {})) {
+      if (event.ownerId === targetId) {
+        delete data.events[eventId];
+        removedEvents += 1;
+        continue;
+      }
+
+      const before = JSON.stringify(event);
+      if (event.supporters && typeof event.supporters === 'object') delete event.supporters[targetId];
+      if (event.sneakers && typeof event.sneakers === 'object') delete event.sneakers[targetId];
+      if (JSON.stringify(event) !== before) touchedEvents += 1;
+    }
+
+    saveTribulations(data);
+    return { removedEvents, touchedEvents };
+  }
+
+  function cleanupSuKienForFullReset(targetId) {
+    const data = loadSuKien();
+    let touched = 0;
+
+    for (const event of Object.values(data.active || {})) {
+      if (!Array.isArray(event.participantIds) || !event.participantIds.includes(targetId)) continue;
+      event.participantIds = event.participantIds.map(String).filter((id) => id !== targetId);
+      if (event.status === 'active') event.progress = Math.min(Number(event.target) || event.participantIds.length, event.participantIds.length);
+      touched += 1;
+    }
+
+    saveSuKien(data);
+    return touched;
+  }
+
+  function cleanupDauPhapChallengesForFullReset(targetId) {
+    let removed = 0;
+    for (const [challengeId, challenge] of DAU_PHAP_CHALLENGES.entries()) {
+      if (challenge?.challengerId === targetId || challenge?.targetId === targetId) {
+        DAU_PHAP_CHALLENGES.delete(challengeId);
+        removed += 1;
+      }
+    }
+    return removed;
+  }
+
+  async function removeFullResetRoles(member, includePositionRoles = false) {
+    const roleNames = getFullResetGameRoleNames(includePositionRoles);
+    const roles = member.roles.cache.filter((role) => roleNames.includes(role.name));
+
+    if (roles.size === 0) {
+      return { removed: 0, skipped: 0, reason: null };
+    }
+
+    const botMember = await member.guild.members.fetchMe().catch(() => null);
+    if (!botMember?.permissions?.has(PermissionFlagsBits.ManageRoles)) {
+      return { removed: 0, skipped: roles.size, reason: 'Bot thiếu quyền Manage Roles nên chỉ xóa data, chưa gỡ role Discord.' };
+    }
+
+    const manageable = roles.filter((role) => !role.managed && role.position < botMember.roles.highest.position);
+    const skipped = roles.size - manageable.size;
+
+    if (manageable.size > 0) {
+      await member.roles.remove(manageable, 'Admin xoa full du lieu nguoi choi bang /xoanguoichoi.').catch(() => null);
+    }
+
+    return { removed: manageable.size, skipped, reason: skipped > 0 ? 'Một số role nằm cao hơn bot nên chưa gỡ được.' : null };
+  }
+
+  async function resetFullPlayerData(guild, targetUser, options = {}) {
+    const targetId = String(targetUser.id);
+    const report = {
+      hadUserData: false,
+      relatedUsersTouched: 0,
+      missionTouched: 0,
+      bicanhTouched: 0,
+      luanDaoRemovedQuestions: 0,
+      luanDaoRemovedAnswers: 0,
+      tribulationsRemoved: 0,
+      tribulationsTouched: 0,
+      suKienTouched: 0,
+      dauPhapChallengesRemoved: 0,
+      rolesRemoved: 0,
+      rolesSkipped: 0,
+      roleWarning: null,
+    };
+
+    const users = loadUsers();
+    report.hadUserData = Boolean(users[targetId]);
+    delete users[targetId];
+    report.relatedUsersTouched = cleanupUserRelationsForFullReset(users, targetId);
+    saveUsers(users);
+
+    report.missionTouched = cleanupMissionDataForFullReset(targetId);
+    report.bicanhTouched = cleanupBicanhDataForFullReset(targetId);
+    const luanDaoReport = cleanupLuanDaoForFullReset(targetId);
+    report.luanDaoRemovedQuestions = luanDaoReport.removedQuestions;
+    report.luanDaoRemovedAnswers = luanDaoReport.removedAnswers;
+    const tribulationReport = cleanupTribulationsForFullReset(targetId);
+    report.tribulationsRemoved = tribulationReport.removedEvents;
+    report.tribulationsTouched = tribulationReport.touchedEvents;
+    report.suKienTouched = cleanupSuKienForFullReset(targetId);
+    report.dauPhapChallengesRemoved = cleanupDauPhapChallengesForFullReset(targetId);
+
+    if (options.removeRoles) {
+      const member = await guild.members.fetch(targetId).catch(() => null);
+      if (member) {
+        const roleReport = await removeFullResetRoles(member, Boolean(options.includePositionRoles));
+        report.rolesRemoved = roleReport.removed;
+        report.rolesSkipped = roleReport.skipped;
+        report.roleWarning = roleReport.reason;
+      } else {
+        report.roleWarning = 'Không tìm thấy member trong server nên chỉ xóa data, không gỡ role.';
+      }
+    }
+
+    return report;
   }
 
   function createDefaultUserData() {
@@ -19969,6 +20804,101 @@ ${getDauPhapFinalLine(defenderUnit)}`, inline: false },
     }
 
     return getLevelFromExp(fallbackExp);
+  }
+
+  function getPlayerRealmState(member, userData = {}) {
+    const exp = Math.max(0, Number(userData?.tuViExp) || 0);
+    const assignedLevel = getAssignedTuViLevel(member);
+    const expLevel = getLevelFromExp(exp);
+    const currentLevel = assignedLevel !== null ? assignedLevel : expLevel;
+    const currentTuVi = getTuViByLevel(currentLevel);
+    const expTuVi = getTuViByLevel(expLevel);
+    const progressInfo = getTuViProgressInfo(exp, currentLevel);
+    const nextTuVi = currentLevel >= MAX_TU_VI_LEVEL ? null : getTuViByLevel(currentLevel + 1);
+    const nextNeed = getExpNeededForBreakthrough(exp, currentLevel);
+    const spendableTuVi = Math.max(0, exp - expMinimumForLevel(currentLevel));
+    const canBreakthrough = Boolean(nextTuVi && exp >= expRequiredForLevel(currentLevel));
+    const realmMismatch = expLevel !== currentLevel;
+
+    return {
+      exp,
+      assignedLevel,
+      expLevel,
+      currentLevel,
+      currentTuVi,
+      expTuVi,
+      potentialTuVi: expTuVi,
+      nextTuVi,
+      progressInfo,
+      nextNeed,
+      spendableTuVi,
+      canBreakthrough,
+      realmMismatch,
+      displayRealm: `${currentTuVi.realm} ${currentTuVi.minor}`,
+      potentialRealm: `${expTuVi.realm} ${expTuVi.minor}`,
+    };
+  }
+
+  function buildPlayerStatsSnapshot(member, userData = {}) {
+    normalizeUserSourceState(userData);
+    const realm = getPlayerRealmState(member, userData);
+    const directStats = getUserDirectStats(userData, member);
+    const combatPower = getCombatPower(userData, member, 'hethong');
+    const linhKhi = getCombatLinhKhiStats({ userData, member, power: combatPower });
+    const sourceProfile = userData.sourceProfile || {};
+    const riskStats = {
+      technicalDebt: Number(userData.technicalDebt) || 0,
+      entropy: Number(userData.entropy) || 0,
+      nghiepLuc: Number(userData.nghiepLuc) || 0,
+    };
+    const progressBar = uiBar(realm.progressInfo.segmentCurrent, realm.progressInfo.segmentTotal, 14);
+
+    return {
+      realm,
+      exp: realm.exp,
+      progressBar,
+      directStats,
+      combatPower,
+      linhKhi,
+      sourceProfile,
+      riskStats,
+      sourcePath: getSourcePathLabel(userData),
+    };
+  }
+
+  function formatRealmMismatchHint(snapshot) {
+    const realm = snapshot?.realm;
+    if (!realm?.realmMismatch) return '';
+    if (realm.expLevel > realm.currentLevel) return `
+Tiềm năng theo tu vi: **${realm.potentialRealm}** · cần dùng **/dotpha** để cảnh giới thật bắt kịp.`;
+    return `
+Cảnh giới role cao hơn tu vi tích lũy. Hệ Thống giữ cảnh giới thật theo role, còn tu vi cần được bồi lại.`;
+  }
+
+  function formatUnifiedStatsText(snapshot) {
+    const realm = snapshot.realm;
+    const breakthrough = realm.nextTuVi
+      ? (realm.canBreakthrough
+        ? `Đã đủ tu vi, dùng **/dotpha** để lên **${realm.nextTuVi.realm} ${realm.nextTuVi.minor}**.`
+        : `Còn thiếu **${uiNumber(realm.nextNeed)}** tu vi để mở mốc kế.`)
+      : 'Đã chạm mốc cao nhất hiện tại.';
+    return [
+      `Tu vi tích lũy: **${uiNumber(realm.exp)}**`,
+      `Tu vi khả dụng: **${uiNumber(realm.spendableTuVi)}**`,
+      `Tiến độ đột phá: ${snapshot.progressBar}`,
+      breakthrough,
+    ].join('\n');
+  }
+
+  function formatCombatStatsText(snapshot) {
+    const qi = snapshot.linhKhi || {};
+    return [
+      `Lực chiến chuẩn: **${uiNumber(snapshot.combatPower)}**`,
+      `Linh Khí tối đa: **${uiNumber(qi.maxQi)}**`,
+      `Khởi đầu combat: **${uiNumber(qi.startQi)}**`,
+      `Hồi mỗi lượt: **${uiNumber(qi.regen)}**`,
+      `Áp lực Tâm Ma: **${uiNumber(qi.tamMaPressure || 0)}**`,
+    ].join('\n');
   }
 
   function getAssignedTuViLevel(member) {
@@ -21095,15 +22025,15 @@ Kết quả đã khắc vào đạo hồ.`, inline: false },
   }
 
   function getDailyBicanhMaxFloors(userData, member = null, dungeon = null) {
-    const info = getAssignedTuViLevel(member, userData?.tuViExp || 0);
-    const realm = Number(info.realmIndex) || 0;
+    const realmState = getPlayerRealmState(member, userData);
+    const realm = Number(realmState.currentTuVi.realmIndex) || 0;
     const base = realm >= 5 ? 9 : realm >= 2 ? 7 : 5;
     return Math.max(5, Math.min(9, Number(dungeon?.floors) || base, base));
   }
 
   function getDailyBicanhCandidateDungeons(userData, member = null) {
-    const info = getAssignedTuViLevel(member, userData?.tuViExp || 0);
-    const realm = Number(info.realmIndex) || 0;
+    const realmState = getPlayerRealmState(member, userData);
+    const realm = Number(realmState.currentTuVi.realmIndex) || 0;
     const candidates = DUNGEON_TEMPLATES.filter((d) => Number(d.minRealmIndex || 0) <= realm);
     return candidates.length ? candidates : DUNGEON_TEMPLATES.slice(0, 3);
   }
